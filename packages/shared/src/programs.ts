@@ -1,0 +1,152 @@
+/**
+ * Program addresses and the protocol's other fixed keys, the one place they are written down (the
+ * same on mainnet, devnet and localnet: one set of program keypairs, generated 2026-10-07). Every
+ * fixed key is a PDA with constant seeds; `packages/sdk` derives each again in its tests and fails
+ * if one differs.
+ */
+export const PROGRAM_IDS = {
+  token: '2XoEWp8cF3kRXg74eVwPAyTFhVCAztn3V88komxAvr22',
+  swap: 'GyzKSnnEu2uN5bBRecE4XYY2enbfR2D2MtxnbJPGy7hk',
+  bridge: 'CtLkuFVitoXHTa86Hfp8KmfSDfqJaMYFWr6EGmQVsKb7',
+  launch: '1jcBymHxBjniZDhNPy51Vgm5Nz7pLUdxa9UBHc4TavC',
+  taxHook: '8tjnVSreJGBRQFyDBf1SyyhBgLsdBxa2rHYh9sbxFyX7',
+  /** The v2 token-rules hook (docs/hooks-v2.md §4): holder rewards, max wallet and the two locks. */
+  kit: '14RJQXPdJfkehit6ezktjd3xujamf8nVSKw2shKamaEH',
+} as const;
+
+/** The wSOL mint, which stands for native SOL on the bridge. */
+export const NATIVE_MINT = 'So11111111111111111111111111111111111111112';
+export const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+export const TOKEN_2022_PROGRAM_ID = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+export const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
+export const ASSOCIATED_TOKEN_PROGRAM_ID = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
+export const COMPUTE_BUDGET_PROGRAM_ID = 'ComputeBudget111111111111111111111111111111';
+
+/**
+ * The signers of hook callbacks (docs/hooks-v2.md, Review fixes, note 1): the token program signs
+ * every callback to a token hook with `["hook-authority", hook_program]` under the token program,
+ * and the DEX every callback to a pool hook with `["hook-authority", hook_program]` under the DEX.
+ * A hook accepts only its own signer, so a signer one hook receives and passes on is refused
+ * everywhere else. The v1 global signers (`D7gU…`, `HoUi…`) are gone.
+ */
+export const HOOK_SIGNERS = {
+  /** The token program's signer of the kit's callbacks (bump 254). */
+  tokenForKit: 'C2Y3B3hZTesJQqLYrZ7qoaZUoRmwYWh5Qh3MuFxruouE',
+  /** The token program's signer of `tax_hook`'s callbacks (bump 255). */
+  tokenForTaxHook: '8v2CVajpJMVKXLpZePXQpqvq2nyn7r1so7DxgXu4CkAw',
+  /** The DEX's signer of the launch's pool callbacks (bump 252). */
+  dexForLaunch: '6Ztfr97cUewdViXDXdZUsQq4pz7MYdygvK1WijALjZ5q',
+} as const;
+
+/** Fixed PDAs of the programs (programs-summary §5), with the seeds each is derived from. */
+export const FIXED_ADDRESSES = {
+  /** `["__event_authority"]` under the token program. */
+  tokenEventAuthority: '69vhpnkYjtiJgdfU7QsA5Ww7V8FWtvPcZ2r4znuyByvq',
+  /** `["__event_authority"]` under the DEX. */
+  swapEventAuthority: '9cBz2tsg7FwopSsd6HzvtbiL6b7B46eLG436etkB7cyx',
+  /** `["config"]` under the DEX. */
+  swapConfig: '2XLvgczuVACmvvjfRLLAcLwMzFHutbAAro61zZKP8fsx',
+  /** `["__event_authority"]` under the bridge. */
+  bridgeEventAuthority: 'EiUK62AP8DwUJWBosf7Ceyih3sGAicZxmsmcBftHzM8n',
+  /** `["config"]` under the bridge. */
+  bridgeConfig: 'Dwf4C8tTMYwicp8cU5MYcTtMQVVJTN7W3LcXCQ1UEhMs',
+  /** `["wrapper", NATIVE_MINT]` under the bridge. */
+  solWrapper: '3ta59VvLDKLnCKMhYihiC3fQ7W9jPKty6xfx3h5puHGS',
+  /** `["sol-vault"]` under the bridge: the lamports behind bridged SOL. */
+  solVault: 'EAcZR2i8A6BbnKRdWuyMVDTuiNkD6qc4RkFpxUYJ9Qba',
+  /** `["wrapped", NATIVE_MINT]` under the bridge: bridged SOL, the quote of every launch (no hook). */
+  bridgedSolMint: 'A49oVhX22ExMwTEtFC6Y8nhBdZ4LJDGhdXLDn4c2f59i',
+  /** `["__event_authority"]` under the launchpad. */
+  launchEventAuthority: '6ogQR9x8o86egutFri8ev6Kx6reTDg8YdwPmvkW29efh',
+  /** `["hook-authority"]` under the launchpad: it creates launch pools and finalizes their curves. */
+  launchHookAuthority: '3dfEZLdjRcpTJ4RxPzgkqnqaG2FipRdaHgRW72AL6kqL',
+  /** `["config"]` under the launchpad. */
+  launchConfig: '5n25iAaXFsjs4UgGQM6fCiRhaQcCVQ1L5BgyRZ7UrmaE',
+  /** `["__event_authority"]` under the kit. */
+  kitEventAuthority: '9abhxVTuwck5Ux79act3e2Vkfem7Q4zBwATMctUvHvuE',
+  /** `["hook-authority"]` under the kit: it signs the token program's `write_hook_data` in `claim`. */
+  kitHookAuthority: '2repKA1JgDkBo4AffscVee342dcBcH6c2yfpUTRrAiEN',
+} as const;
+
+/**
+ * The protocol lookup table (docs/hooks-v2.md §6; programs-summary §2.7): the 18 fixed addresses
+ * no top-level instruction invokes, in the order the programs' tests load them and `pnpm admin
+ * init` must write them (a v0 message names table entries by index). Programs a transaction
+ * invokes at top level (the kit for claims and shares) are kept in the static keys by the v0
+ * compiler. Per-mint accounts cannot be in it.
+ */
+export const PROTOCOL_LOOKUP_TABLE_ADDRESSES: readonly string[] = [
+  FIXED_ADDRESSES.tokenEventAuthority,
+  HOOK_SIGNERS.tokenForKit,
+  FIXED_ADDRESSES.swapEventAuthority,
+  HOOK_SIGNERS.dexForLaunch,
+  FIXED_ADDRESSES.swapConfig,
+  FIXED_ADDRESSES.bridgeEventAuthority,
+  FIXED_ADDRESSES.bridgeConfig,
+  FIXED_ADDRESSES.solWrapper,
+  FIXED_ADDRESSES.solVault,
+  FIXED_ADDRESSES.launchEventAuthority,
+  FIXED_ADDRESSES.launchHookAuthority,
+  FIXED_ADDRESSES.launchConfig,
+  FIXED_ADDRESSES.kitEventAuthority,
+  FIXED_ADDRESSES.kitHookAuthority,
+  PROGRAM_IDS.kit,
+  FIXED_ADDRESSES.bridgedSolMint,
+  SYSTEM_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+];
+
+/** Token hook flags (`Mint.hookFlags`). */
+export const TOKEN_HOOK_FLAGS = {
+  BEFORE_TRANSFER: 1 << 0,
+  AFTER_TRANSFER: 1 << 1,
+  BEFORE_MINT: 1 << 2,
+  AFTER_MINT: 1 << 3,
+  BEFORE_BURN: 1 << 4,
+  AFTER_BURN: 1 << 5,
+  TRANSFER_RETURNS_DELTA: 1 << 6,
+  /** v2: the hook may write the 64 bytes of hook data each holding keeps. */
+  WRITES_HOOK_DATA: 1 << 7,
+} as const;
+
+/** Every token hook flag (`token_flags::ALL`). */
+export const TOKEN_HOOK_FLAGS_ALL = 255;
+
+/** Pool hook flags (`Pool.hookFlags`). */
+export const POOL_HOOK_FLAGS = {
+  BEFORE_INITIALIZE: 1 << 0,
+  AFTER_INITIALIZE: 1 << 1,
+  BEFORE_ADD_LIQUIDITY: 1 << 2,
+  AFTER_ADD_LIQUIDITY: 1 << 3,
+  BEFORE_REMOVE_LIQUIDITY: 1 << 4,
+  AFTER_REMOVE_LIQUIDITY: 1 << 5,
+  BEFORE_SWAP: 1 << 6,
+  AFTER_SWAP: 1 << 7,
+  /** v2: also allows the answer's `burn`. */
+  BEFORE_SWAP_RETURNS_DELTA: 1 << 8,
+  /** v2: also allows the answer's `burn`. */
+  AFTER_SWAP_RETURNS_DELTA: 1 << 9,
+  BEFORE_SWAP_OVERRIDES_FEE: 1 << 10,
+} as const;
+
+/** Every pool hook flag (`pool_flags::ALL`). */
+export const POOL_HOOK_FLAGS_ALL = 2_047;
+
+/** A launch pool's flags (`LAUNCH_HOOK_FLAGS`): before initialize, before and after swap, both deltas, the fee override: 1985. */
+export const LAUNCH_POOL_HOOK_FLAGS =
+  POOL_HOOK_FLAGS.BEFORE_INITIALIZE |
+  POOL_HOOK_FLAGS.BEFORE_SWAP |
+  POOL_HOOK_FLAGS.AFTER_SWAP |
+  POOL_HOOK_FLAGS.BEFORE_SWAP_RETURNS_DELTA |
+  POOL_HOOK_FLAGS.AFTER_SWAP_RETURNS_DELTA |
+  POOL_HOOK_FLAGS.BEFORE_SWAP_OVERRIDES_FEE;
+
+/** Bytes of hook data every holding keeps (`HOOK_DATA_LEN`). */
+export const HOOK_DATA_LEN = 64;
+
+/** Names of the flags, for the docs and the token page. */
+export function describeHookFlags(flags: number, table: Record<string, number>): string[] {
+  return Object.entries(table)
+    .filter(([, bit]) => (flags & bit) !== 0)
+    .map(([name]) => name.toLowerCase().replace(/_/g, ' '));
+}

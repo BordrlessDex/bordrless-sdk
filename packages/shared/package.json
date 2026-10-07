@@ -1,0 +1,53 @@
+{
+  "name": "@bordrless/shared",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Bordrless policy (the same math as crates/bordrless-core), program addresses and the API types shared by the server and the site. No Solana dependencies.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BordrlessDex/bordrless-sdk.git",
+    "directory": "packages/shared"
+  },
+  "homepage": "https://github.com/BordrlessDex/bordrless-sdk#readme",
+  "keywords": [
+    "solana",
+    "bordrless",
+    "hooks",
+    "dex",
+    "launchpad",
+    "anchor"
+  ],
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "LICENSE",
+    "README.md",
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "prepublishOnly": "pnpm run build"
+  },
+  "devDependencies": {
+    "typescript": "5.9.2",
+    "vitest": "4.1.11"
+  }
+}

@@ -1,0 +1,205 @@
+/**
+ * Build your own (docs/hooks-v2.md §5.7, §5.8), read and checked the way `create_config` and
+ * `create_launch` check it, before anything is signed: a `LaunchConfig` by its key (the rules
+ * against the launch config's bounds, the creator fee, the custom hook's rules), a hook program
+ * (deployed, none of the protocol's, who can upgrade it) and whether the hook has been prepared for
+ * a mint (its registry at `["bordrless-hook-accounts", mint]`). Every problem is one plain sentence,
+ * the same the launch form shows. And the one-call way to make a config: a fresh keypair, the
+ * instruction, and the key to paste.
+ */
+import { Keypair, PublicKey, type AccountInfo, type Connection, type TransactionInstruction } from '@solana/web3.js';
+import { PROGRAM_IDS, TOKEN_HOOK_FLAGS_ALL, checkLaunchRules, kitModules, type LaunchRulesInput } from '@bordrless/shared';
+import { LAUNCH_CONFIG, LAUNCH_PROGRAM, TAX_HOOK_PROGRAM, programDataAddress, registryAddress, BPF_LOADER_UPGRADEABLE, SYSTEM_PROGRAM } from './addresses.ts';
+import { LAUNCH_CONFIG_LABEL_MAX, decodeLaunchConfig, decodeLaunchConfigAccount, launchRulesInputOf, type LaunchConfig, type LaunchConfigAccount, type LaunchRulesData } from './accounts.ts';
+import { decodeHookAccountList, resolveCustomHookAccounts, type CustomHookAccounts } from './hooks.ts';
+import { launch, type CreateConfigArgs } from './instructions.ts';
+
+/** The programs a custom hook may not be (§5.8, `PROTOCOL_PROGRAMS`): the protocol's own, the system program and the default key. */
+export const PROTOCOL_PROGRAMS: readonly PublicKey[] = [PROGRAM_IDS.token, PROGRAM_IDS.swap, PROGRAM_IDS.bridge, PROGRAM_IDS.launch, PROGRAM_IDS.kit].map((id) => new PublicKey(id)).concat(SYSTEM_PROGRAM, PublicKey.default);
+
+/** `tax_hook` is the worked example, the one hook of the repository a creator may name as their own. */
+export const EXAMPLE_HOOK = TAX_HOOK_PROGRAM;
+
+// ---- a program's upgrade authority ----------------------------------------------------------------------
+
+export interface ProgramUpgradeInfo {
+  /** The account exists and is a program. */
+  executable: boolean;
+  /** Who can upgrade it; null when nobody can (or it could not be read). */
+  upgradeAuthority: PublicKey | null;
+  /** Whether it can still be upgraded; null when it could not be told. */
+  upgradeable: boolean | null;
+}
+
+const PROGRAM_TAG = 2;
+const PROGRAM_DATA_TAG = 3;
+const OPTION_AT = 12;
+
+/** The upgrade authority a ProgramData account holds: null for none (final), undefined when the bytes are not one. */
+export function upgradeAuthorityOf(data: Buffer): PublicKey | null | undefined {
+  if (data.length < OPTION_AT + 1 || data.readUInt32LE(0) !== PROGRAM_DATA_TAG) return undefined;
+  const tag = data[OPTION_AT];
+  if (tag === 0) return null;
+  if (tag !== 1 || data.length < OPTION_AT + 33) return undefined;
+  return new PublicKey(data.subarray(OPTION_AT + 1, OPTION_AT + 33));
+}
+
+/** A program's upgrade info from its account and its ProgramData account (null when either is not that). */
+export function programUpgradeInfoOf(program: AccountInfo<Buffer> | null, programData: AccountInfo<Buffer> | null): ProgramUpgradeInfo {
+  if (!program || !program.executable) return { executable: false, upgradeAuthority: null, upgradeable: null };
+  if (!program.owner.equals(BPF_LOADER_UPGRADEABLE)) return { executable: true, upgradeAuthority: null, upgradeable: false };
+  if (program.data.length < 36 || program.data.readUInt32LE(0) !== PROGRAM_TAG || !programData || !programData.owner.equals(BPF_LOADER_UPGRADEABLE)) return { executable: true, upgradeAuthority: null, upgradeable: null };
+  const authority = upgradeAuthorityOf(programData.data);
+  if (authority === undefined) return { executable: true, upgradeAuthority: null, upgradeable: null };
+  return { executable: true, upgradeAuthority: authority, upgradeable: authority !== null };
+}
+
+/** Reads a program and its ProgramData account in one round trip. */
+export async function fetchProgramUpgradeInfo(connection: Connection, program: PublicKey): Promise<ProgramUpgradeInfo> {
+  const [p, d] = await connection.getMultipleAccountsInfo([program, programDataAddress(program)], 'confirmed');
+  return programUpgradeInfoOf(p ?? null, d ?? null);
+}
+
+// ---- checking a config as the programs do ------------------------------------------------------------------
+
+/** The custom-hook rules of `create_config` and `create_launch` (§5.8), on what the program account shows; each sentence as the form prints it. */
+export function customHookProblems(hook: PublicKey | null, flags: number, rules: LaunchRulesData, program: Pick<AccountInfo<Buffer>, 'executable'> | null): string[] {
+  const out: string[] = [];
+  if (hook === null) {
+    if (flags !== 0) out.push('Hook flags were set without a hook.');
+    return out;
+  }
+  if (kitModules(launchRulesInputOf(rules)) !== 0) out.push('A config with a custom hook can’t have holder rewards, max wallet or the locks: one token hook per mint. Burn and the creator fee are fine.');
+  if (PROTOCOL_PROGRAMS.some((p) => p.equals(hook))) out.push('The hook must be a program of your own, not one of Bordrless’s.');
+  else if (!program || !program.executable) out.push('The hook program is not deployed on this cluster.');
+  if (flags === 0 || (flags & ~TOKEN_HOOK_FLAGS_ALL) !== 0) out.push('The hook’s flags must name at least one callback it runs on, with no unknown bit.');
+  return out;
+}
+
+/** Why `create_config` would refuse these arguments under `config` (the launch program's `Config`), one sentence each; empty when it takes them. */
+export function configProblems(args: Pick<CreateConfigArgs, 'rules' | 'creatorFeeBps' | 'customHook' | 'customHookFlags' | 'label'>, config: Pick<LaunchConfig, 'ruleBounds' | 'maxCreatorFeeBps'>, hookProgram: Pick<AccountInfo<Buffer>, 'executable'> | null): string[] {
+  const out: string[] = [];
+  if (Buffer.byteLength(args.label, 'utf8') > LAUNCH_CONFIG_LABEL_MAX) out.push(`The label is at most ${LAUNCH_CONFIG_LABEL_MAX} bytes.`);
+  if (args.creatorFeeBps > config.maxCreatorFeeBps) out.push(`The creator fee can be at most ${config.maxCreatorFeeBps / 100}%.`);
+  const rules = launchRulesInputOf(args.rules);
+  const bounds = checkLaunchRules(rules, args.creatorFeeBps, config.ruleBounds);
+  if (bounds) out.push(bounds);
+  out.push(...customHookProblems(args.customHook, args.customHookFlags, args.rules, hookProgram));
+  return out;
+}
+
+/** What `inspectConfig` found. */
+export interface ConfigInspectionResult {
+  address: PublicKey;
+  config: LaunchConfigAccount;
+  rules: LaunchRulesInput;
+  /** Why it could not launch as it is (the bounds now, the creator fee, the hook), one sentence each; empty when it could. */
+  problems: string[];
+  /** The custom hook program's upgrade info; null without a hook. */
+  hook: ProgramUpgradeInfo | null;
+  /** With a hook and a mint: the hook's accounts resolved from its registry for the mint, or null when the hook has not been prepared for it. */
+  hookAccounts: CustomHookAccounts | null;
+  /** With a hook and a mint: whether the registry exists; null otherwise. */
+  registryReady: boolean | null;
+}
+
+/**
+ * Reads a `LaunchConfig` by its key and checks it as `create_launch` would, now (the launch config's
+ * bounds may have changed since it was made): two round trips at most. With `mint`, also whether a
+ * custom hook has been prepared for that mint (its registry), and the hook's accounts. Null when no
+ * `LaunchConfig` lives at the address.
+ */
+export async function inspectConfig(connection: Connection, address: PublicKey, mint: PublicKey | null = null): Promise<ConfigInspectionResult | null> {
+  const [configInfo, launchConfigInfo] = await connection.getMultipleAccountsInfo([address, LAUNCH_CONFIG], 'confirmed');
+  if (!configInfo || !configInfo.owner.equals(LAUNCH_PROGRAM)) return null;
+  let config: LaunchConfigAccount;
+  try {
+    config = decodeLaunchConfigAccount(configInfo.data);
+  } catch {
+    return null;
+  }
+  const problems: string[] = [];
+  const rules = launchRulesInputOf(config.rules);
+  const launchConfig = launchConfigInfo && launchConfigInfo.owner.equals(LAUNCH_PROGRAM) ? decodeLaunchConfig(launchConfigInfo.data) : null;
+  if (!launchConfig) problems.push('The launchpad is not configured on this cluster yet.');
+  else {
+    if (config.creatorFeeBps > launchConfig.maxCreatorFeeBps) problems.push(`The creator fee can be at most ${launchConfig.maxCreatorFeeBps / 100}%.`);
+    const bounds = checkLaunchRules(rules, config.creatorFeeBps, launchConfig.ruleBounds);
+    if (bounds) problems.push(bounds);
+  }
+  let hook: ProgramUpgradeInfo | null = null;
+  let hookAccounts: CustomHookAccounts | null = null;
+  let registryReady: boolean | null = null;
+  if (config.customHook) {
+    const keys = [config.customHook, programDataAddress(config.customHook), ...(mint ? [registryAddress(config.customHook, mint)] : [])];
+    const [programInfo, programData, registryInfo] = await connection.getMultipleAccountsInfo(keys, 'confirmed');
+    hook = programUpgradeInfoOf(programInfo ?? null, programData ?? null);
+    problems.push(...customHookProblems(config.customHook, config.customHookFlags, config.rules, programInfo ?? null));
+    if (mint) {
+      const list = registryInfo && registryInfo.owner.equals(config.customHook) ? decodeHookAccountList(registryInfo.data) : null;
+      registryReady = list !== null;
+      if (!list) problems.push('Prepare the hook for this mint first: its registry at ["bordrless-hook-accounts", mint] does not exist yet.');
+      else {
+        try {
+          hookAccounts = resolveCustomHookAccounts(config.customHook, list, mint);
+        } catch (error) {
+          problems.push(error instanceof Error ? `${error.message}.` : 'The hook’s registry cannot be resolved for a launch.');
+        }
+      }
+    }
+  } else problems.push(...customHookProblems(null, config.customHookFlags, config.rules, null));
+  return { address, config, rules, problems, hook, hookAccounts, registryReady };
+}
+
+/** What `inspectTokenHook` found about a hook program for a mint. */
+export interface TokenHookInspection {
+  program: PublicKey;
+  info: ProgramUpgradeInfo;
+  /** The hook is none of the protocol's programs. */
+  ownProgram: boolean;
+  /** The registry for `mint` exists and decodes. */
+  registryReady: boolean;
+  /** The accounts resolved for the launch, or null when the registry is missing or cannot serve a launch. */
+  accounts: CustomHookAccounts | null;
+  problems: string[];
+}
+
+/** A hook program and whether it has been prepared for `mint` (§5.8): deployed, its own, its registry present and usable for a launch. */
+export async function inspectTokenHook(connection: Connection, program: PublicKey, mint: PublicKey): Promise<TokenHookInspection> {
+  const [programInfo, programData, registryInfo] = await connection.getMultipleAccountsInfo([program, programDataAddress(program), registryAddress(program, mint)], 'confirmed');
+  const info = programUpgradeInfoOf(programInfo ?? null, programData ?? null);
+  const ownProgram = !PROTOCOL_PROGRAMS.some((p) => p.equals(program));
+  const problems: string[] = [];
+  if (!ownProgram) problems.push('The hook must be a program of your own, not one of Bordrless’s.');
+  else if (!info.executable) problems.push('The hook program is not deployed on this cluster.');
+  const list = registryInfo && registryInfo.owner.equals(program) ? decodeHookAccountList(registryInfo.data) : null;
+  let accounts: CustomHookAccounts | null = null;
+  if (!list) problems.push('Prepare the hook for this mint first: its registry at ["bordrless-hook-accounts", mint] does not exist yet.');
+  else {
+    try {
+      accounts = resolveCustomHookAccounts(program, list, mint);
+    } catch (error) {
+      problems.push(error instanceof Error ? `${error.message}.` : 'The hook’s registry cannot be resolved for a launch.');
+    }
+  }
+  return { program, info, ownProgram, registryReady: list !== null, accounts, problems };
+}
+
+// ---- making a config -------------------------------------------------------------------------------------
+
+export interface BuiltConfig {
+  /** The config's keypair: it signs `create_config` once, then is never needed again. */
+  keypair: Keypair;
+  /** The key to share and paste into the launch form. */
+  address: PublicKey;
+  instruction: TransactionInstruction;
+}
+
+/**
+ * A `LaunchConfig` to create: a fresh keypair for the account, and the `create_config` instruction
+ * signed by `creator` (the payer) and the keypair. Send it in any transaction; `address` is what the
+ * launch form takes under "Build your own".
+ */
+export function buildCreateConfig(creator: PublicKey, args: CreateConfigArgs, keypair: Keypair = Keypair.generate()): BuiltConfig {
+  return { keypair, address: keypair.publicKey, instruction: launch.createConfig(creator, keypair.publicKey, args) };
+}

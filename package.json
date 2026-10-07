@@ -1,0 +1,22 @@
+{
+  "name": "bordrless-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The TypeScript SDK of the Bordrless programs: @bordrless/sdk and @bordrless/shared.",
+  "packageManager": "pnpm@10.20.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "pnpm -C packages/shared build && pnpm -C packages/sdk build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
+  },
+  "pnpm": {
+    "overrides": {
+      "@solana/web3.js": "1.98.4",
+      "bn.js": "5.2.5"
+    }
+  }
+}

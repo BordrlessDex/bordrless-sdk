@@ -1,0 +1,62 @@
+{
+  "name": "@bordrless/sdk",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "TypeScript client of the Bordrless programs: addresses, account and event decoding from the IDLs, instruction builders, and the resolution of a hook's extra accounts.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BordrlessDex/bordrless-sdk.git",
+    "directory": "packages/sdk"
+  },
+  "homepage": "https://github.com/BordrlessDex/bordrless-sdk#readme",
+  "keywords": [
+    "solana",
+    "bordrless",
+    "hooks",
+    "dex",
+    "launchpad",
+    "anchor"
+  ],
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "LICENSE",
+    "README.md",
+    "dist",
+    "idl"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "prepublishOnly": "pnpm run build"
+  },
+  "dependencies": {
+    "@anchor-lang/core": "1.2.1",
+    "@bordrless/shared": "workspace:^",
+    "@solana/web3.js": "1.98.4",
+    "bn.js": "5.2.5"
+  },
+  "devDependencies": {
+    "@types/bn.js": "5.2.0",
+    "@types/node": "24.13.3",
+    "typescript": "5.9.2",
+    "vitest": "4.1.11"
+  }
+}
