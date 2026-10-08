@@ -79,12 +79,12 @@ describe('v2 accounts (programs-summary §3 and §6)', () => {
 
   it('reads a LaunchConfig (build your own, §5.7): 176 bytes, the rules, the creator fee, the hook and its flags, the label', async () => {
     const [creator, hook] = [k(), k()];
-    const value = { version: 1, creator, rules: { ...rulesRaw, holderFeeBuyBps: 0, holderFeeSellBps: 0, maxWalletBps: 0, creatorLockSecs: 0, earlyWindowSecs: 0, earlyLockSecs: 0 }, creatorFeeBps: 100, customHook: hook, customHookFlags: 65, label: 'taxed', createdAt: bn(1_800_000_000), reserved: Array(32).fill(0) };
+    const value = { version: 1, creator, rules: { ...rulesRaw, holderFeeBuyBps: 0, holderFeeSellBps: 0, maxWalletBps: 0, creatorLockSecs: 0, earlyWindowSecs: 0, earlyLockSecs: 0 }, creatorFeeBps: 100, customHook: hook, customHookFlags: 65, label: 'taxed', createdAt: bn(1_800_000_000), authorShareBps: 2_500, reserved: Array(30).fill(0) };
     const bytes = await encodeAccount('launch', 'launchConfig', value);
     // The label is a Borsh string: 4 bytes of length plus its bytes; the account is sized for 32 bytes of label.
     expect(bytes.length).toBe(LAUNCH_CONFIG_ACCOUNT_SIZE - (32 - 5));
     const c = decodeLaunchConfigAccount(Buffer.concat([bytes, Buffer.alloc(LAUNCH_CONFIG_ACCOUNT_SIZE - bytes.length)]));
-    expect([c.creator.equals(creator), c.customHook?.equals(hook), c.customHookFlags, c.label, c.creatorFeeBps, c.rules.burnBuyBps, c.createdAt]).toEqual([true, true, 65, 'taxed', 100, 50, 1_800_000_000]);
+    expect([c.creator.equals(creator), c.customHook?.equals(hook), c.customHookFlags, c.label, c.creatorFeeBps, c.rules.burnBuyBps, c.createdAt, c.authorShareBps]).toEqual([true, true, 65, 'taxed', 100, 50, 1_800_000_000, 2_500]);
     const kitOnly = decodeLaunchConfigAccount(await encodeAccount('launch', 'launchConfig', { ...value, rules: rulesRaw, customHook: null, customHookFlags: 0, label: '' }));
     expect([kitOnly.customHook, kitOnly.customHookFlags, kitOnly.label, kitOnly.rules]).toEqual([null, 0, '', rulesRaw]);
   });
@@ -102,11 +102,11 @@ describe('v2 accounts (programs-summary §3 and §6)', () => {
       version: 1, bump: 255, mint: mintKey, creator: k(), pool: a.launchPoolAddress(mintKey, SOL, 30), quoteMint: SOL, status: 0, creatorFeeBps: 50, lpFeeBps: 30, sniperWindowSecs: bn(30), sniperStartBps: 8_000,
       virtualQuote: bn(1), virtualBase: bn(2), graduationQuote: bn(3), curveTokens: bn(4), reserveTokens: bn(5), reserveHolding: k(), quoteHolding: k(), lpHolding: k(), createdAt: bn(1_800_000_000), graduatedAt: bn(0),
       creatorFeesAccrued: bn(6), creatorFeesClaimed: bn(7), graduationTopup: bn(0), graduationBurned: bn(0), rules: rulesRaw, modules: 15, kitConfig: a.kitConfigAddress(mintKey), holderVault: a.holderVaultAddress(mintKey, SOL), kitCallerBump: 253,
-      creatorUnlockAt: bn(1_800_000_000 + 30 * 86_400), earlyWindowEnd: bn(1_800_000_060), earlyUnlockAt: bn(1_800_003_600), creatorBought: true, holderFeesAccrued: bn(8), burnedOnTrades: bn(9), config: PublicKey.default, customHook: null, customHookFlags: 0, reserved: Array(32).fill(0),
+      creatorUnlockAt: bn(1_800_000_000 + 30 * 86_400), earlyWindowEnd: bn(1_800_000_060), earlyUnlockAt: bn(1_800_003_600), creatorBought: true, holderFeesAccrued: bn(8), burnedOnTrades: bn(9), config: PublicKey.default, customHook: null, customHookFlags: 0, authorShareBps: 3_000, authorFeesPaid: bn(77), reserved: Array(22).fill(0),
     };
     const launch = decodeLaunch(await encodeAccount('launch', 'launch', value));
     expect(launch.mint.toBase58()).toBe(mintKey.toBase58());
-    expect([launch.rules, launch.modules, launch.kitCallerBump, launch.creatorBought, launch.holderFeesAccrued, launch.burnedOnTrades]).toEqual([rulesRaw, 15, 253, true, 8n, 9n]);
+    expect([launch.rules, launch.modules, launch.kitCallerBump, launch.creatorBought, launch.holderFeesAccrued, launch.burnedOnTrades, launch.authorShareBps, launch.authorFeesPaid]).toEqual([rulesRaw, 15, 253, true, 8n, 9n, 3_000, 77n]);
     // Inline rules: the default key for the config, no custom hook.
     expect([launchConfigOf(launch), launch.customHook, launch.customHookFlags, hasCustomHook(launch)]).toEqual([null, null, 0, false]);
     const [configKey, hook] = [k(), k()];
@@ -220,7 +220,7 @@ describe('errors are explained by the program that failed (codes overlap)', () =
     expect(explainProgramError('launch', 2006)).toMatchObject({ name: 'ConstraintSeeds' });
     expect(explainProgramError('kit', 6999).name).toBeNull();
     expect(explainProgramError('swap', 6037)).toMatchObject({ name: 'NotBridgedSol', message: "the pool's quote is not bridged SOL" });
-    expect([PROGRAM_ERRORS.kit.size, PROGRAM_ERRORS.launch.size, PROGRAM_ERRORS.swap.size, PROGRAM_ERRORS.token.size, PROGRAM_ERRORS.bridge.size, PROGRAM_ERRORS.taxHook.size]).toEqual([29, 38, 38, 27, 14, 6]);
+    expect([PROGRAM_ERRORS.kit.size, PROGRAM_ERRORS.launch.size, PROGRAM_ERRORS.swap.size, PROGRAM_ERRORS.token.size, PROGRAM_ERRORS.bridge.size, PROGRAM_ERRORS.taxHook.size]).toEqual([29, 42, 38, 27, 14, 6]);
   });
 
   it('finds the innermost failure in the logs of a swap that the kit refused', () => {

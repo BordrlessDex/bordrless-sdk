@@ -245,6 +245,28 @@ export interface LaunchConfigCreatedEvent {
   ts: number;
 }
 
+/** launch `ConfigListed`: a config made for the marketplace (`create_listed_config`), after its `LaunchConfigCreated`. */
+export interface ConfigListedEvent {
+  kind: 'launch.ConfigListed';
+  config: string;
+  author: string;
+  authorShareBps: number;
+  ts: number;
+}
+
+/** launch `AuthorFeesPaid`: a listed config's author's part of a claim of a launch's creator fees, whoever claimed. */
+export interface AuthorFeesPaidEvent {
+  kind: 'launch.AuthorFeesPaid';
+  launch: string;
+  mint: string;
+  config: string;
+  author: string;
+  amount: bigint;
+  paidTotal: bigint;
+  slot: bigint;
+  ts: number;
+}
+
 /** kit `KitInstalled`: in the `create_launch` transaction of a launch with kit rules. */
 export interface KitInstalledEvent {
   kind: 'kit.KitInstalled';
@@ -300,6 +322,8 @@ export type TypedEvent =
   | ProtocolFeesCollectedEvent
   | LaunchCreatedEvent
   | LaunchConfigCreatedEvent
+  | ConfigListedEvent
+  | AuthorFeesPaidEvent
   | KitInstalledEvent
   | KitGraduatedEvent
   | RewardsClaimedEvent
@@ -407,6 +431,10 @@ export function typedEvent(ev: DecodedEvent): TypedEvent | null {
       };
     case 'launch.LaunchConfigCreated':
       return { kind: 'launch.LaunchConfigCreated', config: s(d.config), creator: s(d.creator), rules: launchRulesData(d.rules), creatorFeeBps: n(d.creatorFeeBps), customHook: optS(d.customHook), customHookFlags: n(d.customHookFlags), label: s(d.label), ts: n(d.ts) };
+    case 'launch.ConfigListed':
+      return { kind: 'launch.ConfigListed', config: s(d.config), author: s(d.author), authorShareBps: n(d.authorShareBps), ts: n(d.ts) };
+    case 'launch.AuthorFeesPaid':
+      return { kind: 'launch.AuthorFeesPaid', launch: s(d.launch), mint: s(d.mint), config: s(d.config), author: s(d.author), amount: b(d.amount), paidTotal: b(d.paidTotal), slot: b(d.slot), ts: n(d.ts) };
     case 'kit.KitInstalled':
       return {
         kind: 'kit.KitInstalled',

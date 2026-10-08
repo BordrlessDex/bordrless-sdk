@@ -228,6 +228,10 @@ export interface Launch {
   customHook: PublicKey | null;
   /** The custom hook's token flags; 0 without one. */
   customHookFlags: number;
+  /** The config author's share of the creator fee (bps of it), from a listed config made by someone else; 0 otherwise. Every claim pays it. */
+  authorShareBps: number;
+  /** Creator fees paid to the config's author so far. */
+  authorFeesPaid: bigint;
 }
 
 /** The `LaunchConfig` a launch was made from, or null for inline rules (the account keeps the default key then). */
@@ -255,6 +259,8 @@ export interface LaunchConfigAccount {
   /** A short name, at most 32 bytes. */
   label: string;
   createdAt: number;
+  /** A listed config's author share (`create_listed_config`): bps of the creator fee paid to `creator` on every launch someone else makes from it; 0 for a plain config. Fixed for ever. */
+  authorShareBps: number;
 }
 
 /** A `LaunchConfig` account is 176 bytes. */
@@ -513,6 +519,8 @@ export const decodeLaunch = (data: Buffer): Launch => {
     config: key(r.config),
     customHook: optKey(r.customHook),
     customHookFlags: Number(r.customHookFlags),
+    authorShareBps: Number(r.authorShareBps),
+    authorFeesPaid: big(r.authorFeesPaid),
   };
 };
 
@@ -528,6 +536,7 @@ export const decodeLaunchConfigAccount = (data: Buffer): LaunchConfigAccount => 
     customHookFlags: Number(r.customHookFlags),
     label: String(r.label),
     createdAt: int(r.createdAt),
+    authorShareBps: Number(r.authorShareBps),
   };
 };
 

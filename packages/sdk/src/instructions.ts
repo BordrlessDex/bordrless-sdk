@@ -539,6 +539,15 @@ export const launch = {
     return ix(a.LAUNCH_PROGRAM, 'launch', 'createConfig', { args: { ...args, rules: { ...args.rules } } }, withEvents(a.LAUNCH_PROGRAM, keys));
   },
   /**
+   * `create_listed_config`: a config for the marketplace, as `createConfig`, plus the author's share
+   * of the creator fee (1 to `MAX_AUTHOR_SHARE_BPS` bps of it) on every launch someone else makes
+   * from it. Fixed for ever: a launch keeps the share it was made with.
+   */
+  createListedConfig(creator: PublicKey, launchConfig: PublicKey, args: CreateConfigArgs, authorShareBps: number): TransactionInstruction {
+    const keys = [rw(creator, true), ro(a.LAUNCH_CONFIG), rw(launchConfig, true), opt(a.LAUNCH_PROGRAM, args.customHook), ro(a.SYSTEM_PROGRAM)];
+    return ix(a.LAUNCH_PROGRAM, 'launch', 'createListedConfig', { args: { ...args, rules: { ...args.rules } }, authorShareBps }, withEvents(a.LAUNCH_PROGRAM, keys));
+  },
+  /**
    * `create_launch`: 32 accounts, then, with a custom hook, its accounts as remaining accounts
    * (`customHookLaunchAccounts`). The mint is a fresh keypair that signs (make one per attempt and
    * never re-sign a broadcast one). `treasury`, `quoteMint` and `lpFeeBps` are the config's. With
@@ -625,10 +634,22 @@ export const launch = {
     return ix(a.LAUNCH_PROGRAM, 'launch', 'graduate', {}, [...withEvents(a.LAUNCH_PROGRAM, keys), ...(customHook ? customHookSlice(customHook) : [])]);
   },
   /** `claim_creator_fees`: 9 accounts (v2: no token hook signer; bridged SOL has no hook). The creator's quote holding must exist. */
-  claimCreatorFees(creator: PublicKey, mint: PublicKey, quoteMint: PublicKey): TransactionInstruction {
+  /**
+   * `claim_creator_fees`. A launch made from someone else's listed config (`authorShareBps > 0`)
+   * passes `author`: the config and its author, whose holding of the quote receives their share
+   * (it must exist: `token.createHolding` first).
+   */
+  claimCreatorFees(creator: PublicKey, mint: PublicKey, quoteMint: PublicKey, author: { config: PublicKey; author: PublicKey } | null = null): TransactionInstruction {
     const launchKey = a.launchAddress(mint);
     const keys = [ro(creator, true), rw(launchKey), ro(quoteMint), rw(a.holdingAddress(quoteMint, launchKey)), rw(a.holdingAddress(quoteMint, creator)), ...tokenFixed()];
-    return ix(a.LAUNCH_PROGRAM, 'launch', 'claimCreatorFees', {}, withEvents(a.LAUNCH_PROGRAM, keys));
+    const shared = author ? [ro(author.config), rw(a.holdingAddress(quoteMint, author.author))] : [];
+    return ix(a.LAUNCH_PROGRAM, 'launch', 'claimCreatorFees', {}, [...withEvents(a.LAUNCH_PROGRAM, keys), ...shared]);
+  },
+  /** `claim_author_fees`: a listed config's author takes their share of a launch's creator fees; the creator's part goes to `creator`'s holding at the same time. */
+  claimAuthorFees(author: PublicKey, mint: PublicKey, quoteMint: PublicKey, config: PublicKey, creator: PublicKey): TransactionInstruction {
+    const launchKey = a.launchAddress(mint);
+    const keys = [ro(author, true), rw(launchKey), ro(config), ro(quoteMint), rw(a.holdingAddress(quoteMint, launchKey)), rw(a.holdingAddress(quoteMint, creator)), rw(a.holdingAddress(quoteMint, author)), ...tokenFixed()];
+    return ix(a.LAUNCH_PROGRAM, 'launch', 'claimAuthorFees', {}, withEvents(a.LAUNCH_PROGRAM, keys));
   },
   /** The base mint's token-hook slice of a launch for a DEX instruction: the kit's 4 accounts, or none without kit modules. */
   baseHookSlice(mint: PublicKey, quoteMint: PublicKey, modules: number): AccountMeta[] {

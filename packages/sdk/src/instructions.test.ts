@@ -390,6 +390,18 @@ describe('builders hold to the v2 IDLs (programs-summary §3)', () => {
     expect(g0.keys.slice(16, 21).every((m) => m.pubkey.equals(a.LAUNCH_PROGRAM))).toBe(true);
 
     holdToIdl('launch', 'claim_creator_fees', launch.claimCreatorFees(creator, mint, SOL), 0);
+    // A launch from someone else's listed config: the config and the author's holding follow; or the author claims.
+    const listed = k();
+    const author = k();
+    const shared = launch.claimCreatorFees(creator, mint, SOL, { config: listed, author });
+    holdToIdl('launch', 'claim_creator_fees', shared, 2);
+    expect(shared.keys.slice(-2).map(metaOf)).toEqual([
+      [listed.toBase58(), false, false],
+      [a.holdingAddress(SOL, author).toBase58(), false, true],
+    ]);
+    const byAuthor = launch.claimAuthorFees(author, mint, SOL, listed, creator);
+    holdToIdl('launch', 'claim_author_fees', byAuthor, 0);
+    expect([keyAt(byAuthor, 2), keyAt(byAuthor, 5), keyAt(byAuthor, 6)]).toEqual([listed, a.holdingAddress(SOL, creator), a.holdingAddress(SOL, author)].map((x) => x.toBase58()));
     const config = { admin: creator, treasury, quoteMint: SOL, launchFeeLamports: 10_000_000n, lpFeeBps: 30, maxCreatorFeeBps: 200, sniperWindowSecs: 30, sniperStartBps: 8_000, curveBps: 7_500, supply: 10n ** 15n, decimals: 6, minVirtualQuote: 10n ** 9n, maxVirtualQuote: 10n ** 13n, paused: false, ruleBounds: RULE_BOUNDS };
     const init = launch.initConfig(creator, config);
     holdToIdl('launch', 'init_config', init, 0);
@@ -407,6 +419,11 @@ describe('builders hold to the v2 IDLs (programs-summary §3)', () => {
     const rules = { ...NO_LAUNCH_RULES, burnBuyBps: 25, burnSellBps: 25 };
     // A kit config: no hook program passed (the launch's id in the optional slot).
     const kitCfg = launch.createConfig(creator, configKey, { rules: EVERY_RULE, creatorFeeBps: 50, customHook: null, customHookFlags: 0, label: 'every rule' });
+    // A listed config: the same accounts, the author's share (u16) after the args.
+    const listedCfg = launch.createListedConfig(creator, configKey, { rules: EVERY_RULE, creatorFeeBps: 50, customHook: null, customHookFlags: 0, label: 'every rule' }, 3_000);
+    holdToIdl('launch', 'create_listed_config', listedCfg, 0);
+    expect(listedCfg.data.readUInt16LE(listedCfg.data.length - 2)).toBe(3_000);
+    expect(listedCfg.keys.map(metaOf)).toEqual(kitCfg.keys.map(metaOf));
     holdToIdl('launch', 'create_config', kitCfg, 0);
     expect([keyAt(kitCfg, 1), keyAt(kitCfg, 2), kitCfg.keys[2]!.isSigner, keyAt(kitCfg, 3)]).toEqual([a.LAUNCH_CONFIG.toBase58(), configKey.toBase58(), true, a.LAUNCH_PROGRAM.toBase58()]);
     // A hook config names the program in that slot; the args end with the label.

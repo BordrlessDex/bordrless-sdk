@@ -92,6 +92,14 @@ swap (the creator fee, holder rewards, and any cut your hook takes), in SOL; a c
 change that. A hook that takes nothing and refuses nothing costs the trader nothing beyond the LP
 fee.
 
+### Listing a config on the marketplace
+
+`launch.createListedConfig(creator, config, args, authorShareBps)` makes the same config, plus your
+share of the creator fee (1 to 5,000 bps of it, fixed for ever) on every launch someone else makes
+from it. Claims split it automatically: the creator's `launch.claimCreatorFees(creator, mint, quote,
+{ config, author })`, or yours, `launch.claimAuthorFees(author, mint, quote, config, creator)`. The
+`ConfigListed` and `AuthorFeesPaid` events record both.
+
 ## Where to read more
 
 - The SDK page, with the hook interface and the examples: https://bordrless.app/sdk

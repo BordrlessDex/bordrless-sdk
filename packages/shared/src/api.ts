@@ -145,6 +145,10 @@ export interface ConfigInspection {
   registryReady: boolean | null;
   /** The hook is Half-Life: the launch prepares it for the mint and lights its furnace itself. */
   halfLife?: boolean;
+  /** A listed config's author share of the creator fee (bps of it), paid on a launch by anyone but its author; 0 for a plain config. */
+  authorShareBps: number;
+  /** The hook was built and deployed by Studio: the launch prepares it for the mint itself (its standard `prepare`). */
+  studioHook?: boolean;
 }
 
 /** Live figures of a launch's token rules; each null when the launch lacks the rule or it is not tracked. */
