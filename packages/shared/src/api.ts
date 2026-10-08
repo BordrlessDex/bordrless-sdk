@@ -143,6 +143,8 @@ export interface ConfigInspection {
   /** As `CustomHookInfo.upgradeable`; null without a hook or when its program could not be read. */
   hookUpgradeable: boolean | null;
   registryReady: boolean | null;
+  /** The hook is Half-Life: the launch prepares it for the mint and lights its furnace itself. */
+  halfLife?: boolean;
 }
 
 /** Live figures of a launch's token rules; each null when the launch lacks the rule or it is not tracked. */
@@ -355,12 +357,28 @@ export interface PortfolioEntry {
   customHook?: CustomHookInfo | null;
 }
 
+/** A launch the wallet created, with the creator fee waiting for it (`Portfolio.created`). */
+export interface CreatedLaunch {
+  mint: Address;
+  symbol: string;
+  name: string;
+  image: string | null;
+  status: LaunchStatus;
+  creatorFeeBps: number;
+  /** Lamports of bridged SOL accrued and not yet claimed (the launch's quote holding, what a claim pays); null when the chain could not be read. */
+  claimable: Amount | null;
+  /** Lamports claimed here, all time; null when not known. */
+  claimedTotal?: Amount | null;
+}
+
 export interface Portfolio {
   owner: Address;
   lamports: Amount;
   /** What the wallet holds, plus launches it no longer holds when it has holder rewards to claim there. */
   entries: PortfolioEntry[];
   totalUsd: number | null;
+  /** The launches this wallet created, those with fees to claim first (absent from backends that predate it). */
+  created: CreatedLaunch[];
 }
 
 /** Native SOL (bridged on the way in, unbridged on the way out) or bridged SOL already held. */
@@ -536,6 +554,15 @@ export interface RewardsPrepareRequest {
   mints: Address[];
   /** Unwrap the bridged SOL to SOL and close the temporary holding. */
   unwrap: boolean;
+}
+
+// ---- creator fees ------------------------------------------------------------------------------------
+//   POST /v1/creator/prepare         -> { transactions: PreparedTx[] }
+
+/** Claim the creator fees of launches the owner created: up to about 4 mints per transaction, paid as SOL. */
+export interface CreatorPrepareRequest {
+  owner: Address;
+  mints: Address[];
 }
 
 /** Share with holders: send SOL that every holder of the token receives pro rata. */

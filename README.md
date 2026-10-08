@@ -14,6 +14,13 @@ npm install @bordrless/sdk @bordrless/shared
 
 See [`packages/sdk/README.md`](packages/sdk/README.md) for usage.
 
+## Integrating Bordrless tokens
+
+Building a trading terminal, an aggregator, an indexer or a wallet? Start with
+**[the integration guides](docs/integration)**: reading tokens and prices, indexing trades,
+quoting and building swaps, hooks, and the bridge, with runnable examples in [`examples/`](examples)
+checked against mainnet.
+
 ## Program addresses
 
 The same on mainnet-beta, devnet and localnet (`PROGRAM_IDS` in `@bordrless/shared`):
@@ -25,6 +32,7 @@ The same on mainnet-beta, devnet and localnet (`PROGRAM_IDS` in `@bordrless/shar
 | Bridge | `CtLkuFVitoXHTa86Hfp8KmfSDfqJaMYFWr6EGmQVsKb7` |
 | Launchpad | `1jcBymHxBjniZDhNPy51Vgm5Nz7pLUdxa9UBHc4TavC` |
 | Kit | `14RJQXPdJfkehit6ezktjd3xujamf8nVSKw2shKamaEH` |
+| Half-Life hook | `53SpmtkdPWQ63mWoDeXk8P9tuwiT4ed2Wx4fwfy5NSF8` |
 | Example tax hook | `8tjnVSreJGBRQFyDBf1SyyhBgLsdBxa2rHYh9sbxFyX7` |
 
 ## Develop

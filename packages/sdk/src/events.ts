@@ -25,6 +25,7 @@ const PROGRAM_OF: ReadonlyMap<string, ProgramName> = new Map([
   [a.LAUNCH_PROGRAM.toBase58(), 'launch'],
   [a.KIT_PROGRAM.toBase58(), 'kit'],
   [a.TAX_HOOK_PROGRAM.toBase58(), 'taxHook'],
+  [a.HALF_LIFE_PROGRAM.toBase58(), 'halfLife'],
 ]);
 
 /** The SDK's name of a Bordrless program id; null for any other program. */

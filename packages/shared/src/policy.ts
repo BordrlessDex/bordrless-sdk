@@ -394,10 +394,15 @@ export const defaultCreatorFeeBps = (r: LaunchRulesInput): number => (rewardsOn(
 /** The four presets of §7.1 (2026-10-07: Holders first, Fair start, Scorched and Community are gone). */
 export type RulePresetName = 'Plain' | 'Diamond hands' | 'Burn' | 'Paid to hold';
 
-/** The two ways beside the presets (§7.1): Custom mixes the rules by hand with the form's controls; Build your own launches from a `LaunchConfig` a creator made with the SDK (§5.7). */
-export type RulePathName = 'Custom' | 'Build your own';
+/**
+ * The ways beside the presets (§7.1): Half-Life launches from Bordrless's own `LaunchConfig` with
+ * the Half-Life hook (programs/half_life), prepared and lit for the mint by the launch itself;
+ * Custom mixes the rules by hand with the form's controls; Build your own launches from a
+ * `LaunchConfig` a creator made with the SDK (§5.7).
+ */
+export type RulePathName = 'Half-Life' | 'Custom' | 'Build your own';
 
-/** What the launch form's rules row can be set to: a preset, or one of the two paths. */
+/** What the launch form's rules row can be set to: a preset, or one of the paths. */
 export type RuleModeName = RulePresetName | RulePathName;
 
 export interface RulePreset {
@@ -439,8 +444,9 @@ export const RULE_PRESETS: readonly RulePreset[] = [
   { name: 'Paid to hold', slug: 'paid-to-hold', description: 'Holder rewards 2% on sells only, creator wallet lock 30 d, creator fee 0.5%.', creatorFeeBps: 50, rules: { ...NO_RULES, holderFeeSellBps: 200, creatorLockDays: 30 } },
 ];
 
-/** The two paths beside the presets, in order, with the words the home console and the launch form print. */
+/** The paths beside the presets, in order, with the words the home console and the launch form print. */
 export const RULE_PATHS: readonly RulePath[] = [
+  { name: 'Half-Life', slug: 'half-life', description: 'An exit fee that halves every 6 hours held: 20% to sell at once, 0% after 2 days, burned. Buys are free.' },
   { name: 'Custom', slug: 'custom', description: 'Mix the rules by hand; holder rewards and burn can differ on buys and sells.' },
   { name: 'Build your own', slug: 'build-your-own', description: 'Write a hook with the SDK, make a launch config, paste its key.' },
 ];

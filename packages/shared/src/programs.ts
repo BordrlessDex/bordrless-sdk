@@ -12,7 +12,43 @@ export const PROGRAM_IDS = {
   taxHook: '8tjnVSreJGBRQFyDBf1SyyhBgLsdBxa2rHYh9sbxFyX7',
   /** The v2 token-rules hook (docs/hooks-v2.md §4): holder rewards, max wallet and the two locks. */
   kit: '14RJQXPdJfkehit6ezktjd3xujamf8nVSKw2shKamaEH',
+  /** Half-Life (programs/half_life): an exit fee that halves every six hours a token is held, burned. */
+  halfLife: '53SpmtkdPWQ63mWoDeXk8P9tuwiT4ed2Wx4fwfy5NSF8',
 } as const;
+
+/**
+ * Half-Life, Bordrless's own token hook (programs/half_life/README.md): the `LaunchConfig` the
+ * launch form's Half-Life path launches from (no kit rules, creator fee 1%, the hook with
+ * `flags`), and the fee curve the program has fixed: `maxFeePpm` for tokens that just arrived,
+ * halved every `halfLifeSecs`, linear within each, zero from `zeroAfterSecs`.
+ */
+export const HALF_LIFE = {
+  program: PROGRAM_IDS.halfLife,
+  launchConfig: 'ABz5Je9FznnotUQxxaj28vn18t1Wv9SsDzEfDxGLRJY',
+  /** `BEFORE_TRANSFER | TRANSFER_RETURNS_DELTA | WRITES_HOOK_DATA`. */
+  flags: 193,
+  creatorFeeBps: 100,
+  maxFeePpm: 200_000,
+  halfLifeSecs: 21_600,
+  zeroAfterSecs: 172_800,
+  /** The token program's signer of the hook's callbacks (`["hook-authority", half_life]`). */
+  tokenHookSigner: 'FBZPj9PmV9dXL8U4qmRffXdXm11e23KEBnNgEVXxhfhF',
+  readme: 'https://github.com/BordrlessDex/bordrless-programs/tree/main/programs/half_life',
+} as const;
+
+/**
+ * Half-Life's exit fee, in parts per million, for tokens `ageSecs` old: the program's `fee_ppm`
+ * (20% at 0, halved every six hours, linear within each, 0 from 48 h).
+ */
+export function halfLifeFeePpm(ageSecs: number): number {
+  if (!(ageSecs > 0)) return HALF_LIFE.maxFeePpm;
+  const halvings = Math.floor(ageSecs / HALF_LIFE.halfLifeSecs);
+  if (halvings >= HALF_LIFE.zeroAfterSecs / HALF_LIFE.halfLifeSecs) return 0;
+  const into = Math.floor(ageSecs) % HALF_LIFE.halfLifeSecs;
+  const hi = Math.floor(HALF_LIFE.maxFeePpm / 2 ** halvings);
+  const lo = Math.floor(HALF_LIFE.maxFeePpm / 2 ** (halvings + 1));
+  return hi - Math.floor(((hi - lo) * into) / HALF_LIFE.halfLifeSecs);
+}
 
 /** The wSOL mint, which stands for native SOL on the bridge. */
 export const NATIVE_MINT = 'So11111111111111111111111111111111111111112';

@@ -13,6 +13,7 @@ export const BRIDGE_PROGRAM = new PublicKey(PROGRAM_IDS.bridge);
 export const LAUNCH_PROGRAM = new PublicKey(PROGRAM_IDS.launch);
 export const KIT_PROGRAM = new PublicKey(PROGRAM_IDS.kit);
 export const TAX_HOOK_PROGRAM = new PublicKey(PROGRAM_IDS.taxHook);
+export const HALF_LIFE_PROGRAM = new PublicKey(PROGRAM_IDS.halfLife);
 export const SYSTEM_PROGRAM = new PublicKey(SYSTEM_PROGRAM_ID);
 export const SPL_TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 export const SPL_TOKEN_2022_PROGRAM = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
@@ -155,6 +156,15 @@ export function launchHookExtras(mint: PublicKey, quoteMint: PublicKey): Account
 // ---- example hook ----------------------------------------------------------------------------------
 
 export const taxConfigAddress = (mint: PublicKey): PublicKey => pda([enc('tax'), mint.toBuffer()], TAX_HOOK_PROGRAM);
+
+// ---- Half-Life (`programs/half_life`) --------------------------------------------------------------
+
+/** Half-Life's state for a mint: `["half-life", mint]`. */
+export const halfLifeStateAddress = (mint: PublicKey): PublicKey => pda([enc('half-life'), mint.toBuffer()], HALF_LIFE_PROGRAM);
+/** The owner of a mint's furnace: `["furnace", mint]` under Half-Life. */
+export const halfLifeFurnaceOwner = (mint: PublicKey): PublicKey => pda([enc('furnace'), mint.toBuffer()], HALF_LIFE_PROGRAM);
+/** The furnace's holding of the mint: where exit fees go until `stoke` burns them. */
+export const halfLifeFurnaceHolding = (mint: PublicKey): PublicKey => holdingAddress(mint, halfLifeFurnaceOwner(mint));
 
 // ---- the protocol lookup table (docs/hooks-v2.md §6) -----------------------------------------------
 

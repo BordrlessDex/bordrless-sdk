@@ -89,7 +89,7 @@ import {
   type LaunchFeeParams,
   type RuleBounds,
 } from './policy.ts';
-import { FIXED_ADDRESSES, HOOK_SIGNERS, LAUNCH_POOL_HOOK_FLAGS, PROGRAM_IDS, PROTOCOL_LOOKUP_TABLE_ADDRESSES, TOKEN_HOOK_FLAGS } from './programs.ts';
+import { FIXED_ADDRESSES, HALF_LIFE, HOOK_SIGNERS, LAUNCH_POOL_HOOK_FLAGS, PROGRAM_IDS, PROTOCOL_LOOKUP_TABLE_ADDRESSES, TOKEN_HOOK_FLAGS, halfLifeFeePpm } from './programs.ts';
 
 // The same vectors as crates/bordrless-core/src/lib.rs, so the two implementations stay equal.
 describe('policy mirrors bordrless-core', () => {
@@ -260,8 +260,9 @@ describe('v2 token rules: bounds, choices and presets', () => {
     ]);
     // Gone everywhere (2026-10-07).
     for (const gone of ['Holders first', 'Fair start', 'Scorched', 'Community', 'Custom']) expect(RULE_PRESETS.some((p) => (p.name as string) === gone)).toBe(false);
-    // Custom and Build your own are paths, not presets: no rules of their own, slugs the launch page reads.
+    // Half-Life, Custom and Build your own are paths, not presets: no rules of their own, slugs the launch page reads.
     expect(RULE_PATHS.map((p) => [p.name, p.slug])).toEqual([
+      ['Half-Life', 'half-life'],
       ['Custom', 'custom'],
       ['Build your own', 'build-your-own'],
     ]);
@@ -958,3 +959,32 @@ describe('v2 holder rewards: the kit accounting and its mirror (§4.4, §4.7, §
   });
 });
 
+
+describe('Half-Life', () => {
+  it('mirrors the program’s fee curve: 20% at 0, halved every six hours, 0 from 48 h', () => {
+    const h = HALF_LIFE.halfLifeSecs;
+    // The same points as programs/half_life's unit tests.
+    expect(halfLifeFeePpm(-5)).toBe(200_000);
+    expect(halfLifeFeePpm(0)).toBe(200_000);
+    expect(halfLifeFeePpm(h / 2)).toBe(150_000);
+    expect(halfLifeFeePpm(h)).toBe(100_000);
+    expect(halfLifeFeePpm(2 * h)).toBe(50_000);
+    expect(halfLifeFeePpm(3 * h)).toBe(25_000);
+    expect(halfLifeFeePpm(4 * h)).toBe(12_500);
+    expect(halfLifeFeePpm(7 * h)).toBe(1_562);
+    expect(halfLifeFeePpm(8 * h - 1)).toBe(782);
+    expect(halfLifeFeePpm(8 * h)).toBe(0);
+    let last = Infinity;
+    for (let age = 0; age < 9 * h; age += 97) {
+      expect(halfLifeFeePpm(age)).toBeLessThanOrEqual(last);
+      last = halfLifeFeePpm(age);
+    }
+  });
+
+  it('names the deployed hook and its launch config, and is a path of the launch form', () => {
+    expect(PROGRAM_IDS.halfLife).toBe('53SpmtkdPWQ63mWoDeXk8P9tuwiT4ed2Wx4fwfy5NSF8');
+    expect(HALF_LIFE.program).toBe(PROGRAM_IDS.halfLife);
+    expect(HALF_LIFE.flags).toBe(TOKEN_HOOK_FLAGS.BEFORE_TRANSFER | TOKEN_HOOK_FLAGS.TRANSFER_RETURNS_DELTA | TOKEN_HOOK_FLAGS.WRITES_HOOK_DATA);
+    expect(RULE_PATHS.map((p) => p.name)).toContain('Half-Life');
+  });
+});

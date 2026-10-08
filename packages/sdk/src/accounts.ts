@@ -313,6 +313,21 @@ export interface TaxConfig {
   collected: bigint;
 }
 
+/** Half-Life's state for one mint (`HalfLifeState`, at `["half-life", mint]`). */
+export interface HalfLifeState {
+  mint: PublicKey;
+  launch: PublicKey;
+  /** The launch pool once the hook has read it from the launch account; the default key before. */
+  pool: PublicKey;
+  furnaceOwner: PublicKey;
+  furnaceHolding: PublicKey;
+  /** Exit fees sent to the furnace, all time. */
+  fed: bigint;
+  /** Tokens the furnace has burned, all time. */
+  burned: bigint;
+  preparedBy: PublicKey;
+}
+
 type Raw = Record<string, unknown>;
 
 function decode(program: ProgramName, name: string, data: Buffer): Raw {
@@ -557,6 +572,22 @@ export const decodeTaxConfig = (data: Buffer): TaxConfig => {
   const r = decode('taxHook', 'taxConfig', data);
   return { bump: Number(r.bump), mint: key(r.mint), authority: key(r.authority), feeBps: Number(r.feeBps), maxWalletBps: Number(r.maxWalletBps), collectorHolding: key(r.collectorHolding), collectorOwner: key(r.collectorOwner), collected: big(r.collected) };
 };
+
+export const decodeHalfLifeState = (data: Buffer): HalfLifeState => {
+  const r = decode('halfLife', 'halfLifeState', data);
+  return { mint: key(r.mint), launch: key(r.launch), pool: key(r.pool), furnaceOwner: key(r.furnaceOwner), furnaceHolding: key(r.furnaceHolding), fed: big(r.fed), burned: big(r.burned), preparedBy: key(r.preparedBy) };
+};
+
+/**
+ * When the tokens in a holding arrived, from its hook data, if Half-Life stamped it ("HL", layout
+ * 1, then the unix time as a little-endian i64); null for any other data. Their age is now minus
+ * this, and `halfLifeFeePpm(age)` (@bordrless/shared) is what moving them out costs.
+ */
+export function halfLifeSince(hookData: Uint8Array | readonly number[]): number | null {
+  const d = Uint8Array.from(hookData);
+  if (d.length < 11 || d[0] !== 0x48 || d[1] !== 0x4c || d[2] !== 1) return null;
+  return Number(Buffer.from(d.subarray(3, 11)).readBigInt64LE(0));
+}
 
 // ---- bridges to the shared policy ------------------------------------------------------------------
 

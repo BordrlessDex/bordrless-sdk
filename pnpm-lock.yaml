@@ -12,11 +12,33 @@ importers:
 
   .: {}
 
+  examples:
+    dependencies:
+      '@bordrless/sdk':
+        specifier: workspace:*
+        version: link:../packages/sdk
+      '@bordrless/shared':
+        specifier: workspace:*
+        version: link:../packages/shared
+      '@solana/web3.js':
+        specifier: 1.98.4
+        version: 1.98.4(bufferutil@4.1.0)(typescript@5.9.2)(utf-8-validate@6.0.6)
+      bs58:
+        specifier: 6.0.0
+        version: 6.0.0
+    devDependencies:
+      '@types/node':
+        specifier: 24.13.3
+        version: 24.13.3
+      typescript:
+        specifier: 5.9.2
+        version: 5.9.2
+
   packages/sdk:
     dependencies:
       '@anchor-lang/core':
         specifier: 1.2.1
-        version: 1.2.1(bufferutil@4.1.0)(typescript@5.9.2)(utf-8-validate@6.0.6)
+        version: 1.2.1(bufferutil@4.1.0)(typescript@5.9.2)
       '@bordrless/shared':
         specifier: workspace:^
         version: link:../shared
@@ -278,6 +300,9 @@ packages:
   base-x@3.0.11:
     resolution: {integrity: sha512-xz7wQ8xDhdyP7tQxwdteLYeFfS68tSMNCZ/Y37WJ4bhGfKPpqEIlmIyueQHqOyoPhE6xNUqjzRr8ra0eF9VRvA==}
 
+  base-x@5.0.1:
+    resolution: {integrity: sha512-M7uio8Zt++eg3jPj+rHMfCC+IuygQHHCOU+IYsVtik6FWjuYpVt/+MRKcgsAMHh8mMFAwnB+Bs+mTrFiXjMzKg==}
+
   base64-js@1.5.1:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
 
@@ -289,6 +314,9 @@ packages:
 
   bs58@4.0.1:
     resolution: {integrity: sha512-Ok3Wdf5vOIlBrgCvTq96gBkJw+JUEzdBgyaza5HLtPm7yTHkjRy8+JzNyHF7BHa0bNWOQIp3m5YF0nnFcOIKLw==}
+
+  bs58@6.0.0:
+    resolution: {integrity: sha512-PD0wEnEYg6ijszw/u8s+iI3H17cTymlrwkKhDhPZq+Sokl3AU4htyBFTjAeNAlCCmg0f53g6ih3jATyCKftTfw==}
 
   buffer-layout@1.2.2:
     resolution: {integrity: sha512-kWSuLN694+KTk8SrYvCqwP2WcgQjoRCiF5b4QDvkkz8EmgD+aWAIceGFKMIAdmF/pH+vpgNV3d3kAKorcdAmWA==}
@@ -710,15 +738,15 @@ packages:
 
 snapshots:
 
-  '@anchor-lang/borsh@1.2.1(@solana/web3.js@1.98.4(bufferutil@4.1.0)(typescript@5.9.2)(utf-8-validate@6.0.6))':
+  '@anchor-lang/borsh@1.2.1(@solana/web3.js@1.98.4(bufferutil@4.1.0)(typescript@5.9.2))':
     dependencies:
       '@solana/web3.js': 1.98.4(bufferutil@4.1.0)(typescript@5.9.2)(utf-8-validate@6.0.6)
       bn.js: 5.2.5
       buffer-layout: 1.2.2
 
-  '@anchor-lang/core@1.2.1(bufferutil@4.1.0)(typescript@5.9.2)(utf-8-validate@6.0.6)':
+  '@anchor-lang/core@1.2.1(bufferutil@4.1.0)(typescript@5.9.2)':
     dependencies:
-      '@anchor-lang/borsh': 1.2.1(@solana/web3.js@1.98.4(bufferutil@4.1.0)(typescript@5.9.2)(utf-8-validate@6.0.6))
+      '@anchor-lang/borsh': 1.2.1(@solana/web3.js@1.98.4(bufferutil@4.1.0)(typescript@5.9.2))
       '@anchor-lang/errors': 1.2.1
       '@noble/hashes': 1.8.0
       '@solana/web3.js': 1.98.4(bufferutil@4.1.0)(typescript@5.9.2)(utf-8-validate@6.0.6)
@@ -930,6 +958,8 @@ snapshots:
     dependencies:
       safe-buffer: 5.2.1
 
+  base-x@5.0.1: {}
+
   base64-js@1.5.1: {}
 
   bn.js@5.2.5: {}
@@ -943,6 +973,10 @@ snapshots:
   bs58@4.0.1:
     dependencies:
       base-x: 3.0.11
+
+  bs58@6.0.0:
+    dependencies:
+      base-x: 5.0.1
 
   buffer-layout@1.2.2: {}
 

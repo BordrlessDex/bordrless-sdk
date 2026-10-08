@@ -9,10 +9,10 @@
  */
 import { Keypair, PublicKey, type AccountInfo, type Connection, type TransactionInstruction } from '@solana/web3.js';
 import { PROGRAM_IDS, TOKEN_HOOK_FLAGS_ALL, checkLaunchRules, kitModules, type LaunchRulesInput } from '@bordrless/shared';
-import { LAUNCH_CONFIG, LAUNCH_PROGRAM, TAX_HOOK_PROGRAM, programDataAddress, registryAddress, BPF_LOADER_UPGRADEABLE, SYSTEM_PROGRAM } from './addresses.ts';
+import { HALF_LIFE_PROGRAM, LAUNCH_CONFIG, LAUNCH_PROGRAM, TAX_HOOK_PROGRAM, programDataAddress, registryAddress, BPF_LOADER_UPGRADEABLE, SYSTEM_PROGRAM } from './addresses.ts';
 import { LAUNCH_CONFIG_LABEL_MAX, decodeLaunchConfig, decodeLaunchConfigAccount, launchRulesInputOf, type LaunchConfig, type LaunchConfigAccount, type LaunchRulesData } from './accounts.ts';
 import { MAX_CUSTOM_HOOK_EXTRAS, decodeHookAccountList, resolveCustomHookAccounts, type CustomHookAccounts, type HookAccountList } from './hooks.ts';
-import { launch, type CreateConfigArgs } from './instructions.ts';
+import { halfLife as halfLifeIx, launch, type CreateConfigArgs } from './instructions.ts';
 
 /** The programs a custom hook may not be (§5.8, `PROTOCOL_PROGRAMS`): the protocol's own, the system program and the default key. */
 export const PROTOCOL_PROGRAMS: readonly PublicKey[] = [PROGRAM_IDS.token, PROGRAM_IDS.swap, PROGRAM_IDS.bridge, PROGRAM_IDS.launch, PROGRAM_IDS.kit].map((id) => new PublicKey(id)).concat(SYSTEM_PROGRAM, PublicKey.default);
@@ -107,6 +107,11 @@ export interface ConfigInspectionResult {
   hookAccounts: CustomHookAccounts | null;
   /** With a hook and a mint: whether the registry exists; null otherwise. */
   registryReady: boolean | null;
+  /**
+   * The hook is Half-Life (programs/half_life): the launch itself prepares it for the mint and
+   * lights its furnace, so a missing registry is no problem and `hookAccounts` are built without it.
+   */
+  halfLife: boolean;
 }
 
 /**
@@ -136,6 +141,7 @@ export async function inspectConfig(connection: Connection, address: PublicKey, 
   let hook: ProgramUpgradeInfo | null = null;
   let hookAccounts: CustomHookAccounts | null = null;
   let registryReady: boolean | null = null;
+  const halfLife = config.customHook !== null && config.customHook.equals(HALF_LIFE_PROGRAM);
   if (config.customHook) {
     const keys = [config.customHook, programDataAddress(config.customHook), ...(mint ? [registryAddress(config.customHook, mint)] : [])];
     const [programInfo, programData, registryInfo] = await connection.getMultipleAccountsInfo(keys, 'confirmed');
@@ -144,7 +150,9 @@ export async function inspectConfig(connection: Connection, address: PublicKey, 
     if (mint) {
       const list = registryInfo && registryInfo.owner.equals(config.customHook) ? decodeHookAccountList(registryInfo.data) : null;
       registryReady = list !== null;
-      if (!list) problems.push('Prepare the hook for this mint first: its registry at ["bordrless-hook-accounts", mint] does not exist yet.');
+      // Half-Life's registry is the same for every mint and its `prepare` is permissionless: the launch prepares it.
+      if (!list && halfLife) hookAccounts = halfLifeIx.accounts(mint);
+      else if (!list) problems.push('Prepare the hook for this mint first: its registry at ["bordrless-hook-accounts", mint] does not exist yet.');
       else {
         const long = registryLengthProblem(list);
         if (long) problems.push(long);
@@ -156,7 +164,7 @@ export async function inspectConfig(connection: Connection, address: PublicKey, 
       }
     }
   } else problems.push(...customHookProblems(null, config.customHookFlags, config.rules, null));
-  return { address, config, rules, problems, hook, hookAccounts, registryReady };
+  return { address, config, rules, problems, hook, hookAccounts, registryReady, halfLife };
 }
 
 /** What `inspectTokenHook` found about a hook program for a mint. */

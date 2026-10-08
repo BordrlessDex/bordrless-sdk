@@ -725,3 +725,36 @@ export const taxHook = {
     return { program: a.TAX_HOOK_PROGRAM, extras: [rw(a.taxConfigAddress(mint)), rw(a.holdingAddress(mint, collector))] };
   },
 };
+
+// ---- Half-Life (`programs/half_life`) ---------------------------------------------------------------
+
+/**
+ * Half-Life: an exit fee that halves every six hours a token is held, burned through a furnace
+ * (programs/half_life/README.md). For a launch: `prepare` before it (the mint need not exist), the
+ * launch from `HALF_LIFE.launchConfig` with `accounts(mint)` as its custom hook, then `light`. Every
+ * instruction is permissionless; the hook has no event CPI.
+ */
+export const halfLife = {
+  /** `prepare`: the state and the extra-accounts registry for `mint`, the payer paying the rent. */
+  prepare(payer: PublicKey, mint: PublicKey): TransactionInstruction {
+    const keys = [rw(payer, true), ro(mint), rw(a.halfLifeStateAddress(mint)), rw(a.registryAddress(a.HALF_LIFE_PROGRAM, mint)), ro(a.SYSTEM_PROGRAM)];
+    return ix(a.HALF_LIFE_PROGRAM, 'halfLife', 'prepare', {}, keys);
+  },
+  /** `light`: creates the furnace's holding once the mint exists; until then a transfer that owes a fee fails. */
+  light(payer: PublicKey, mint: PublicKey): TransactionInstruction {
+    const keys = [rw(payer, true), ro(a.halfLifeStateAddress(mint)), ro(mint), ro(a.halfLifeFurnaceOwner(mint)), rw(a.halfLifeFurnaceHolding(mint)), ro(a.TOKEN_PROGRAM), ro(a.TOKEN_EVENT_AUTHORITY), ro(a.SYSTEM_PROGRAM)];
+    return ix(a.HALF_LIFE_PROGRAM, 'halfLife', 'light', {}, keys);
+  },
+  /** `stoke`: burns everything in the furnace. Only the transaction's fee payer signs. */
+  stoke(mint: PublicKey): TransactionInstruction {
+    const keys = [rw(a.halfLifeStateAddress(mint)), rw(mint), ro(a.halfLifeFurnaceOwner(mint)), rw(a.halfLifeFurnaceHolding(mint)), ro(a.HALF_LIFE_PROGRAM), ro(a.tokenHookSigner(a.HALF_LIFE_PROGRAM)), ro(a.TOKEN_PROGRAM), ro(a.TOKEN_EVENT_AUTHORITY)];
+    return ix(a.HALF_LIFE_PROGRAM, 'halfLife', 'stoke', {}, keys);
+  },
+  /**
+   * The hook's accounts for `mint` without reading its registry (which `prepare` writes): the state
+   * (w), the furnace holding (w) and the launch account (r), the registry's order.
+   */
+  accounts(mint: PublicKey): CustomHookAccounts {
+    return { program: a.HALF_LIFE_PROGRAM, extras: [rw(a.halfLifeStateAddress(mint)), rw(a.halfLifeFurnaceHolding(mint)), ro(a.launchAddress(mint))] };
+  },
+};

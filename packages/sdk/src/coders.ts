@@ -20,6 +20,7 @@ export const IDL = {
   launch: require('../idl/bordrless_launch.json') as Idl,
   kit: require('../idl/bordrless_kit.json') as Idl,
   taxHook: require('../idl/tax_hook.json') as Idl,
+  halfLife: require('../idl/half_life.json') as Idl,
 };
 
 function coder(idl: Idl): Coder {
@@ -34,6 +35,7 @@ export const CODERS = {
   launch: coder(IDL.launch),
   kit: coder(IDL.kit),
   taxHook: coder(IDL.taxHook),
+  halfLife: coder(IDL.halfLife),
 };
 
 export type ProgramName = keyof typeof CODERS;

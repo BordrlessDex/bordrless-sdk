@@ -34,6 +34,7 @@ export const PROGRAM_ERRORS: Readonly<Record<ProgramName, ReadonlyMap<number, Pr
   launch: table(IDL.launch),
   kit: table(IDL.kit),
   taxHook: table(IDL.taxHook),
+  halfLife: table(IDL.halfLife),
 };
 
 const ANCHOR_ERRORS: ReadonlyMap<number, ProgramErrorEntry> = new Map(
@@ -125,7 +126,7 @@ const sentence = (text: string): string => {
   return /[.!?]$/.test(capital) ? capital : `${capital}.`;
 };
 
-const PROGRAM_IDS_BY_NAME: Readonly<Record<ProgramName, PublicKey>> = { token: a.TOKEN_PROGRAM, swap: a.SWAP_PROGRAM, bridge: a.BRIDGE_PROGRAM, launch: a.LAUNCH_PROGRAM, kit: a.KIT_PROGRAM, taxHook: a.TAX_HOOK_PROGRAM };
+const PROGRAM_IDS_BY_NAME: Readonly<Record<ProgramName, PublicKey>> = { token: a.TOKEN_PROGRAM, swap: a.SWAP_PROGRAM, bridge: a.BRIDGE_PROGRAM, launch: a.LAUNCH_PROGRAM, kit: a.KIT_PROGRAM, taxHook: a.TAX_HOOK_PROGRAM, halfLife: a.HALF_LIFE_PROGRAM };
 
 /** The error `code` of `program` (its SDK name or its id), explained. */
 export function explainProgramError(program: ProgramName | string | PublicKey, code: number): ProgramErrorInfo {

@@ -93,10 +93,16 @@ nothing and refuses nothing costs the trader nothing beyond the pool fee.
 
 ## Where to read more
 
-- The SDK page, with the hook interface and the examples: https://bordrless.xyz/sdk
-- The standard in full: https://bordrless.xyz/docs
+- The SDK page, with the hook interface and the examples: https://bordrless.app/sdk
+- The standard in full: https://bordrless.app/docs
 
-Status: the programs run on localnet and devnet until they are deployed to mainnet (the ids in
-`@bordrless/shared` are the devnet and localnet ids); they keep an upgrade authority until audited.
-A token with a custom hook is launched from a `LaunchConfig` made with this SDK ("Build your own"
-on the launch page), or created directly through `token.createMint`.
+## Integrating: terminals, indexers, wallets
+
+[`docs/integration`](https://github.com/BordrlessDex/bordrless-sdk/tree/main/docs/integration) walks
+through reading tokens and prices, indexing trades, quoting and building swaps, hooks and the
+bridge, with runnable examples in [`examples/`](https://github.com/BordrlessDex/bordrless-sdk/tree/main/examples).
+
+Status: the programs are live on Solana mainnet-beta at the addresses in `PROGRAM_IDS` (the same
+ids on devnet and localnet), verified builds of
+[bordrless-programs](https://github.com/BordrlessDex/bordrless-programs). They keep an upgrade
+authority until audited.

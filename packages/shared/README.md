@@ -27,8 +27,8 @@ TOKEN_HOOK_FLAGS.BEFORE_TRANSFER | TOKEN_HOOK_FLAGS.TRANSFER_RETURNS_DELTA;
 
 ## Where to read more
 
-- The SDK page: https://bordrless.xyz/sdk
-- The standard in full: https://bordrless.xyz/docs
+- The SDK page: https://bordrless.app/sdk
+- The standard in full: https://bordrless.app/docs
 
 Status: the programs run on localnet and devnet until they are deployed to mainnet; they keep an
 upgrade authority until audited.

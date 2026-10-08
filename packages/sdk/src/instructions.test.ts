@@ -8,13 +8,14 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import BN from 'bn.js';
 import { Keypair, PublicKey, type AccountMeta, type Connection, type TransactionInstruction } from '@solana/web3.js';
-import { FIXED_ADDRESSES, HOOK_SIGNERS, PROTOCOL_LOOKUP_TABLE_ADDRESSES, RULE_BOUNDS } from '@bordrless/shared';
+import { FIXED_ADDRESSES, HALF_LIFE, HOOK_SIGNERS, PROTOCOL_LOOKUP_TABLE_ADDRESSES, RULE_BOUNDS } from '@bordrless/shared';
 import * as a from './addresses.ts';
 import { NO_LAUNCH_RULES, type LaunchRulesData } from './accounts.ts';
 import { CODERS, IDL, type ProgramName } from './coders.ts';
 import { MAX_CUSTOM_HOOK_EXTRAS, customHookLaunchAccounts, customHookSlice, decodeHookAccountList, encodeHookAccountList, fetchTokenHook, kitHookExtras, kitHookSlice, kitRegistryList, kitTokenHook, launchPoolRegistryList, resolveCustomHookAccounts, resolveHookAccounts, tokenHookOf, tokenHookSlice } from './hooks.ts';
 import { PROTOCOL_PROGRAMS, buildCreateConfig, configProblems, programUpgradeInfoOf, registryLengthProblem } from './inspect.ts';
-import { TAX_HOOK_FLAGS, bridge, kit, launch, launchKeys, launchKeysOf, swap, taxHook, token } from './instructions.ts';
+import { TAX_HOOK_FLAGS, bridge, halfLife, kit, launch, launchKeys, launchKeysOf, swap, taxHook, token } from './instructions.ts';
+import { halfLifeSince } from './accounts.ts';
 
 const k = (): PublicKey => Keypair.generate().publicKey;
 const disc = (name: string): Buffer => createHash('sha256').update(`global:${name}`).digest().subarray(0, 8);
@@ -32,7 +33,7 @@ interface IdlAccount {
 }
 type RawIdl = { address: string; instructions: { name: string; discriminator: number[]; accounts: IdlAccount[] }[] };
 
-const PROGRAM_ID: Record<ProgramName, PublicKey> = { token: a.TOKEN_PROGRAM, swap: a.SWAP_PROGRAM, bridge: a.BRIDGE_PROGRAM, launch: a.LAUNCH_PROGRAM, kit: a.KIT_PROGRAM, taxHook: a.TAX_HOOK_PROGRAM };
+const PROGRAM_ID: Record<ProgramName, PublicKey> = { token: a.TOKEN_PROGRAM, swap: a.SWAP_PROGRAM, bridge: a.BRIDGE_PROGRAM, launch: a.LAUNCH_PROGRAM, kit: a.KIT_PROGRAM, taxHook: a.TAX_HOOK_PROGRAM, halfLife: a.HALF_LIFE_PROGRAM };
 
 /**
  * The instruction against the IDL's: its fixed accounts in order with their flags and addresses, and
@@ -453,6 +454,34 @@ describe('builders hold to the v2 IDLs (programs-summary §3)', () => {
     expect(() => launchKeysOf(decoded, { program: k(), extras: [] })).toThrow(/another program/);
     expect(launchKeysOf(decoded, accounts).customHook).toBe(accounts);
     expect(launchKeysOf({ ...decoded, customHook: null }).customHook).toBeNull();
+  });
+
+  it('half_life: prepare, light and stoke match the IDL, and its registry resolves to `halfLife.accounts`', () => {
+    const [payer, mint] = [k(), k()];
+    const prepare = halfLife.prepare(payer, mint);
+    holdToIdl('halfLife', 'prepare', prepare, 0);
+    expect(prepare.keys.slice(1, 4).map((m) => m.pubkey.toBase58())).toEqual([mint, a.halfLifeStateAddress(mint), a.registryAddress(a.HALF_LIFE_PROGRAM, mint)].map(String));
+    holdToIdl('halfLife', 'light', halfLife.light(payer, mint), 0);
+    const stoke = halfLife.stoke(mint);
+    holdToIdl('halfLife', 'stoke', stoke, 0);
+    expect(stoke.keys.map((m) => m.pubkey.toBase58())).toContain(HALF_LIFE.tokenHookSigner);
+    // The registry `prepare` writes (programs/half_life `prepare`): the state, the furnace holding, the launch account.
+    const enc = (t: string): Uint8Array => new TextEncoder().encode(t);
+    const list = {
+      version: 1,
+      accounts: [
+        { writable: true, source: { kind: 'pda' as const, program: a.HALF_LIFE_PROGRAM, seeds: [{ kind: 'literal' as const, bytes: enc('half-life') }, { kind: 'account' as const, index: 1 }] } },
+        { writable: true, source: { kind: 'key' as const, key: a.halfLifeFurnaceHolding(mint) } },
+        { writable: false, source: { kind: 'pda' as const, program: a.LAUNCH_PROGRAM, seeds: [{ kind: 'literal' as const, bytes: enc('launch') }, { kind: 'account' as const, index: 1 }] } },
+      ],
+    };
+    expect(resolveCustomHookAccounts(a.HALF_LIFE_PROGRAM, list, mint).extras.map(metaOf)).toEqual(halfLife.accounts(mint).extras.map(metaOf));
+    // The age record: "HL", layout 1, the arrival time.
+    const data = new Uint8Array(64);
+    data.set([0x48, 0x4c, 1]);
+    Buffer.from(data.buffer).writeBigInt64LE(1_791_419_498n, 3);
+    expect(halfLifeSince(data)).toBe(1_791_419_498);
+    expect(halfLifeSince(new Uint8Array(64))).toBeNull();
   });
 
   it('tax_hook: prepare for a mint that does not exist yet, and install on one that does', () => {
