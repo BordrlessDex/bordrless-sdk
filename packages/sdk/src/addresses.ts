@@ -14,6 +14,7 @@ export const LAUNCH_PROGRAM = new PublicKey(PROGRAM_IDS.launch);
 export const KIT_PROGRAM = new PublicKey(PROGRAM_IDS.kit);
 export const TAX_HOOK_PROGRAM = new PublicKey(PROGRAM_IDS.taxHook);
 export const HALF_LIFE_PROGRAM = new PublicKey(PROGRAM_IDS.halfLife);
+export const COMPANION_PROGRAM = new PublicKey(PROGRAM_IDS.companion);
 export const SYSTEM_PROGRAM = new PublicKey(SYSTEM_PROGRAM_ID);
 export const SPL_TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 export const SPL_TOKEN_2022_PROGRAM = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
@@ -169,9 +170,18 @@ export const halfLifeFurnaceHolding = (mint: PublicKey): PublicKey => holdingAdd
 // ---- the protocol lookup table (docs/hooks-v2.md §6) -----------------------------------------------
 
 /**
- * The 18 addresses of the protocol lookup table, in table order (programs-summary §2.7): event and
+ * The 22 addresses of the protocol lookup table, in table order (programs-summary §2.7): event and
  * hook authorities, config PDAs, bridged SOL and the SOL wrapper's accounts, the kit program, the
- * system and associated-token programs. `pnpm admin init` must extend the table with exactly these,
- * in this order.
+ * system and associated-token programs, then (appended for companion launches) the companion's
+ * event authority and the launch, swap and token programs. `pnpm admin init` must extend the table
+ * with exactly these, in this order.
  */
 export const PROTOCOL_LOOKUP_TABLE: readonly PublicKey[] = PROTOCOL_LOOKUP_TABLE_ADDRESSES.map((a) => new PublicKey(a));
+
+// ---- Companions (`programs/bordrless_companion`, docs/companions.md) ----------------------------------------
+
+/** A launch's companion: `PDA(["companion", mint])`. */
+export const companionAddress = (mint: PublicKey): PublicKey => pda([enc('companion'), mint.toBuffer()], COMPANION_PROGRAM);
+/** The launch's creator when it has a companion: `PDA(["creator", mint])`, system-owned, signed for only by the companion. */
+export const companionCreatorAddress = (mint: PublicKey): PublicKey => pda([enc('creator'), mint.toBuffer()], COMPANION_PROGRAM);
+export const COMPANION_EVENT_AUTHORITY = pda([enc('__event_authority')], COMPANION_PROGRAM);

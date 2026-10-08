@@ -12,7 +12,7 @@ import * as a from './addresses.ts';
 import { NO_LAUNCH_RULES, type LaunchRulesData } from './accounts.ts';
 import { MAX_CUSTOM_HOOK_EXTRAS, kitTokenHook } from './hooks.ts';
 import { bridge, kit, launch, launchKeys, setComputeUnitLimit, setComputeUnitPrice, token } from './instructions.ts';
-import { PACKET_DATA_SIZE, buildV0Transaction, checkProtocolLookupTable, createProtocolLookupTable, protocolLookupTable, transactionSize, v0KeyCounts } from './transactions.ts';
+import { PACKET_DATA_SIZE, buildV0Transaction, checkProtocolLookupTable, companionReady, createProtocolLookupTable, protocolLookupTable, transactionSize, v0KeyCounts } from './transactions.ts';
 
 const k = (): PublicKey => Keypair.generate().publicKey;
 const SOL = a.BRIDGED_SOL_MINT;
@@ -21,10 +21,12 @@ const EVERY_RULE: LaunchRulesData = { holderFeeBuyBps: 100, holderFeeSellBps: 10
 /** The mainnet shape of every prepared transaction: a compute-unit limit and a priority price. */
 const budget = () => [setComputeUnitLimit(1_400_000), setComputeUnitPrice(20_000n)];
 const table = protocolLookupTable(k());
+/** The table as mainnet held it before the companion addresses were appended: the sizes below are measured against it, the bound every path must keep. */
+const core = protocolLookupTable(k(), a.PROTOCOL_LOOKUP_TABLE.slice(0, 18));
 const blockhash = k().toBase58();
 
-function measure(payer: PublicKey, ixs: Parameters<typeof buildV0Transaction>[1]): { keys: number; bytes: number; loaded: number } {
-  const tx = buildV0Transaction(payer, [...budget(), ...ixs], blockhash, [table]);
+function measure(payer: PublicKey, ixs: Parameters<typeof buildV0Transaction>[1], tables = [core]): { keys: number; bytes: number; loaded: number } {
+  const tx = buildV0Transaction(payer, [...budget(), ...ixs], blockhash, tables);
   const counts = v0KeyCounts(tx);
   return { keys: counts.total, bytes: transactionSize(tx), loaded: counts.loaded };
 }
@@ -84,6 +86,14 @@ describe('v0 transactions with the protocol lookup table reproduce the measured 
     expect(tx.message.staticAccountKeys.some((key) => key.equals(a.KIT_PROGRAM))).toBe(false);
   });
 
+  it('the extended table makes every path smaller: the launch, buys and sells load the launch, swap and token programs from it', () => {
+    const ix = launch.createLaunch(creator, mint, k(), SOL, 30, { name: 'Every rule', symbol: 'EVRY', uri: 'ipfs://x', creatorFeeBps: 50, virtualQuote: 28_125_000_000n, rules: EVERY_RULE });
+    const before = measure(creator, [ix]).bytes;
+    const after = measure(creator, [ix], [table]).bytes;
+    expect(after).toBeLessThan(before);
+    expect(before - after).toBeGreaterThanOrEqual(60);
+  });
+
   it('a launch with a custom hook fits with at most MAX_CUSTOM_HOOK_EXTRAS registry extras, at the longest metadata the site uploads', () => {
     const hook = k();
     // A name of 32 bytes, a symbol of 10, an ipfs:// link of 66 (a CIDv1): the most the form sends.
@@ -112,9 +122,15 @@ describe('v0 transactions with the protocol lookup table reproduce the measured 
     expect(checkProtocolLookupTable(table)).toBeNull();
     const shuffled = protocolLookupTable(k(), [...a.PROTOCOL_LOOKUP_TABLE].reverse());
     expect(checkProtocolLookupTable(shuffled)).toMatch(/at index 0/);
+    // The older table of 18 still serves everything but a companion launch; a wrong 19th does not.
+    const older = protocolLookupTable(k(), a.PROTOCOL_LOOKUP_TABLE.slice(0, 18));
+    expect([checkProtocolLookupTable(older), companionReady(older), companionReady(table)]).toEqual([null, false, true]);
+    expect(checkProtocolLookupTable(protocolLookupTable(k(), a.PROTOCOL_LOOKUP_TABLE.slice(0, 17)))).toMatch(/at index 17/);
+    expect(checkProtocolLookupTable(protocolLookupTable(k(), [...a.PROTOCOL_LOOKUP_TABLE.slice(0, 18), k()]))).toMatch(/at index 18/);
     const authority = k();
     const setup = createProtocolLookupTable(authority, authority, 123);
-    expect(setup.extend.length).toBe(1);
+    // 22 addresses: two extends, a chunk per instruction.
+    expect(setup.extend.length).toBe(2);
     expect(setup.create.programId.equals(a.ADDRESS_LOOKUP_TABLE_PROGRAM)).toBe(true);
     expect(setup.address.equals(PublicKey.findProgramAddressSync([authority.toBuffer(), Buffer.from(new BigUint64Array([123n]).buffer)], a.ADDRESS_LOOKUP_TABLE_PROGRAM)[0])).toBe(true);
   });

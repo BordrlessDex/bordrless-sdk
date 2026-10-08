@@ -119,7 +119,9 @@ after an optional key move.
 | Bridge config | `Dwf4C8tTMYwicp8cU5MYcTtMQVVJTN7W3LcXCQ1UEhMs` | `BRIDGE_CONFIG` |
 | Protocol lookup table (mainnet) | `4vxVcYLdkqT1rMfGHjAu4kMa9XSEhUdQU5ThVfU5grGQ` | addresses: `PROTOCOL_LOOKUP_TABLE` |
 
-The lookup table holds the 18 fixed addresses every swap uses. Put it in every v0 transaction you
-build. Measured on mainnet tokens, a buy or sell with SOL is 787–920 bytes with the table and
+The lookup table holds the fixed addresses every swap uses: its first 18 never change, and later
+addresses are only ever appended (it holds 22 since companions, which the last 4 serve), so a
+transaction compiled against it keeps meaning the same accounts. Don't check its length; check its
+first entries (`checkProtocolLookupTable`). Put it in every v0 transaction you build. Measured on mainnet tokens, a buy or sell with SOL is 787–920 bytes with the table and
 1,063–1,196 bytes without it, out of Solana's 1,232. Without the table there's no room left for a
 priority fee, a graduation or a claim.

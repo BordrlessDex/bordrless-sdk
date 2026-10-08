@@ -126,7 +126,7 @@ describe('v2 accounts (programs-summary §3 and §6)', () => {
     const value = {
       version: 1, bump: 254, kitCallerBump: 255, modules: 15, graduated: false, eligible: bn(3_000_000_000_000n), minEligible: bn(1_000_000_000_000n), mint: mintKey, launch: a.launchAddress(mintKey), pool, creator: k(), rewardMint: SOL, rewardVault: a.rewardVaultAddress(mintKey, SOL),
       supplyAtInit: bn(10n ** 15n), maxWalletBps: 500, maxWalletAmount: bn(5n * 10n ** 13n), creatorUnlockAt: bn(1), earlyWindowEnd: bn(2), earlyUnlockAt: bn(3), accPerShare: bn(7_000_000), rem: bn(11), held: bn(0), seen: bn(21_000_000),
-      streamRemaining: bn(0), streamLast: bn(0), streamEnd: bn(0), totalDistributed: bn(21_000_000), totalClaimed: bn(0), totalShared: bn(0), createdAt: bn(1_800_000_000), streamNext: bn(0), reserved: Array(56).fill(0),
+      streamRemaining: bn(0), streamLast: bn(0), streamEnd: bn(0), totalDistributed: bn(21_000_000), totalClaimed: bn(0), totalShared: bn(0), createdAt: bn(1_800_000_000), streamNext: bn(0), creatorIsCompanion: false, reserved: Array(55).fill(0),
     };
     const bytes = await encodeAccount('kit', 'kitConfig', value);
     expect(bytes.length).toBe(KIT_CONFIG_SIZE);

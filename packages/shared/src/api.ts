@@ -243,6 +243,8 @@ export interface LaunchSummary {
   protocolModel: ProtocolModel;
   /** Under the share model, Bordrless's share of the cuts in basis points (2,500 = a quarter); null under the flat model. */
   protocolShareBps: number | null;
+  /** The pool's LP fee (the sniper fee included) goes to Bordrless in SOL: a launch pool created at or after the DEX upgrade of 2026-10-08 (`LP_FEE_TO_PROTOCOL_FROM_SLOT`). False on one created before it, whose LP fee stays in the pool. */
+  lpFeeToProtocol: boolean;
   /** Total fee of a buy by the §7.3 formula, outside the sniper window. */
   buyFeeBps: number;
   /** Total fee of a sell by the §7.3 formula, outside the sniper window. */
@@ -454,7 +456,8 @@ export interface PreparedTx {
   stage: number;
   label: string;
   /** Keys the browser holds that must also sign (a launch's fresh mint). */
-  extraSigners: ('mint')[];
+  /** Keys the browser holds that sign after the wallet: a launch's fresh mint, a new launch config. */
+  extraSigners: ('mint' | 'config')[];
 }
 
 export interface SwapPrepareResponse {
@@ -506,7 +509,18 @@ export interface LaunchPrepareRequest {
    * (what the site showed is what launches), and a custom hook's accounts are resolved for `mint`.
    */
   config?: Address;
+  /**
+   * A companion (docs/companions.md): the launch's creator is a program, so its creator fees are
+   * bought back and burned, streamed to holders or paid to the launcher by code, with no keeper.
+   * The launcher is the beneficiary; a first buy is then the companion's, vesting to them over
+   * `vestDays`. Not with the creator wallet lock or a custom hook; the holders' templates need
+   * holder rewards.
+   */
+  companion?: { template: CompanionTemplate; vestDays?: number };
 }
+
+/** The companion templates (`COMPANION_TEMPLATES` in the SDK). */
+export type CompanionTemplate = 'buysItself' | 'rugProofDev' | 'buybackAndReward';
 
 export interface LaunchPrepareResponse {
   intentId: string;
@@ -558,6 +572,29 @@ export interface RewardsPrepareRequest {
   mints: Address[];
   /** Unwrap the bridged SOL to SOL and close the temporary holding. */
   unwrap: boolean;
+}
+
+// ---- sending a token of the standard -----------------------------------------------------------------
+//   POST /v1/transfer/prepare        -> TransferPrepareResponse
+
+/**
+ * Send `amount` of `mint` from the owner's holding to `to`'s (made on the way when missing, the
+ * sender paying its rent). Wallets cannot build this themselves: the token program's transfer takes
+ * the mint's hook accounts, which the backend resolves. A holding under the creator lock or the
+ * early-buyer lock is refused with the lock (code `locked`), as the program would refuse it.
+ */
+export interface TransferPrepareRequest {
+  owner: Address;
+  mint: Address;
+  to: Address;
+  /** Base units of the token. */
+  amount: Amount;
+}
+
+export interface TransferPrepareResponse {
+  transactions: PreparedTx[];
+  /** Lamports the sender pays for the recipient's holding; 0 when it already exists. */
+  rentLamports: Amount;
 }
 
 // ---- creator fees ------------------------------------------------------------------------------------
@@ -628,6 +665,8 @@ export interface BridgePool {
   lpFeeBps: number;
   /** The flat protocol rate of the quote on this pool (ordinary pools; 0 under the share model). */
   protocolFeeBps: number;
+  /** The LP fee goes to Bordrless in SOL (a launch pool since the upgrade of 2026-10-08, `LP_FEE_TO_PROTOCOL_FROM_SLOT`); false when it stays in the pool, as an ordinary pool's always does. */
+  lpFeeToProtocol: boolean;
   baseReserve: Amount;
   quoteReserve: Amount;
   volume24hUsd: number | null;
@@ -672,6 +711,8 @@ export interface PoolSummary {
   protocolModel?: ProtocolModel;
   /** Under the share model, Bordrless's share of what the hooks cut, in basis points; null (or absent) under the flat model. */
   protocolShareBps?: number | null;
+  /** The LP fee goes to Bordrless in SOL (a launch pool since the upgrade of 2026-10-08); false when it stays in the pool. Absent from backends that predate it. */
+  lpFeeToProtocol?: boolean;
   hookProgram: Address | null;
   /** The base token's creator-written hook (§5.8), for a launch pool whose token has one; null or absent otherwise. */
   customHook?: CustomHookInfo | null;
@@ -720,3 +761,251 @@ export interface ApiErrorBody {
   error: string;
   code?: string;
 }
+
+// ---- the explorer (GET /v1/explorer/...) --------------------------------------------------------------
+
+/** Which of the standard's programs emitted an event: the five of Bordrless, or any hook program (`hook`). */
+export type ExplorerProgram = 'token' | 'swap' | 'bridge' | 'launch' | 'kit' | 'hook';
+
+/** What an address turned out to be, in the order the backend looks: a mint, a pool, a bridge wrapper, a holding, a program, a wallet, a launch config, or nothing it knows. */
+export type ExplorerKind = 'mint' | 'pool' | 'wrapper' | 'holding' | 'program' | 'wallet' | 'config' | 'unknown';
+
+export interface ExplorerStats {
+  /** Mints of the standard the indexer has seen. */
+  mints: number;
+  /** Holdings with a balance. */
+  holdings: number;
+  /** Transactions indexed (distinct signatures), all time and in the last 24 hours. */
+  transactions: number;
+  transactions24h: number;
+  /** The newest slot indexed; null before the first event. */
+  newestSlot: number | null;
+}
+
+/** A token an event's amounts are in. */
+export interface ExplorerToken {
+  mint: Address;
+  symbol: string;
+  decimals: number;
+}
+
+/** One decoded event of `chain_events`, as the explorer shows it. */
+export interface ExplorerEvent {
+  signature: string;
+  ordinal: number;
+  slot: number;
+  blockTime: number | null;
+  /** The program id that emitted it. */
+  program: Address;
+  /** The IDL's event name in PascalCase (`Transferred`, `Swapped`, `KitInstalled`). */
+  name: string;
+  /** The account the event is mostly about (the mint, the pool, the holding, ...); null when it has none. */
+  subject: Address | null;
+  /** The decoded fields: keys as the SDK's coder gives them (camelCase), pubkeys as base58, integers as decimal strings. */
+  payload: Record<string, unknown>;
+  /** The tokens its amounts are in, where the indexer knows them: the event's own mint (or the pool's base), and the pool's quote. */
+  base: ExplorerToken | null;
+  quote: ExplorerToken | null;
+}
+
+export interface ExplorerEvents {
+  events: ExplorerEvent[];
+  /** The cursor for the page after this one (`before=`); null on the last page. */
+  next: string | null;
+}
+
+/** `GET /v1/explorer/tx/:signature`: a transaction the indexer has, with every event it decoded, in order. */
+export interface ExplorerTx {
+  signature: string;
+  slot: number;
+  blockTime: number | null;
+  /** The program ids its events came from, first seen first. */
+  programs: Address[];
+  events: ExplorerEvent[];
+}
+
+export interface ExplorerMint {
+  mint: Address;
+  name: string;
+  symbol: string;
+  image: string | null;
+  decimals: number;
+  supply: Amount;
+  maxSupply: Amount;
+  creator: Address;
+  createdAt: number;
+  kind: 'launch' | 'bridged' | 'lp' | 'other';
+  mintAuthority: Address | null;
+  freezeAuthority: Address | null;
+  hookAuthority: Address | null;
+  metadataAuthority: Address | null;
+  hookProgram: Address | null;
+  hookFlags: number;
+  /** Holdings with a balance. */
+  holders: number;
+}
+
+export interface ExplorerHolder {
+  owner: Address;
+  holding: Address;
+  amount: Amount;
+  /** Of the supply, 0 to 1. */
+  share: number;
+}
+
+/** A pool as the explorer lists it on a mint's page, or shows it on its own. */
+export interface ExplorerPool {
+  pool: Address;
+  baseMint: Address;
+  quoteMint: Address;
+  baseSymbol: string;
+  quoteSymbol: string;
+  baseDecimals: number;
+  quoteDecimals: number;
+  baseReserve: Amount;
+  quoteReserve: Amount;
+  lpMint: Address;
+  lpSupply: Amount;
+  lpFeeBps: number;
+  protocolFeeBps: number;
+  protocolModel: ProtocolModel;
+  protocolShareBps: number | null;
+  /** The LP fee goes to Bordrless in SOL (a launch pool since the upgrade of 2026-10-08); false when it stays in the pool. */
+  lpFeeToProtocol: boolean;
+  hookProgram: Address | null;
+  hookFlags: number;
+  curve: boolean;
+  creator: Address;
+  createdAt: number;
+  swapCount: number;
+  volume24hUsd: number | null;
+  /** The launch this is the pool of, if any. */
+  launchMint: Address | null;
+}
+
+export interface ExplorerHolding {
+  holding: Address;
+  mint: Address;
+  owner: Address;
+  amount: Amount;
+  symbol: string;
+  name: string;
+  image: string | null;
+  decimals: number;
+  /** Dollars, where the token has a pool against bridged SOL and SOL has a price. */
+  valueUsd: number | null;
+}
+
+export interface ExplorerProgramInfo extends ProgramInfo {
+  /** The program's name on the standard ("Token", "DEX", "Half-Life"); a hook the site does not know is "Hook". */
+  name: string;
+  /** Events indexed, by event name, most first. */
+  counts: { name: string; count: number }[];
+}
+
+export interface ExplorerWrapper {
+  wrapper: Address;
+  underlyingMint: Address;
+  underlyingProgram: Address;
+  wrappedMint: Address;
+  vault: Address;
+  decimals: number;
+  native: boolean;
+  totalWrapped: Amount;
+  name: string;
+  symbol: string;
+  image: string | null;
+  registrar: Address;
+  registeredAt: number;
+}
+
+/** A `LaunchConfig` (docs/hooks-v2.md §5.7) as its `LaunchConfigCreated` event told it, and the launches made from it. */
+export interface ExplorerConfig {
+  config: Address;
+  creator: Address | null;
+  label: string | null;
+  creatorFeeBps: number | null;
+  customHook: Address | null;
+  customHookFlags: number | null;
+  rules: Record<string, unknown> | null;
+  launches: { mint: Address; name: string; symbol: string; image: string | null }[];
+}
+
+/** A short reference to a token, for lists. */
+export interface ExplorerTokenRef {
+  mint: Address;
+  name: string;
+  symbol: string;
+  image: string | null;
+}
+
+/** `GET /v1/explorer/address/:address`: what lives at an address, by kind. Every kind carries the newest events touching it. */
+export type ExplorerAddress = { address: Address; events: ExplorerEvent[] } & (
+  | { kind: 'mint'; mint: ExplorerMint; launch: { status: LaunchStatus } | null; wrapper: { underlyingMint: Address; native: boolean } | null; pools: ExplorerPool[]; holders: ExplorerHolder[] }
+  | { kind: 'pool'; pool: ExplorerPool; trades: Trade[] }
+  | { kind: 'wrapper'; wrapper: ExplorerWrapper }
+  | { kind: 'holding'; holding: ExplorerHolding }
+  | { kind: 'program'; program: ExplorerProgramInfo }
+  | { kind: 'wallet'; holdings: ExplorerHolding[]; totalUsd: number | null; created: ExplorerTokenRef[] }
+  | { kind: 'config'; config: ExplorerConfig }
+  | { kind: 'unknown' }
+);
+
+/** One answer to a search: an address resolved to its kind, a transaction, or a mint whose name or ticker matched. */
+export interface ExplorerHit {
+  kind: ExplorerKind | 'tx';
+  address: Address;
+  name: string | null;
+  symbol: string | null;
+  image: string | null;
+}
+
+export interface ExplorerSearch {
+  query: string;
+  hits: ExplorerHit[];
+}
+
+/**
+ * `POST /v1/config/prepare`: a `LaunchConfig` made from the launch page (Build your own, §5.7), for a
+ * hook program of the creator's own. `config` is the address of a keypair the browser made; it signs
+ * after the wallet. The kit's rules can't go with a hook of one's own, so a config carries burn and a
+ * creator fee only.
+ */
+export interface ConfigPrepareRequest {
+  creator: Address;
+  config: Address;
+  customHook: Address;
+  /** `TOKEN_HOOK_FLAGS`: at least one callback, no unknown bit. */
+  customHookFlags: number;
+  burnBuyBps: number;
+  burnSellBps: number;
+  creatorFeeBps: number;
+  /** At most 32 bytes. */
+  label: string;
+}
+
+export interface ConfigPrepareResponse {
+  config: Address;
+  transactions: PreparedTx[];
+}
+
+/** `GET /v1/hooks/:program?mint=`: a hook program as the launch page checks it, and whether it is prepared for the mint. */
+export interface HookInspection {
+  program: Address;
+  /** Deployed as a program on this cluster. */
+  executable: boolean;
+  /** None of Bordrless's own programs. */
+  ownProgram: boolean;
+  upgradeAuthority: Address | null;
+  upgradeable: boolean | null;
+  /** With a mint: the registry it must write for that mint, `["bordrless-hook-accounts", mint]` under the program. */
+  registry: Address | null;
+  /** With a mint: whether that registry exists and decodes. */
+  registryReady: boolean | null;
+  /** The registry's extra accounts, once it exists; a launch fits at most `maxExtras`. */
+  extras: number | null;
+  maxExtras: number;
+  /** Why it can't be launched with yet, one sentence each. */
+  problems: string[];
+}
+

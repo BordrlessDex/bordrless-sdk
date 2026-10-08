@@ -10,6 +10,7 @@ import BN from 'bn.js';
 import { Keypair, PublicKey, type AccountMeta, type Connection, type TransactionInstruction } from '@solana/web3.js';
 import { FIXED_ADDRESSES, HALF_LIFE, HOOK_SIGNERS, PROTOCOL_LOOKUP_TABLE_ADDRESSES, RULE_BOUNDS } from '@bordrless/shared';
 import * as a from './addresses.ts';
+import { COMPANION_TEMPLATES, companion, companionVested } from './companion.ts';
 import { NO_LAUNCH_RULES, type LaunchRulesData } from './accounts.ts';
 import { CODERS, IDL, type ProgramName } from './coders.ts';
 import { MAX_CUSTOM_HOOK_EXTRAS, customHookLaunchAccounts, customHookSlice, decodeHookAccountList, encodeHookAccountList, fetchTokenHook, kitHookExtras, kitHookSlice, kitRegistryList, kitTokenHook, launchPoolRegistryList, resolveCustomHookAccounts, resolveHookAccounts, tokenHookOf, tokenHookSlice } from './hooks.ts';
@@ -33,7 +34,7 @@ interface IdlAccount {
 }
 type RawIdl = { address: string; instructions: { name: string; discriminator: number[]; accounts: IdlAccount[] }[] };
 
-const PROGRAM_ID: Record<ProgramName, PublicKey> = { token: a.TOKEN_PROGRAM, swap: a.SWAP_PROGRAM, bridge: a.BRIDGE_PROGRAM, launch: a.LAUNCH_PROGRAM, kit: a.KIT_PROGRAM, taxHook: a.TAX_HOOK_PROGRAM, halfLife: a.HALF_LIFE_PROGRAM };
+const PROGRAM_ID: Record<ProgramName, PublicKey> = { token: a.TOKEN_PROGRAM, swap: a.SWAP_PROGRAM, bridge: a.BRIDGE_PROGRAM, launch: a.LAUNCH_PROGRAM, kit: a.KIT_PROGRAM, taxHook: a.TAX_HOOK_PROGRAM, halfLife: a.HALF_LIFE_PROGRAM, companion: a.COMPANION_PROGRAM };
 
 /**
  * The instruction against the IDL's: its fixed accounts in order with their flags and addresses, and
@@ -106,7 +107,7 @@ describe('fixed addresses (programs-summary §5) are their derivations', () => {
     expect(a.dexHookSigner(a.KIT_PROGRAM).equals(a.DEX_HOOK_SIGNER_LAUNCH)).toBe(false);
   });
 
-  it('lists the 18 addresses of the protocol lookup table in the order the programs test it', () => {
+  it('lists the 22 addresses of the protocol lookup table in the order the programs test it', () => {
     expect(a.PROTOCOL_LOOKUP_TABLE.map(String)).toEqual([
       '69vhpnkYjtiJgdfU7QsA5Ww7V8FWtvPcZ2r4znuyByvq',
       'C2Y3B3hZTesJQqLYrZ7qoaZUoRmwYWh5Qh3MuFxruouE',
@@ -126,8 +127,13 @@ describe('fixed addresses (programs-summary §5) are their derivations', () => {
       'A49oVhX22ExMwTEtFC6Y8nhBdZ4LJDGhdXLDn4c2f59i',
       '11111111111111111111111111111111',
       'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL',
+      // Companion launches (docs/companions.md).
+      a.COMPANION_EVENT_AUTHORITY.toBase58(),
+      a.LAUNCH_PROGRAM.toBase58(),
+      a.SWAP_PROGRAM.toBase58(),
+      a.TOKEN_PROGRAM.toBase58(),
     ]);
-    expect(PROTOCOL_LOOKUP_TABLE_ADDRESSES.length).toBe(18);
+    expect(PROTOCOL_LOOKUP_TABLE_ADDRESSES.length).toBe(22);
   });
 
   it('derives the per-mint accounts of the kit and the launch', () => {
@@ -612,5 +618,55 @@ describe('the launch-pool swap recipe (programs-summary §2.6)', () => {
     holdToIdl('swap', 'swap', capped, 8);
     expect(capped.keys.slice(15, 19).map(metaOf)).toEqual(kitHookSlice(mint, null).map(metaOf));
     expect(tokenHookSlice(kitTokenHook(mint, null)).map(metaOf)).toEqual(capped.keys.slice(15, 19).map(metaOf));
+  });
+});
+
+describe('companions (docs/companions.md): each step against the IDL, its inner instructions as remaining accounts', () => {
+  const mint = k();
+  const launcher = k();
+  const cranker = k();
+  const creator = a.companionCreatorAddress(mint);
+  const keys = launchKeys(mint, SOL, 30, EVERY_RULE);
+  const args = { split: COMPANION_TEMPLATES.buysItself, bountyBps: 50, maxBuyback: 1_000_000_000n, buybackInterval: 60, vestSecs: 0, fund: 500_000_000n };
+  const tail = (ix: TransactionInstruction, n: number) => ix.keys.slice(ix.keys.length - n);
+  const signers = (ix: TransactionInstruction) => ix.keys.filter((m) => m.isSigner).map((m) => m.pubkey.toBase58());
+
+  it('create, launch: the creator address never asks for a signature; the mint does', () => {
+    const create = companion.create(launcher, launcher, mint, args);
+    const holding = token.createHolding(launcher, SOL, creator);
+    holdToIdl('companion', 'create', create, holding.keys.length + 1);
+    expect(signers(create)).toEqual([launcher.toBase58(), mint.toBase58()]);
+    const inner = launch.createLaunch(creator, mint, k(), SOL, 30, { name: 'C', symbol: 'C', uri: 'x', creatorFeeBps: 100, virtualQuote: 28_125_000_000n, rules: NO_LAUNCH_RULES });
+    const ix = companion.launch(launcher, mint, inner, { name: 'C', symbol: 'C', uri: 'x', creatorFeeBps: 100, virtualQuote: 28_125_000_000n, rules: NO_LAUNCH_RULES });
+    holdToIdl('companion', 'launch', ix, inner.keys.length);
+    expect(signers(ix)).toEqual([launcher.toBase58(), mint.toBase58()]);
+    expect(tail(ix, inner.keys.length)[0]!.pubkey.equals(creator)).toBe(true);
+  });
+
+  it('the steps: claim, buyback, share, withdraw, release, dev buy', () => {
+    const unwrap = bridge.unwrapSol(creator, 0n).keys.length + 1;
+    const claim = companion.claimFees(cranker, mint);
+    holdToIdl('companion', 'claim_fees', claim, launch.claimCreatorFees(creator, mint, SOL).keys.length + 1 + unwrap);
+    const buyback = companion.buyback(cranker, keys, true);
+    expect(buyback.keys.some((m) => m.pubkey.equals(a.holdingAddress(mint, creator)))).toBe(true);
+    holdToIdl('companion', 'buyback', buyback, buyback.keys.length - 7);
+    holdToIdl('companion', 'share', companion.share(cranker, mint), kit.share(creator, mint, a.holdingAddress(SOL, creator), SOL, 0n).keys.length + 1 + unwrap);
+    holdToIdl('companion', 'withdraw', companion.withdraw(cranker, mint, launcher), unwrap);
+    // Before the launch, the mint signs (as a last remaining account) to refund the funding.
+    const refund = companion.refund(cranker, mint, launcher);
+    holdToIdl('companion', 'withdraw', refund, unwrap + 1);
+    expect(signers(refund)).toEqual([cranker.toBase58(), mint.toBase58()]);
+    const release = companion.release(cranker, keys, true, launcher);
+    holdToIdl('companion', 'release', release, release.keys.length - 7);
+    const dev = companion.devBuy(launcher, keys, 500_000_000n, 1n);
+    holdToIdl('companion', 'dev_buy', dev, dev.keys.length - 7);
+    for (const ix of [claim, buyback, release]) expect(signers(ix)).toEqual([cranker.toBase58()]);
+    expect(signers(dev)).toEqual([launcher.toBase58()]);
+  });
+
+  it('vests the dev bag linearly and decodes a companion', () => {
+    expect(companionVested({ launched: true, launchedAt: 100, vestSecs: 1_000, devTokens: 1_000n }, 600)).toBe(500n);
+    expect(companionVested({ launched: true, launchedAt: 100, vestSecs: 0, devTokens: 7n }, 100)).toBe(7n);
+    expect(companionVested({ launched: false, launchedAt: 0, vestSecs: 10, devTokens: 7n }, 100)).toBe(0n);
   });
 });

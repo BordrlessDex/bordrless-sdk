@@ -7,3 +7,4 @@ export * from './hooks.ts';
 export * from './inspect.ts';
 export * from './instructions.ts';
 export * from './transactions.ts';
+export * from './companion.ts';

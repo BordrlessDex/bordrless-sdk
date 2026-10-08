@@ -109,6 +109,29 @@ from it. Claims split it automatically: the creator's `launch.claimCreatorFees(c
 { config, author })`, or yours, `launch.claimAuthorFees(author, mint, quote, config, creator)`. The
 `ConfigListed` and `AuthorFeesPaid` events record both.
 
+## Companions: reward tokens without a keeper (0.5.0 and later)
+
+A companion is a Bordrless program that is a launch's creator, so every creator fee lands with it
+and only its code spends it: bought back and burned, streamed to holders, or paid to the launcher,
+with a dev buy that vests. Every step is permissionless and pays its sender a small bounty.
+
+```ts
+import { companion, COMPANION_DEFAULTS, COMPANION_TEMPLATES } from '@bordrless/sdk';
+
+const args = { ...COMPANION_DEFAULTS, split: COMPANION_TEMPLATES.buysItself, vestSecs: 0, fund };
+companion.create(payer, beneficiary, mint, args);              // the mint signs
+companion.launch(launcher, mint, createLaunchIx, launchArgs);   // the launch, made by the companion
+companion.claimFees(cranker, mint);                              // then any of these, by anyone
+companion.buyback(cranker, launchKeys, rewards);
+companion.share(cranker, mint);
+companion.withdraw(sender, mint, beneficiary);
+companion.release(cranker, launchKeys, rewards, beneficiary);
+```
+
+A companion launch needs the protocol lookup table's 22 addresses (`companionReady(table)`). The
+design, its limits and what it refuses:
+[docs/companions.md](https://github.com/BordrlessDex/bordrless-programs/blob/main/docs/companions.md).
+
 ## Where to read more
 
 - The SDK page, with the hook interface and the examples: https://bordrless.app/sdk

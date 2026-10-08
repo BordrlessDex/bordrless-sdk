@@ -1,6 +1,6 @@
 /**
  * v0 transactions with the protocol lookup table (docs/hooks-v2.md §6; programs-summary §2.7). The
- * table holds the 18 fixed addresses no top-level instruction invokes; a v0 message loads from it
+ * table holds the 22 fixed addresses no top-level instruction invokes; a v0 message loads from it
  * every account it uses that does not sign and is not invoked at top level, and keeps the rest in
  * its static keys. A program a transaction invokes at top level (compute budget, token, bridge, DEX,
  * launch, and the kit for claims and shares) always stays static: a v0 message cannot load an
@@ -24,21 +24,30 @@ export function protocolLookupTable(key: PublicKey, addresses: readonly PublicKe
   return new AddressLookupTableAccount({ key, state: { deactivationSlot: BigInt('18446744073709551615'), lastExtendedSlot: 0, lastExtendedSlotStartIndex: 0, authority: undefined, addresses: [...addresses] } });
 }
 
+/** The protocol table's first 18 addresses: every prepared transaction but a companion launch fits with them. */
+export const PROTOCOL_LOOKUP_TABLE_CORE = 18;
+
 /**
  * Why a fetched lookup table cannot serve as the protocol table, or null when it can: it must hold
- * the 18 addresses at the indices the protocol uses (a message names table entries by index) and
- * must not be deactivated.
+ * at least the first 18 addresses (`PROTOCOL_LOOKUP_TABLE_CORE`), and whatever more it holds must
+ * be the next of `PROTOCOL_LOOKUP_TABLE`, at the indices the protocol uses (a message names table
+ * entries by index); it must not be deactivated. A table of 18 still serves everything but a
+ * companion launch (`companionReady`), so an older table keeps working while it is extended.
  */
 export function checkProtocolLookupTable(table: AddressLookupTableAccount): string | null {
   if (!table.isActive()) return 'the lookup table is deactivated';
   const addresses = table.state.addresses;
-  for (let i = 0; i < PROTOCOL_LOOKUP_TABLE.length; i++) {
+  const held = Math.min(Math.max(addresses.length, PROTOCOL_LOOKUP_TABLE_CORE), PROTOCOL_LOOKUP_TABLE.length);
+  for (let i = 0; i < held; i++) {
     const want = PROTOCOL_LOOKUP_TABLE[i]!;
     const got = addresses[i];
     if (!got || !got.equals(want)) return `the lookup table holds ${got ? got.toBase58() : 'nothing'} at index ${i}, not ${want.toBase58()}`;
   }
   return null;
 }
+
+/** Whether the protocol table holds the addresses a launch through a companion needs to fit (all of `PROTOCOL_LOOKUP_TABLE`). */
+export const companionReady = (table: AddressLookupTableAccount): boolean => checkProtocolLookupTable(table) === null && table.state.addresses.length >= PROTOCOL_LOOKUP_TABLE.length;
 
 /**
  * Compiles `instructions` into an unsigned v0 transaction paid by `payer`, loading from

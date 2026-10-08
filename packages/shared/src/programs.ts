@@ -14,6 +14,8 @@ export const PROGRAM_IDS = {
   kit: '14RJQXPdJfkehit6ezktjd3xujamf8nVSKw2shKamaEH',
   /** Half-Life (programs/half_life): an exit fee that halves every six hours a token is held, burned. */
   halfLife: '53SpmtkdPWQ63mWoDeXk8P9tuwiT4ed2Wx4fwfy5NSF8',
+  /** Companions (programs/bordrless_companion, docs/companions.md): a launch whose creator is a program, its fees bought back, shared with holders or vested by code. */
+  companion: '6ZUM1gWBH9hBBNoJoaVAGwSftyZ6CUda6vUZTW9MsJuo',
 } as const;
 
 /**
@@ -48,6 +50,30 @@ export function halfLifeFeePpm(ageSecs: number): number {
   const hi = Math.floor(HALF_LIFE.maxFeePpm / 2 ** halvings);
   const lo = Math.floor(HALF_LIFE.maxFeePpm / 2 ** (halvings + 1));
   return hi - Math.floor(((hi - lo) * into) / HALF_LIFE.halfLifeSecs);
+}
+
+/**
+ * The DEX upgrade of 2026-10-08 (docs/hooks-v2.md §3.1, "The LP fee of a launch pool is
+ * Bordrless's"): from this slot on mainnet a launch pool's LP fee (the sniper fee included) is
+ * taken in SOL and paid to Bordrless with the protocol fee; a launch pool created before it keeps
+ * its LP fee in the pool, compounding, as its traders were told. The slot is the DEX program's
+ * last upgrade, read from its ProgramData account; the time is that slot's block time
+ * (`getBlockTime`, unix seconds), which the backend compares a pool's `created_at` against (the
+ * pools table keeps a timestamp, not a slot). Devnet and localnet were deployed after the rule:
+ * every launch pool there pays Bordrless.
+ */
+export const LP_FEE_TO_PROTOCOL_FROM_SLOT = 454_439_142;
+export const LP_FEE_TO_PROTOCOL_FROM_TIME = 1_791_434_238;
+
+/**
+ * Whether a pool's LP fee goes to Bordrless (`LaunchSummary.lpFeeToProtocol`): every launch pool's
+ * (the share model), whenever it was created. The upgraded DEX keys the fee's destination on the
+ * pool's fee model alone, so a launch pool opened before the upgrade compounded its LP fee until
+ * that slot and pays Bordrless since. An ordinary pool's LP fee is its liquidity's. `createdAt`
+ * and `cluster` are kept for the record of when the rule began (the constants above).
+ */
+export function lpFeeToProtocol(shareModel: boolean, _createdAt: number, _cluster: 'mainnet' | 'devnet' | 'localnet'): boolean {
+  return shareModel;
 }
 
 /** The wSOL mint, which stands for native SOL on the bridge. */
@@ -102,10 +128,12 @@ export const FIXED_ADDRESSES = {
   kitEventAuthority: '9abhxVTuwck5Ux79act3e2Vkfem7Q4zBwATMctUvHvuE',
   /** `["hook-authority"]` under the kit: it signs the token program's `write_hook_data` in `claim`. */
   kitHookAuthority: '2repKA1JgDkBo4AffscVee342dcBcH6c2yfpUTRrAiEN',
+  /** `["__event_authority"]` under the companion program. */
+  companionEventAuthority: '7QuoYRuD9MHzX5EN7qqj62iwNPVqfy74RzmwJ524cgDt',
 } as const;
 
 /**
- * The protocol lookup table (docs/hooks-v2.md §6; programs-summary §2.7): the 18 fixed addresses
+ * The protocol lookup table (docs/hooks-v2.md §6; programs-summary §2.7): the 22 fixed addresses
  * no top-level instruction invokes, in the order the programs' tests load them and `pnpm admin
  * init` must write them (a v0 message names table entries by index). Programs a transaction
  * invokes at top level (the kit for claims and shares) are kept in the static keys by the v0
@@ -130,6 +158,12 @@ export const PROTOCOL_LOOKUP_TABLE_ADDRESSES: readonly string[] = [
   FIXED_ADDRESSES.bridgedSolMint,
   SYSTEM_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
+  // Appended 2026-10-08 for launches through a companion (docs/companions.md): the companion's event
+  // authority and the programs it invokes, so its launch transaction fits (1,142 bytes instead of 1,266).
+  FIXED_ADDRESSES.companionEventAuthority,
+  PROGRAM_IDS.launch,
+  PROGRAM_IDS.swap,
+  PROGRAM_IDS.token,
 ];
 
 /** Token hook flags (`Mint.hookFlags`). */

@@ -89,7 +89,7 @@ import {
   type LaunchFeeParams,
   type RuleBounds,
 } from './policy.ts';
-import { FIXED_ADDRESSES, HALF_LIFE, HOOK_SIGNERS, LAUNCH_POOL_HOOK_FLAGS, PROGRAM_IDS, PROTOCOL_LOOKUP_TABLE_ADDRESSES, TOKEN_HOOK_FLAGS, halfLifeFeePpm } from './programs.ts';
+import { FIXED_ADDRESSES, HALF_LIFE, HOOK_SIGNERS, LAUNCH_POOL_HOOK_FLAGS, LP_FEE_TO_PROTOCOL_FROM_SLOT, LP_FEE_TO_PROTOCOL_FROM_TIME, PROGRAM_IDS, PROTOCOL_LOOKUP_TABLE_ADDRESSES, TOKEN_HOOK_FLAGS, halfLifeFeePpm, lpFeeToProtocol } from './programs.ts';
 
 // The same vectors as crates/bordrless-core/src/lib.rs, so the two implementations stay equal.
 describe('policy mirrors bordrless-core', () => {
@@ -230,14 +230,16 @@ describe('v2 token rules: bounds, choices and presets', () => {
 
   it('keeps the protocol constants in one place: hook signers, fixed addresses, the lookup table and the flags', () => {
     expect(HOOK_SIGNERS).toEqual({ tokenForKit: 'C2Y3B3hZTesJQqLYrZ7qoaZUoRmwYWh5Qh3MuFxruouE', tokenForTaxHook: '8v2CVajpJMVKXLpZePXQpqvq2nyn7r1so7DxgXu4CkAw', dexForLaunch: '6Ztfr97cUewdViXDXdZUsQq4pz7MYdygvK1WijALjZ5q' });
-    // programs-summary §2.7: exactly these 18, each once, the signers of v2 in place of v1's global ones.
-    expect(PROTOCOL_LOOKUP_TABLE_ADDRESSES.length).toBe(18);
-    expect(new Set(PROTOCOL_LOOKUP_TABLE_ADDRESSES).size).toBe(18);
+    // programs-summary §2.7: exactly these 22 (18, then 4 for companion launches), each once, the signers of v2 in place of v1's global ones.
+    expect(PROTOCOL_LOOKUP_TABLE_ADDRESSES.length).toBe(22);
+    expect(new Set(PROTOCOL_LOOKUP_TABLE_ADDRESSES).size).toBe(22);
     expect(PROTOCOL_LOOKUP_TABLE_ADDRESSES).toContain(PROGRAM_IDS.kit);
     expect(PROTOCOL_LOOKUP_TABLE_ADDRESSES).toContain(FIXED_ADDRESSES.kitHookAuthority);
     for (const v1 of ['BDDa1JTNkJSLAnwmUyqh43Pn4nsscKxmsYwUXdnN7gfb', '549imocCqvCEwCNR5XaVDqKghqct46eDkKcsGwDPf81R']) expect(PROTOCOL_LOOKUP_TABLE_ADDRESSES).not.toContain(v1);
-    // Programs a transaction invokes at top level are never in it (the kit only for claims and shares, where the compiler keeps it static).
-    for (const invoked of [PROGRAM_IDS.token, PROGRAM_IDS.swap, PROGRAM_IDS.bridge, PROGRAM_IDS.launch]) expect(PROTOCOL_LOOKUP_TABLE_ADDRESSES).not.toContain(invoked);
+    // A program a transaction invokes at top level stays a static key whatever the table holds (the v0 compiler keeps it so). The kit, the launch, the
+    // swap and the token program are in it for the transactions that invoke them only inside another (a companion's, a launch's, a swap's); the bridge is not.
+    for (const p of [PROGRAM_IDS.kit, PROGRAM_IDS.launch, PROGRAM_IDS.swap, PROGRAM_IDS.token]) expect(PROTOCOL_LOOKUP_TABLE_ADDRESSES).toContain(p);
+    expect(PROTOCOL_LOOKUP_TABLE_ADDRESSES).not.toContain(PROGRAM_IDS.bridge);
     expect(LAUNCH_POOL_HOOK_FLAGS).toBe(1_985);
     // §4.2: a kit mint's flags for each module set.
     expect(kitMintFlags(0)).toBe(0);
@@ -974,6 +976,22 @@ describe('v2 holder rewards: the kit accounting and its mirror (§4.4, §4.7, §
   });
 });
 
+
+describe('the LP fee of a launch pool (the DEX upgrade of 2026-10-08)', () => {
+  it('goes to Bordrless on every launch pool from the upgrade on, whenever the pool was made; never on an ordinary pool', () => {
+    expect(LP_FEE_TO_PROTOCOL_FROM_SLOT).toBe(454_439_142);
+    expect(LP_FEE_TO_PROTOCOL_FROM_TIME).toBe(1_791_434_238);
+    const t = LP_FEE_TO_PROTOCOL_FROM_TIME;
+    expect(lpFeeToProtocol(true, t, 'mainnet')).toBe(true);
+    expect(lpFeeToProtocol(true, t + 1, 'mainnet')).toBe(true);
+    expect(lpFeeToProtocol(true, t - 1, 'mainnet')).toBe(true);
+    expect(lpFeeToProtocol(true, 0, 'devnet')).toBe(true);
+    expect(lpFeeToProtocol(true, 0, 'localnet')).toBe(true);
+    // An ordinary pool's LP fee is its liquidity's, whenever it was made.
+    expect(lpFeeToProtocol(false, t + 1, 'mainnet')).toBe(false);
+    expect(lpFeeToProtocol(false, t + 1, 'localnet')).toBe(false);
+  });
+});
 
 describe('Half-Life', () => {
   it('mirrors the program’s fee curve: 20% at 0, halved every six hours, 0 from 48 h', () => {
