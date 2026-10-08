@@ -103,7 +103,10 @@ export interface LaunchRulesInput {
 export interface CustomHookInfo {
   program: Address;
   flags: number;
+  /** The wallet that can change the hook's code; null when there is none, or when it has not been read (`upgradeable` tells which). */
   upgradeAuthority: Address | null;
+  /** True: `upgradeAuthority` can upgrade it. False: nobody can (final). Null: not read, so nothing is claimed either way. */
+  upgradeable: boolean | null;
 }
 
 /** How a pool's protocol fee is taken (§3.1): a flat rate of the quote (`protocolFeeBps`, ordinary pools), or a share of what the hooks cut (`protocolShareBps`, launch pools). */
@@ -137,6 +140,8 @@ export interface ConfigInspection {
   /** Why it could not launch as it is, one sentence each; empty when it could. */
   problems: string[];
   hookUpgradeAuthority: Address | null;
+  /** As `CustomHookInfo.upgradeable`; null without a hook or when its program could not be read. */
+  hookUpgradeable: boolean | null;
   registryReady: boolean | null;
 }
 
@@ -406,6 +411,13 @@ export interface SwapQuote {
   elevatedFee: boolean;
   quoteUsd: number | null;
   tradeUsd: number | null;
+  /**
+   * On a token with a creator's own hook (§5.8): what the hook took from this trade, measured by a
+   * dry run when the trade was prepared (base units of what you receive; `amountOut` and
+   * `minAmountOut` then follow what actually arrives). Null when not measured (a quote alone, or
+   * the dry run could not be made). Absent on every other token.
+   */
+  hookCut?: Amount | null;
 }
 
 export interface SwapPrepareRequest extends SwapQuoteRequest {
@@ -563,6 +575,31 @@ export interface BridgeAsset {
   /** The underlying mint's supply in base units; null where it has not been read. */
   supply: Amount | null;
   featured: boolean;
+  /**
+   * The Bordrless DEX pool of the bridged version against bridged SOL, where it trades on the
+   * standard (the platform token's page charts and trades this one); null while none has been
+   * opened. Absent from backends that predate it.
+   */
+  pool?: BridgePool | null;
+}
+
+/** A bridged token's pool on the DEX (`BridgeAsset.pool`): where it is, since when, and its last price. */
+export interface BridgePool {
+  address: Address;
+  /** Unix seconds the pool was opened. */
+  createdAt: number;
+  /** Unix seconds of its last indexed trade; null before the first. */
+  lastTradeAt: number | null;
+  /** Whole bridged SOL per whole token at the last trade (or from the reserves); null when it cannot be read. */
+  priceQuote: number | null;
+  /** The same in dollars; null without a SOL price. */
+  priceUsd: number | null;
+  lpFeeBps: number;
+  /** The flat protocol rate of the quote on this pool (ordinary pools; 0 under the share model). */
+  protocolFeeBps: number;
+  baseReserve: Amount;
+  quoteReserve: Amount;
+  volume24hUsd: number | null;
 }
 
 export interface BridgeAssets {

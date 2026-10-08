@@ -215,6 +215,15 @@ export interface CustomHookAccounts {
   extras: AccountMeta[];
 }
 
+/**
+ * The most accounts a custom hook's registry may list for a launch. `create_launch` carries the
+ * hook's registry extras as remaining accounts, which cannot come from the protocol lookup table
+ * (they are per mint), and the whole must fit one v0 transaction (`PACKET_DATA_SIZE`, 1,232 bytes).
+ * Measured in transactions.test.ts with the longest metadata the site uploads (a name of 32
+ * bytes, a symbol of 10, an ipfs:// link of 66): one more and the launch does not fit.
+ */
+export const MAX_CUSTOM_HOOK_EXTRAS = 4;
+
 /** The custom hook's slice for a DEX instruction (`custom_hook_slice`): `[program, token signer for it, ...extras]`. */
 export const customHookSlice = (hook: CustomHookAccounts): AccountMeta[] => tokenHookSlice(customHookTokenHook(hook));
 

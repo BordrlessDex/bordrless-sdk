@@ -204,7 +204,7 @@ export interface SwapConfigArgs {
   treasury: PublicKey;
   poolCreationFeeLamports: bigint;
   paused: boolean;
-  /** Bordrless's share of what the hooks cut on launch pools created from now on (a curve a hook program creates; kept after graduation), in basis points: 2,500 is a quarter (§3.1). */
+  /** Bordrless's share of what the hooks cut on launch pools created from now on (the curve the launchpad creates as its hook; kept after graduation), in basis points: 2,500 is a quarter (§3.1). */
   launchProtocolShareBps: number;
 }
 

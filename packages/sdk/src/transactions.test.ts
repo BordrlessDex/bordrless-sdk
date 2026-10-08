@@ -9,8 +9,8 @@
 import { describe, expect, it } from 'vitest';
 import { Keypair, PublicKey } from '@solana/web3.js';
 import * as a from './addresses.ts';
-import type { LaunchRulesData } from './accounts.ts';
-import { kitTokenHook } from './hooks.ts';
+import { NO_LAUNCH_RULES, type LaunchRulesData } from './accounts.ts';
+import { MAX_CUSTOM_HOOK_EXTRAS, kitTokenHook } from './hooks.ts';
 import { bridge, kit, launch, launchKeys, setComputeUnitLimit, setComputeUnitPrice, token } from './instructions.ts';
 import { PACKET_DATA_SIZE, buildV0Transaction, checkProtocolLookupTable, createProtocolLookupTable, protocolLookupTable, transactionSize, v0KeyCounts } from './transactions.ts';
 
@@ -82,6 +82,18 @@ describe('v0 transactions with the protocol lookup table reproduce the measured 
     expect(measure(from, [ix])).toMatchObject({ keys: 11, bytes: 446 });
     const tx = buildV0Transaction(from, [...budget(), ix], blockhash, [table]);
     expect(tx.message.staticAccountKeys.some((key) => key.equals(a.KIT_PROGRAM))).toBe(false);
+  });
+
+  it('a launch with a custom hook fits with at most MAX_CUSTOM_HOOK_EXTRAS registry extras, at the longest metadata the site uploads', () => {
+    const hook = k();
+    // A name of 32 bytes, a symbol of 10, an ipfs:// link of 66 (a CIDv1): the most the form sends.
+    const longest = { name: 'N'.repeat(32), symbol: 'S'.repeat(10), uri: 'ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi', creatorFeeBps: 50, virtualQuote: 28_125_000_000n, rules: NO_LAUNCH_RULES };
+    const bytes = (n: number): number => {
+      const extras = Array.from({ length: n }, () => ({ pubkey: k(), isSigner: false, isWritable: true }));
+      return measure(creator, [launch.createLaunch(creator, k(), k(), SOL, 30, longest, { launchConfig: k(), customHook: { program: hook, extras } })]).bytes;
+    };
+    expect(bytes(MAX_CUSTOM_HOOK_EXTRAS)).toBeLessThanOrEqual(PACKET_DATA_SIZE);
+    expect(bytes(MAX_CUSTOM_HOOK_EXTRAS + 1)).toBeGreaterThan(PACKET_DATA_SIZE);
   });
 
   it('keeps every invoked program static and loads only what it may', () => {

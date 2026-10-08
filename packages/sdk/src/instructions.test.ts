@@ -12,8 +12,8 @@ import { FIXED_ADDRESSES, HOOK_SIGNERS, PROTOCOL_LOOKUP_TABLE_ADDRESSES, RULE_BO
 import * as a from './addresses.ts';
 import { NO_LAUNCH_RULES, type LaunchRulesData } from './accounts.ts';
 import { CODERS, IDL, type ProgramName } from './coders.ts';
-import { customHookLaunchAccounts, customHookSlice, decodeHookAccountList, encodeHookAccountList, fetchTokenHook, kitHookExtras, kitHookSlice, kitRegistryList, kitTokenHook, launchPoolRegistryList, resolveCustomHookAccounts, resolveHookAccounts, tokenHookOf, tokenHookSlice } from './hooks.ts';
-import { PROTOCOL_PROGRAMS, buildCreateConfig, configProblems, programUpgradeInfoOf } from './inspect.ts';
+import { MAX_CUSTOM_HOOK_EXTRAS, customHookLaunchAccounts, customHookSlice, decodeHookAccountList, encodeHookAccountList, fetchTokenHook, kitHookExtras, kitHookSlice, kitRegistryList, kitTokenHook, launchPoolRegistryList, resolveCustomHookAccounts, resolveHookAccounts, tokenHookOf, tokenHookSlice } from './hooks.ts';
+import { PROTOCOL_PROGRAMS, buildCreateConfig, configProblems, programUpgradeInfoOf, registryLengthProblem } from './inspect.ts';
 import { TAX_HOOK_FLAGS, bridge, kit, launch, launchKeys, launchKeysOf, swap, taxHook, token } from './instructions.ts';
 
 const k = (): PublicKey => Keypair.generate().publicKey;
@@ -486,6 +486,10 @@ describe('builders hold to the v2 IDLs (programs-summary §3)', () => {
     expect(configProblems({ ...base, customHook: hook, customHookFlags: 256 }, launchConfig, deployed)).toHaveLength(1);
     expect(configProblems({ ...base, customHook: hook, customHookFlags: 1, rules: EVERY_RULE }, launchConfig, deployed)).toEqual(['A config with a custom hook can’t have holder rewards, max wallet or the locks: one token hook per mint. Burn and the creator fee are fine.']);
     for (const program of PROTOCOL_PROGRAMS) expect(configProblems({ ...base, customHook: program, customHookFlags: 1 }, launchConfig, deployed)).toEqual(['The hook must be a program of your own, not one of Bordrless’s.']);
+    // A registry longer than a launch can carry in one transaction (transactions.test.ts measures the bound) is a problem before the hook is prepared for a mint.
+    const extra = { writable: true, source: { kind: 'key' as const, key: k() } };
+    expect(registryLengthProblem({ accounts: Array.from({ length: MAX_CUSTOM_HOOK_EXTRAS }, () => extra) })).toBeNull();
+    expect(registryLengthProblem({ accounts: Array.from({ length: MAX_CUSTOM_HOOK_EXTRAS + 1 }, () => extra) })).toBe(`The hook’s registry lists ${MAX_CUSTOM_HOOK_EXTRAS + 1} accounts; a launch fits at most ${MAX_CUSTOM_HOOK_EXTRAS} in one transaction.`);
     // The program's upgrade authority, from a ProgramData account: the owner's key, or none once final.
     const owner = k();
     const data = Buffer.alloc(45);

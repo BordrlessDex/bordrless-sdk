@@ -11,7 +11,7 @@ import { Keypair, PublicKey, type AccountInfo, type Connection, type Transaction
 import { PROGRAM_IDS, TOKEN_HOOK_FLAGS_ALL, checkLaunchRules, kitModules, type LaunchRulesInput } from '@bordrless/shared';
 import { LAUNCH_CONFIG, LAUNCH_PROGRAM, TAX_HOOK_PROGRAM, programDataAddress, registryAddress, BPF_LOADER_UPGRADEABLE, SYSTEM_PROGRAM } from './addresses.ts';
 import { LAUNCH_CONFIG_LABEL_MAX, decodeLaunchConfig, decodeLaunchConfigAccount, launchRulesInputOf, type LaunchConfig, type LaunchConfigAccount, type LaunchRulesData } from './accounts.ts';
-import { decodeHookAccountList, resolveCustomHookAccounts, type CustomHookAccounts } from './hooks.ts';
+import { MAX_CUSTOM_HOOK_EXTRAS, decodeHookAccountList, resolveCustomHookAccounts, type CustomHookAccounts, type HookAccountList } from './hooks.ts';
 import { launch, type CreateConfigArgs } from './instructions.ts';
 
 /** The programs a custom hook may not be (§5.8, `PROTOCOL_PROGRAMS`): the protocol's own, the system program and the default key. */
@@ -88,6 +88,12 @@ export function configProblems(args: Pick<CreateConfigArgs, 'rules' | 'creatorFe
   return out;
 }
 
+/** A registry too long for a launch to fit one transaction (`MAX_CUSTOM_HOOK_EXTRAS`), as one sentence; null when it fits. */
+export function registryLengthProblem(list: Pick<HookAccountList, 'accounts'>): string | null {
+  const n = list.accounts.length;
+  return n > MAX_CUSTOM_HOOK_EXTRAS ? `The hook’s registry lists ${n} accounts; a launch fits at most ${MAX_CUSTOM_HOOK_EXTRAS} in one transaction.` : null;
+}
+
 /** What `inspectConfig` found. */
 export interface ConfigInspectionResult {
   address: PublicKey;
@@ -140,6 +146,8 @@ export async function inspectConfig(connection: Connection, address: PublicKey, 
       registryReady = list !== null;
       if (!list) problems.push('Prepare the hook for this mint first: its registry at ["bordrless-hook-accounts", mint] does not exist yet.');
       else {
+        const long = registryLengthProblem(list);
+        if (long) problems.push(long);
         try {
           hookAccounts = resolveCustomHookAccounts(config.customHook, list, mint);
         } catch (error) {
@@ -176,6 +184,8 @@ export async function inspectTokenHook(connection: Connection, program: PublicKe
   let accounts: CustomHookAccounts | null = null;
   if (!list) problems.push('Prepare the hook for this mint first: its registry at ["bordrless-hook-accounts", mint] does not exist yet.');
   else {
+    const long = registryLengthProblem(list);
+    if (long) problems.push(long);
     try {
       accounts = resolveCustomHookAccounts(program, list, mint);
     } catch (error) {
