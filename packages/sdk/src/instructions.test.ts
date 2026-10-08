@@ -428,8 +428,10 @@ describe('builders hold to the v2 IDLs (programs-summary §3)', () => {
     expect([keyAt(kitCfg, 1), keyAt(kitCfg, 2), kitCfg.keys[2]!.isSigner, keyAt(kitCfg, 3)]).toEqual([a.LAUNCH_CONFIG.toBase58(), configKey.toBase58(), true, a.LAUNCH_PROGRAM.toBase58()]);
     // A hook config names the program in that slot; the args end with the label.
     const hookCfg = launch.createConfig(creator, configKey, { rules, creatorFeeBps: 100, customHook: hook, customHookFlags: TAX_HOOK_FLAGS, label: 'taxed' });
-    holdToIdl('launch', 'create_config', hookCfg, 0);
+    holdToIdl('launch', 'create_config', hookCfg, 1);
     expect(keyAt(hookCfg, 3)).toBe(hook.toBase58());
+    // The hook's ProgramData last: the program checks who may upgrade the hook.
+    expect(metaOf(hookCfg.keys.at(-1)!)).toEqual([a.programDataAddress(hook).toBase58(), false, false]);
     expect(hookCfg.data.subarray(hookCfg.data.length - 5).toString('utf8')).toBe('taxed');
     expect(hookCfg.data.readUInt32LE(hookCfg.data.length - 9)).toBe(5);
     const made = buildCreateConfig(creator, { rules, creatorFeeBps: 100, customHook: hook, customHookFlags: TAX_HOOK_FLAGS, label: 'taxed' });

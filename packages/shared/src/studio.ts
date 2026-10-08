@@ -3,9 +3,10 @@
  *
  * Studio is where anyone designs a launch config, and optionally a token hook of their own, with an
  * assistant that knows the Bordrless programs; has it reviewed; pays the rent for Bordrless to build
- * and deploy the hook (its upgrade authority then handed to them); makes the config; and may list it
- * on the marketplace, where every launch someone else makes from it pays them their share of the
- * creator fee (`create_listed_config`, docs/hooks-v2.md §5.7).
+ * and deploy the hook (Bordrless keeps its upgrade authority: the creator never holds it); makes the
+ * config; and may list it on the marketplace, where every launch someone else makes from it pays
+ * them half its creator fee, if it has one (`AUTHOR_SHARE_BPS`, `create_listed_config`,
+ * docs/hooks-v2.md §5.7). That half is all a creator gets from listing.
  *
  * A Studio hook is written against one template (`STUDIO_TEMPLATE`): an Anchor program with a fixed
  * `Cargo.toml` and the standard `prepare` (`STUDIO_PREPARE`), so the site can prepare any Studio hook
@@ -44,7 +45,10 @@ export interface StudioConfigDraft {
   hookFlags: number;
   /** List it on the marketplace (made with `create_listed_config`). */
   listed: boolean;
-  /** The author's share of the creator fee on others' launches, bps of it: 1 to `MAX_AUTHOR_SHARE_BPS`. */
+  /**
+   * The author's share of the creator fee on others' launches, bps of it. Not the author's to choose:
+   * the backend holds it at `AUTHOR_SHARE_BPS` when listed and 0 when not, whatever is sent.
+   */
   authorShareBps: number;
 }
 
@@ -244,13 +248,17 @@ export interface StudioDeployQuote {
   expiresAt: number;
 }
 
+/**
+ * The upgrade authority is not part of the request: Bordrless keeps it on every hook Studio deploys
+ * (`StudioDeploy.upgradeAuthority`). The creator never holds it, and Studio never makes a program
+ * final. The backend ignores an `authority` an older site still sends.
+ */
 export interface StudioDeployRequest {
   /** The confirmed payment transaction. */
   paymentSignature: string;
-  /** Hand the upgrade authority to the owner (default), or make the program final. */
-  authority: 'owner' | 'final';
 }
 
+/** `handing_over`: the program is deployed and its upgrade authority goes from Studio's deployer to Bordrless's upgrade key. */
 export type StudioDeployState = 'awaiting_payment' | 'paid' | 'writing' | 'deploying' | 'handing_over' | 'deployed' | 'failed' | 'refunded';
 
 export interface StudioDeploy {
@@ -263,7 +271,11 @@ export interface StudioDeploy {
   written: number;
   bytes: number;
   deploySignature: string | null;
-  /** Who can upgrade it now: the owner, or null once final. */
+  /**
+   * Who holds its upgrade authority once deployed: Bordrless's upgrade key (the backend's
+   * STUDIO_UPGRADE_AUTHORITY, `STUDIO_UPGRADE_AUTHORITY` above by default), never the creator; null until
+   * the deploy finishes.
+   */
   upgradeAuthority: Address | null;
   error: string | null;
   refundSignature: string | null;
@@ -346,10 +358,25 @@ export interface AuthorEarnings {
 
 // ---- constants ----------------------------------------------------------------------------------------
 
-/** `bordrless_launch::constants::MAX_AUTHOR_SHARE_BPS`: half the creator fee. */
+/** Bordrless Studio's upgrade key: the upgrade authority of every hook Studio deploys (STUDIO_UPGRADE_AUTHORITY defaults to it). */
+export const STUDIO_UPGRADE_AUTHORITY = 'CS1NRyXNCPxEUP4CRoa26cHQSeSJCxXh5SPijwFhDW6W';
+/** The protocol's own upgrade authority (Half-Life, tax_hook). */
+export const PROTOCOL_UPGRADE_AUTHORITY = '5xsibKwtiN6ruxsYrEyWVpV3KcwuzSPbQd1n28a7spEd';
+/**
+ * `bordrless_launch::constants::HOOK_UPGRADE_AUTHORITIES`: besides no one at all, the only keys that
+ * may hold a custom hook's upgrade authority for `create_config` to accept it (docs/hooks-v2.md §5.8).
+ */
+export const HOOK_UPGRADE_AUTHORITIES: readonly string[] = [STUDIO_UPGRADE_AUTHORITY, PROTOCOL_UPGRADE_AUTHORITY];
+
+/** `bordrless_launch::constants::MAX_AUTHOR_SHARE_BPS`: half the creator fee, the most the program lets a listed config pay its author. */
 export const MAX_AUTHOR_SHARE_BPS = 5_000;
-/** The share the Studio suggests. */
-export const DEFAULT_AUTHOR_SHARE_BPS = 2_000;
+/**
+ * The only share Studio lists with: a listed config's author gets half the creator fee of every
+ * launch someone else makes from it (nothing when the config has no creator fee). It is not the
+ * author's to choose. A config listed straight through the SDK may carry less, so the marketplace
+ * always shows the share that is on chain.
+ */
+export const AUTHOR_SHARE_BPS = 5_000;
 
 /**
  * The standard `prepare` of a Studio hook: `prepare()` (no arguments) with the accounts

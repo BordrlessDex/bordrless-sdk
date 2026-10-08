@@ -30,6 +30,8 @@ function ix(program: PublicKey, coder: ProgramName, name: string, args: Record<s
 }
 
 const withEvents = (program: PublicKey, keys: AccountMeta[]): AccountMeta[] => [...keys, ro(a.eventAuthority(program)), ro(program)];
+/** A config naming a custom hook passes the hook's ProgramData last: the launch program checks who may upgrade it. */
+const hookProgramData = (hook: PublicKey | null): AccountMeta[] => (hook ? [ro(a.programDataAddress(hook))] : []);
 /** The token program and its event authority, as the DEX, the bridge, the launch and the kit take them (a mint's hook signer travels with its hook). */
 const tokenFixed = (): AccountMeta[] => [ro(a.TOKEN_PROGRAM), ro(a.TOKEN_EVENT_AUTHORITY)];
 /** The two hook slots of a token instruction: the hook program and the token program's signer for it, each the token program's id without a hook. */
@@ -536,7 +538,7 @@ export const launch = {
    */
   createConfig(creator: PublicKey, launchConfig: PublicKey, args: CreateConfigArgs): TransactionInstruction {
     const keys = [rw(creator, true), ro(a.LAUNCH_CONFIG), rw(launchConfig, true), opt(a.LAUNCH_PROGRAM, args.customHook), ro(a.SYSTEM_PROGRAM)];
-    return ix(a.LAUNCH_PROGRAM, 'launch', 'createConfig', { args: { ...args, rules: { ...args.rules } } }, withEvents(a.LAUNCH_PROGRAM, keys));
+    return ix(a.LAUNCH_PROGRAM, 'launch', 'createConfig', { args: { ...args, rules: { ...args.rules } } }, [...withEvents(a.LAUNCH_PROGRAM, keys), ...hookProgramData(args.customHook)]);
   },
   /**
    * `create_listed_config`: a config for the marketplace, as `createConfig`, plus the author's share
@@ -545,7 +547,7 @@ export const launch = {
    */
   createListedConfig(creator: PublicKey, launchConfig: PublicKey, args: CreateConfigArgs, authorShareBps: number): TransactionInstruction {
     const keys = [rw(creator, true), ro(a.LAUNCH_CONFIG), rw(launchConfig, true), opt(a.LAUNCH_PROGRAM, args.customHook), ro(a.SYSTEM_PROGRAM)];
-    return ix(a.LAUNCH_PROGRAM, 'launch', 'createListedConfig', { args: { ...args, rules: { ...args.rules } }, authorShareBps }, withEvents(a.LAUNCH_PROGRAM, keys));
+    return ix(a.LAUNCH_PROGRAM, 'launch', 'createListedConfig', { args: { ...args, rules: { ...args.rules } }, authorShareBps }, [...withEvents(a.LAUNCH_PROGRAM, keys), ...hookProgramData(args.customHook)]);
   },
   /**
    * `create_launch`: 32 accounts, then, with a custom hook, its accounts as remaining accounts

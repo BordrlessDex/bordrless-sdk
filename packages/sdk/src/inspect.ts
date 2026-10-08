@@ -8,7 +8,7 @@
  * instruction, and the key to paste.
  */
 import { Keypair, PublicKey, type AccountInfo, type Connection, type TransactionInstruction } from '@solana/web3.js';
-import { PROGRAM_IDS, TOKEN_HOOK_FLAGS_ALL, checkLaunchRules, kitModules, type LaunchRulesInput } from '@bordrless/shared';
+import { HOOK_UPGRADE_AUTHORITIES, PROGRAM_IDS, TOKEN_HOOK_FLAGS_ALL, checkLaunchRules, kitModules, type LaunchRulesInput } from '@bordrless/shared';
 import { HALF_LIFE_PROGRAM, LAUNCH_CONFIG, LAUNCH_PROGRAM, TAX_HOOK_PROGRAM, programDataAddress, registryAddress, BPF_LOADER_UPGRADEABLE, SYSTEM_PROGRAM } from './addresses.ts';
 import { LAUNCH_CONFIG_LABEL_MAX, decodeLaunchConfig, decodeLaunchConfigAccount, launchRulesInputOf, type LaunchConfig, type LaunchConfigAccount, type LaunchRulesData } from './accounts.ts';
 import { MAX_CUSTOM_HOOK_EXTRAS, decodeHookAccountList, resolveCustomHookAccounts, type CustomHookAccounts, type HookAccountList } from './hooks.ts';
@@ -52,6 +52,17 @@ export function programUpgradeInfoOf(program: AccountInfo<Buffer> | null, progra
   const authority = upgradeAuthorityOf(programData.data);
   if (authority === undefined) return { executable: true, upgradeAuthority: null, upgradeable: null };
   return { executable: true, upgradeAuthority: authority, upgradeable: authority !== null };
+}
+
+/**
+ * Why `create_config` would refuse this hook for who can upgrade it, or null: a custom hook must be
+ * immutable, or upgradeable only by Bordrless Studio's upgrade key or the protocol's
+ * (`HOOK_UPGRADE_AUTHORITIES`), so it can never be swapped for other code after its token launched.
+ */
+export function hookAuthorityProblem(info: ProgramUpgradeInfo): string | null {
+  if (!info.executable || info.upgradeable !== true || !info.upgradeAuthority) return null;
+  if (HOOK_UPGRADE_AUTHORITIES.includes(info.upgradeAuthority.toBase58())) return null;
+  return `Anyone holding ${info.upgradeAuthority.toBase58()} could change this hook after launch. Make it immutable first (solana program set-upgrade-authority <program> --final), or deploy it with Bordrless Studio.`;
 }
 
 /** Reads a program and its ProgramData account in one round trip. */
@@ -188,6 +199,8 @@ export async function inspectTokenHook(connection: Connection, program: PublicKe
   const problems: string[] = [];
   if (!ownProgram) problems.push('The hook must be a program of your own, not one of Bordrless’s.');
   else if (!info.executable) problems.push('The hook program is not deployed on this cluster.');
+  const authority = ownProgram ? hookAuthorityProblem(info) : null;
+  if (authority) problems.push(authority);
   const list = registryInfo && registryInfo.owner.equals(program) ? decodeHookAccountList(registryInfo.data) : null;
   let accounts: CustomHookAccounts | null = null;
   if (!list) problems.push('Prepare the hook for this mint first: its registry at ["bordrless-hook-accounts", mint] does not exist yet.');

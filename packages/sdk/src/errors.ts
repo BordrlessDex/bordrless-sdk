@@ -69,6 +69,8 @@ const EXPLANATIONS: Partial<Record<ProgramName, Readonly<Record<string, string>>
   },
   launch: {
     Paused: 'Launches are paused right now.',
+    HookUpgradeable: 'This hook can be upgraded by someone other than Bordrless, so it could be swapped for other code after launch. Make it immutable, or deploy it with Bordrless Studio.',
+    HookProgramDataMissing: 'The hook’s program data account is missing. Update the app or SDK and try again.',
     NotReady: 'The launch has not raised enough to graduate yet.',
     AlreadyGraduated: 'This launch has already graduated.',
     NothingToClaim: 'There are no creator fees to claim yet.',

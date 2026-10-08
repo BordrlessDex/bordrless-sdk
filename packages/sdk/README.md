@@ -92,6 +92,15 @@ swap (the creator fee, holder rewards, and any cut your hook takes), in SOL; a c
 change that. A hook that takes nothing and refuses nothing costs the trader nothing beyond the LP
 fee.
 
+### Who may upgrade your hook
+
+A config naming a custom hook is refused on chain (`HookUpgradeable`) unless the hook is immutable,
+or upgradeable only by Bordrless (Studio's upgrade key, or the protocol's): a token's hook can never
+be swapped for other code by anyone else after launch. Make yours final before making the config:
+`solana program set-upgrade-authority <program> --final`. `hookAuthorityProblem(await
+fetchProgramUpgradeInfo(connection, hook))` says the same before you sign. `launch.createConfig`
+passes the hook's ProgramData account for the program to check (0.4.0 and later).
+
 ### Listing a config on the marketplace
 
 `launch.createListedConfig(creator, config, args, authorShareBps)` makes the same config, plus your
