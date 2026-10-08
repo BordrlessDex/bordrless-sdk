@@ -325,6 +325,30 @@ export const swap = {
     const keys = [ro(admin, true), ro(a.SWAP_CONFIG), rw(pool), ro(quoteMint), rw(a.vaultAddress(pool, quoteMint)), rw(a.holdingAddress(quoteMint, feeCollector)), ...tokenFixed()];
     return ix(a.SWAP_PROGRAM, 'swap', 'collectProtocolFees', { quoteHookAccounts: slice.length }, [...withEvents(a.SWAP_PROGRAM, keys), ...slice]);
   },
+  /**
+   * `collect_protocol_fees_sol`: a launch pool's protocol fees (the LP fee and Bordrless's share of
+   * the cuts, kept as bridged SOL in its quote vault) unwrapped by the bridge and paid to the config's
+   * fee collector as SOL. Anyone may send it (the cranker only pays the transaction fee); only the
+   * configured collector can receive. Refused for a pool quoted in anything but bridged SOL.
+   */
+  collectProtocolFeesSol(cranker: PublicKey, pool: PublicKey, feeCollector: PublicKey): TransactionInstruction {
+    const keys = [
+      ro(cranker, true),
+      ro(a.SWAP_CONFIG),
+      rw(pool),
+      rw(a.vaultAddress(pool, a.BRIDGED_SOL_MINT)),
+      rw(feeCollector),
+      ro(a.BRIDGE_PROGRAM),
+      ro(a.BRIDGE_CONFIG),
+      rw(a.SOL_WRAPPER),
+      rw(a.SOL_VAULT),
+      rw(a.BRIDGED_SOL_MINT),
+      ro(a.BRIDGE_EVENT_AUTHORITY),
+      ...tokenFixed(),
+      ro(a.SYSTEM_PROGRAM),
+    ];
+    return ix(a.SWAP_PROGRAM, 'swap', 'collectProtocolFeesSol', {}, withEvents(a.SWAP_PROGRAM, keys));
+  },
   /** `finalize_curve`: only a pool's hook calls it (by CPI, its `["hook-authority"]` signing). */
   finalizeCurve(hookCaller: PublicKey, hookCallerBump: number, pool: PublicKey, baseMint: PublicKey, quoteMint: PublicKey, lpRecipient: PublicKey): TransactionInstruction {
     const keys = [ro(hookCaller, true), rw(pool), ro(a.vaultAddress(pool, baseMint)), ro(a.vaultAddress(pool, quoteMint)), rw(a.lpMintAddress(pool)), rw(lpRecipient), ...tokenFixed()];

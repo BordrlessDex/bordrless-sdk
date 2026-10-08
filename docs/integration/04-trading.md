@@ -84,7 +84,8 @@ the same transaction on mainnet:
 Three inputs change the quote:
 
 - **The LP fee:** `sniperLpFee(now, …)` falls from 80% to 0.3% over the first 30 seconds after
-  `launch.createdAt`. Use the time the trade is expected to land, not when the user started typing.
+  `launch.createdAt`. It's Bordrless's, in SOL: a buy pays it from the SOL in, before the curve; a
+  sell from the curve's SOL output. `quote.lpFee` is in SOL on both sides. Use the time the trade is expected to land, not when the user started typing.
   The creator's own first buy in that window pays the base fee (`launch.creatorBought` turns true
   after it).
 - **Holder rewards** are only taken while `kit.eligible >= kit.minEligible`: a token with holder
@@ -107,8 +108,8 @@ DEX's `Slippage` error, and nothing moves.
 
 ## Graduation
 
-When a buy takes the pool's real SOL to `launch.graduationQuote` or past it, the launch can
-graduate. Anyone may call it, and the buyer's transaction is the natural place:
+When a buy takes the pool's real SOL to `launch.graduationQuote` or past it, or buys the last
+tokens on the curve, the launch can graduate. Anyone may call it, and the buyer's transaction is the natural place:
 
 ```ts
 import { buyGraduates } from '@bordrless/shared';
@@ -119,7 +120,8 @@ if (pool.curve && buyGraduates(pool, quote, launch.graduationQuote)) {
 ```
 
 If no buyer carries it, anyone can send `launch.graduate(...)` on its own later. The program only
-checks that `pool.quoteReserve >= launch.graduationQuote` and that the pool is still a curve.
+checks that `pool.quoteReserve >= launch.graduationQuote` or `pool.baseReserve == 0`, and that
+the pool is still a curve.
 
 A buy larger than what's left on the curve fails with `InsufficientLiquidity`.
 `curveMaxBuyIn(pool, lpFeeBps, protocolShareBps, feeParams)` gives the largest buy the curve can

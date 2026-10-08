@@ -87,9 +87,10 @@ const made = buildCreateConfig(me, {
 const seen = await inspectConfig(connection, made.address, mint); // { config, problems: [], hook: { upgradeAuthority }, registryReady: true }
 ```
 
-Bordrless takes 25% of what a launch's rules collect on each swap (the creator fee, holder
-rewards, and any cut your hook takes), in SOL; a config can never change that. A hook that takes
-nothing and refuses nothing costs the trader nothing beyond the pool fee.
+Bordrless takes the launch pool's LP fee (0.3%) and 25% of what a launch's rules collect on each
+swap (the creator fee, holder rewards, and any cut your hook takes), in SOL; a config can never
+change that. A hook that takes nothing and refuses nothing costs the trader nothing beyond the LP
+fee.
 
 ## Where to read more
 

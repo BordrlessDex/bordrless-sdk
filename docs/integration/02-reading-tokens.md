@@ -64,7 +64,9 @@ Notes:
 - **Price includes the virtual reserves.** That's the curve's price. After graduation the virtual
   reserves are zero, and the formula still holds.
 - **Liquidity** is the real SOL in the pool (`quoteReserve`). Protocol fees waiting to be collected
-  sit in the same vault but are tracked apart (`protocolFeesQuote`): don't count them.
+  (a launch pool's LP fee among them) sit in the same vault but are tracked apart
+  (`protocolFeesQuote`): don't count them. Anyone may pay them out to Bordrless as SOL with
+  `swap.collectProtocolFeesSol(cranker, pool, feeCollector)`.
 - **USD** is the SOL price times these figures. Bridged SOL is SOL one for one
   ([The bridge](06-bridge.md)).
 - **The pool's own totals** cover volume and activity without an indexer: `swapCount`,

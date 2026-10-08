@@ -405,7 +405,7 @@ describe('v2 pool hook fees (§5.4) in the order of the v2 DEX (§3.1)', () => {
     expect(protocolShareBps(0)).toBe(0);
   });
 
-  it('quotes a buy step by step: hook fees from the input, Bordrless’s share of them and the LP fee on the vault side, burn from the output', () => {
+  it('quotes a buy step by step: hook fees from the input, Bordrless’s share of them and the LP fee (Bordrless’s too) on the vault side, burn from the output', () => {
     const share = LAUNCH_PROTOCOL_SHARE_BPS;
     const all = fees({ burnBuyBps: 50, burnSellBps: 50 });
     const buy = quoteLaunchSwap(OPEN, 'buy', 1_000_000_000n, 30, share, all);
@@ -418,7 +418,8 @@ describe('v2 pool hook fees (§5.4) in the order of the v2 DEX (§3.1)', () => {
     expect(buy.burn).toBe((buy.amountOut! * 50n) / 10_000n);
     expect(buy.delivered).toBe(buy.amountOut! - buy.burn);
     expect([buy.failure, buy.holderFeeOn]).toEqual([null, true]);
-    expect(launchSwapToReserve('buy', buy)).toBe(985_000_000n - 3_750_000n);
+    // The reserve gains only what went into the curve: the LP fee and the share are both Bordrless's, nothing compounds.
+    expect(launchSwapToReserve('buy', buy)).toBe(buy.netIn);
     // "On 1% it would be 0.25% to us": a Plain launch with a 1% creator fee pays 2,500,000 of a 1 SOL buy.
     const plain = fees({ creatorFeeBps: 100, holderFeeBuyBps: 0, holderFeeSellBps: 0, eligible: 0n, minEligible: 0n });
     const p = quoteLaunchSwap(OPEN, 'buy', 1_000_000_000n, 30, share, plain);
@@ -430,40 +431,42 @@ describe('v2 pool hook fees (§5.4) in the order of the v2 DEX (§3.1)', () => {
     const bare = quoteSwap(OPEN, 'buy', 1_000_000_000n, 30, 0);
     expect([free.creatorFee, free.holderFee, free.protocolFee]).toEqual([0n, 0n, 0n]);
     expect([free.lpFee, free.netIn, free.amountOut, free.delivered]).toEqual([bare.lpFee, bare.netIn, bare.amountOut, bare.amountOut]);
-    expect(launchSwapToReserve('buy', free)).toBe(1_000_000_000n);
+    // ...but unlike an ordinary pool's, the LP fee leaves the reserve.
+    expect([bare.toReserveIn, launchSwapToReserve('buy', free)]).toEqual([1_000_000_000n, 1_000_000_000n - free.lpFee]);
   });
 
-  it('quotes a sell step by step: burn from the input, LP on it, the curve, then the hook fees from the output and Bordrless’s share of them held back', () => {
+  it('quotes a sell step by step: burn from the input, the curve, the LP fee (Bordrless’s) from its output, then the hook fees from the rest and Bordrless’s share of them held back', () => {
     const share = LAUNCH_PROTOCOL_SHARE_BPS;
     const all = fees({ burnBuyBps: 50, burnSellBps: 50 });
     const buy = quoteLaunchSwap(OPEN, 'buy', 1_000_000_000n, 30, share, all);
     // Sell what the buy delivered back into the pool it left.
-    const after = { ...OPEN, baseReserve: OPEN.baseReserve - buy.amountOut!, quoteReserve: buy.received - buy.protocolFee };
+    const after = { ...OPEN, baseReserve: OPEN.baseReserve - buy.amountOut!, quoteReserve: launchSwapToReserve('buy', buy) };
     const tokens = buy.delivered!;
     const sell = quoteLaunchSwap(after, 'sell', tokens, 30, share, { ...all, eligible: MIN_ELIGIBLE + tokens });
     const burn = (tokens * 50n) / 10_000n;
     const received = tokens - burn;
-    const lpFee = feeAmount(received, 30);
-    const gross = swapOut(received - lpFee, after.baseReserve, after.virtualBase, after.quoteReserve, after.virtualQuote)!;
-    // The hook is told the whole curve output; the fees come from it and Bordrless's quarter of them is held back from the delivery.
-    const creatorFee = feeAmount(gross, 50);
-    const holderFee = feeAmount(gross, 100);
+    const gross = swapOut(received, after.baseReserve, after.virtualBase, after.quoteReserve, after.virtualQuote)!;
+    // The LP fee leaves the curve's output in SOL; the hook is told the rest, the fees come from it and Bordrless's quarter of them is held back from the delivery.
+    const lpFee = feeAmount(gross, 30);
+    const told = gross - lpFee;
+    const creatorFee = feeAmount(told, 50);
+    const holderFee = feeAmount(told, 100);
     const protocolFee = protocolShare(creatorFee + holderFee, share);
-    expect([sell.burn, sell.received, sell.lpFee, sell.netIn, sell.amountOut]).toEqual([burn, received, lpFee, received - lpFee, gross]);
+    expect([sell.burn, sell.received, sell.lpFee, sell.netIn, sell.amountOut]).toEqual([burn, received, lpFee, received, gross]);
     expect([sell.creatorFee, sell.holderFee, sell.protocolFee]).toEqual([creatorFee, holderFee, protocolFee]);
-    expect(sell.delivered).toBe(gross - creatorFee - holderFee - protocolFee);
+    expect(sell.delivered).toBe(told - creatorFee - holderFee - protocolFee);
     expect(curveOutput(after, 'sell', sell.netIn)).toBe(gross);
     expect(protocolFee * 4n >= creatorFee + holderFee && protocolFee * 4n < creatorFee + holderFee + 4n).toBe(true);
-    // The reserve gains what reached the vault, whole: the share comes out of the output.
+    // The reserve gains what reached the vault, whole: the LP fee and the share come out of the output.
     expect(launchSwapToReserve('sell', sell)).toBe(received);
 
     // A sell's input leaves the eligible count before after_swap reads it: no holder fee, and the share is of the creator fee alone.
     const below = quoteLaunchSwap(after, 'sell', tokens, 30, share, { ...all, eligible: MIN_ELIGIBLE + tokens - 1n });
     expect(below).toMatchObject({ holderFee: 0n, holderFeeOn: false, creatorFee, protocolFee: protocolShare(creatorFee, share) });
-    // Without rules nothing is held back: the delivery is the curve's output.
+    // Without rules only the LP fee is held back.
     const none = fees({ creatorFeeBps: 0, holderFeeBuyBps: 0, holderFeeSellBps: 0, eligible: 0n, minEligible: 0n });
     const free = quoteLaunchSwap(after, 'sell', tokens, 30, share, none);
-    expect([free.protocolFee, free.delivered]).toEqual([0n, free.amountOut]);
+    expect([free.protocolFee, free.delivered]).toEqual([0n, free.amountOut! - free.lpFee]);
   });
 
   it('says why a swap fails', () => {
@@ -473,16 +476,21 @@ describe('v2 pool hook fees (§5.4) in the order of the v2 DEX (§3.1)', () => {
     expect(quoteLaunchSwap(OPEN, 'buy', 1_000_000_000_000n, 30, share, all).failure).toBe('insufficient_liquidity');
     const traded = { ...OPEN, baseReserve: OPEN.baseReserve - 10_000_000_000n, quoteReserve: 1_000_000_000n };
     expect(quoteLaunchSwap(traded, 'sell', 1_000n, 30, share, all).failure).toBe('no_output');
-    // The curve gives 1 lamport and the hook's fees would take it all: the guard drops both, nothing is shared, and the lamport is delivered.
-    expect(quoteLaunchSwap(traded, 'sell', 40_121n, 30, share, fees())).toMatchObject({ netIn: 40_000n, creatorFee: 0n, holderFee: 0n, protocolFee: 0n, delivered: 1n, failure: null });
-    // The curve gives 3: the fees round up to 1 and 1, the share of those 2 rounds up to 1, and together they take the 3: nothing would reach the wallet.
-    // On the failure the fields are those computed up to it, as the Rust reference reports them: the input side's cuts (none on a sell) and the share.
-    const three = quoteLaunchSwap(traded, 'sell', 120_362n, 30, share, fees({ eligible: 2n * MIN_ELIGIBLE }));
-    expect(curveOutput(traded, 'sell', three.netIn)).toBe(3n);
-    expect(three).toMatchObject({ netIn: 120_000n, creatorFee: 0n, holderFee: 0n, protocolFee: 1n, amountOut: null, delivered: null, failure: 'no_output' });
+    // The curve gives 1 lamport and the LP fee (rounded up) takes it: nothing would reach the wallet.
+    const one = quoteLaunchSwap(traded, 'sell', 40_121n, 30, share, fees());
+    expect(curveOutput(traded, 'sell', one.netIn)).toBe(1n);
+    expect(one).toMatchObject({ netIn: 40_121n, lpFee: 1n, creatorFee: 0n, holderFee: 0n, protocolFee: 0n, amountOut: null, delivered: null, failure: 'no_output' });
+    // The curve gives 3: the LP fee takes 1, the hook's fees on the other 2 (1 and 1) would take them all, so the guard drops both, nothing is shared, and 2 are delivered.
+    const holders = fees({ eligible: 2n * MIN_ELIGIBLE });
+    expect(quoteLaunchSwap(traded, 'sell', 120_362n, 30, share, holders)).toMatchObject({ amountOut: 3n, lpFee: 1n, creatorFee: 0n, holderFee: 0n, protocolFee: 0n, delivered: 2n, failure: null });
+    // The curve gives 4: the LP fee takes 1, the fees round up to 1 and 1, the share of those 2 rounds up to 1, and together they take the 3 left.
+    // On the failure the fields are those computed up to it, as the Rust reference reports them.
+    const four = quoteLaunchSwap(traded, 'sell', 160_483n, 30, share, holders);
+    expect(curveOutput(traded, 'sell', four.netIn)).toBe(4n);
+    expect(four).toMatchObject({ netIn: 160_483n, lpFee: 1n, creatorFee: 1n, holderFee: 1n, protocolFee: 1n, amountOut: null, delivered: null, failure: 'no_output' });
     expect(quoteLaunchSwap(OPEN, 'sell', 1_000_000_000n, 30, share, all).failure).toBe('insufficient_liquidity');
-    // The fees' guard: when creator + holders would take the whole output neither is taken, and nothing is shared.
-    expect(quoteLaunchSwap(traded, 'sell', 40_121n, 30, share, fees({ creatorFeeBps: 5_000, holderFeeBuyBps: 5_000, holderFeeSellBps: 5_000 }))).toMatchObject({ creatorFee: 0n, holderFee: 0n, protocolFee: 0n, delivered: 1n, failure: null });
+    // The fees' guard: when creator + holders would take the whole of what the LP fee leaves, neither is taken, and nothing is shared.
+    expect(quoteLaunchSwap(traded, 'sell', 400_000n, 30, share, fees({ creatorFeeBps: 5_000, holderFeeBuyBps: 5_000, holderFeeSellBps: 5_000, eligible: 2n * MIN_ELIGIBLE }))).toMatchObject({ amountOut: 10n, lpFee: 1n, creatorFee: 0n, holderFee: 0n, protocolFee: 0n, delivered: 9n, failure: null });
   });
 
   it('gives one fee figure per side by the formulas of §7.3, rounded up', () => {
@@ -577,12 +585,19 @@ describe('v2 max wallet', () => {
     expect(quoteLaunchSwap(OPEN, 'buy', max + 1n, 30, 100, rules).failure).toBe('insufficient_liquidity');
     const graduation = curveParams(TOKEN_SUPPLY, CURVE_BPS, OPEN.virtualQuote)!.graduationQuote;
     expect(buyGraduates(OPEN, quoteLaunchSwap(OPEN, 'buy', max, 30, 100, rules), graduation)).toBe(true);
-    // The threshold exactly: the reserve gains what reached the vault (after the creator and holder fees) less the protocol fee.
+    // The threshold exactly: the reserve gains what went into the curve, after the creator and holder fees, the LP fee and the protocol fee.
     const q = quoteLaunchSwap(OPEN, 'buy', 1_000_000_000n, 30, 100, rules);
-    expect(launchSwapToReserve('buy', q)).toBe(q.received - q.protocolFee);
+    expect(launchSwapToReserve('buy', q)).toBe(q.received - q.lpFee - q.protocolFee);
     expect(buyGraduates(OPEN, q, graduation)).toBe(false);
-    expect(buyGraduates(OPEN, q, q.received - q.protocolFee)).toBe(true);
-    expect(buyGraduates(OPEN, q, q.received - q.protocolFee + 1n)).toBe(false);
+    expect(buyGraduates(OPEN, q, q.netIn)).toBe(true);
+    expect(buyGraduates(OPEN, q, q.netIn + 1n)).toBe(false);
+    // A buy that takes every token left graduates whatever the reserve: nothing compounds, so the threshold may only be met at the sell-out.
+    // (A pool where a lamport buys less than a token, so the curve's last token can be bought exactly.)
+    const last = { baseReserve: 100n, quoteReserve: 0n, virtualBase: 100n, virtualQuote: 1_000_000n };
+    const all = quoteLaunchSwap(last, 'buy', curveMaxBuyIn(last, 30, 100, rules), 30, 100, rules);
+    expect(all.amountOut).toBe(last.baseReserve);
+    expect(buyGraduates(last, all, 10n ** 18n)).toBe(true);
+    expect(buyGraduates(last, quoteLaunchSwap(last, 'buy', 1_000_000n, 30, 100, rules), 10n ** 18n)).toBe(false);
     expect(buyGraduates(OPEN, quoteLaunchSwap(OPEN, 'buy', max + 1n, 30, 100, rules), 0n)).toBe(false);
   });
 

@@ -38,7 +38,7 @@ console.log({
   priceSol: price,
   marketCapSol: price * supply,
   liquiditySol: units(pool.quoteReserve, SOL_DECIMALS),
-  // Graduation happens when the pool's real SOL reaches `graduationQuote`.
+  // Graduation happens when the pool's real SOL reaches `graduationQuote` (or the curve sells out).
   curveProgress: launch.status === 1 ? 1 : Number(pool.quoteReserve) / Number(launch.graduationQuote),
   lpFeeBpsNow: lpFeeNow,
   creatorFeeBps: launch.creatorFeeBps,

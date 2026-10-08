@@ -602,7 +602,7 @@ export function launchAfterSwap(side: Side, amountOut: bigint, p: LaunchFeeParam
 
 /** A swap on a launch pool, step by step. */
 export interface LaunchSwap {
-  /** Bridged SOL to the creator: from a buy's input, or from a sell's output after the protocol fee. */
+  /** Bridged SOL to the creator: from a buy's input, or from a sell's output after the LP fee. */
   creatorFee: bigint;
   /** Bridged SOL to holders, likewise. */
   holderFee: bigint;
@@ -612,13 +612,13 @@ export interface LaunchSwap {
   holderFeeOn: boolean;
   /** What reached the input vault. */
   received: bigint;
-  /** The LP fee, in the input token, on what reached the vault. */
+  /** The LP fee, Bordrless's in bridged SOL (it never stays in a launch pool): on a buy from what reached the vault, on a sell from the curve's output. The DEX's event reports it inside `protocol_fee` with `lp_fee` 0. */
   lpFee: bigint;
   /** Bordrless's share of the creator and holder fees (`LAUNCH_PROTOCOL_SHARE_BPS` of them, rounded up; 0 when they are 0), always in bridged SOL: on a buy from what reached the vault, before the curve; on a sell held back from the delivery. */
   protocolFee: bigint;
-  /** What went into the curve: `received` less the LP fee (and, on a buy, the protocol fee); negative when the fees take more than arrived. */
+  /** What went into the curve: on a buy `received` less the LP fee and the protocol fee (negative when they take more than arrived); on a sell `received`. */
   netIn: bigint;
-  /** What the curve gave (on a sell, before the protocol fee and the creator and holder fees); null when the swap fails. */
+  /** What the curve gave (on a sell, before the LP fee, the creator and holder fees and the protocol fee); null when the swap fails. */
   amountOut: bigint | null;
   /** What reaches the recipient; null when the swap fails. */
   delivered: bigint | null;
@@ -637,48 +637,58 @@ export function curveOutput(r: Reserves, side: Side, netIn: bigint): bigint {
  * §5.4; the Rust reference is `bordrless_program_tests::launch::quote_launch_swap`): Bordrless
  * takes `protocolShareBps` of the creator and holder fees (the hooks' cuts; the kit takes none of
  * its own, so the cuts are exactly those fees), in bridged SOL, and nothing when they are nothing.
- * A buy: the creator and holder fees from the input, Bordrless's share of them and the LP fee on
- * what reached the vault, the curve, the burn from the output. A sell: the burn from the input, the
- * LP fee on what reached the vault, the curve, then the creator and holder fees from the output and
- * Bordrless's share of them held back from the delivery. A sell takes its input out of the kit's
- * eligible count before `after_swap` reads it (every seller is a holder: the pool and the launch
- * never sell). An ordinary pool's flat rate is `quoteSwap`.
+ * A buy: the creator and holder fees from the input, Bordrless's share of them and the LP fee (both
+ * Bordrless's, in SOL) on what reached the vault, the curve, the burn from the output. A sell: the
+ * burn from the input, the curve on all the rest, the LP fee (Bordrless's) from the curve's output,
+ * then the creator and holder fees from what is left and Bordrless's share of them held back from the
+ * delivery. A launch pool's LP fee never stays in the pool (its LP is locked for ever). A sell takes
+ * its input out of the kit's eligible count before `after_swap` reads it (every seller is a holder:
+ * the pool and the launch never sell). An ordinary pool's flat rate is `quoteSwap`.
  */
 export function quoteLaunchSwap(r: Reserves, side: Side, amountIn: bigint, lpFeeBps: number, protocolShareBps: number, p: LaunchFeeParams): LaunchSwap {
   const before = launchBeforeSwap(side, amountIn, p);
   const received = amountIn - before.creatorFee - before.holderFee - before.burn;
   const eligibleAtFees = side === 'sell' ? (p.eligible > amountIn ? p.eligible - amountIn : 0n) : p.eligible;
   const holderFeeOn = (side === 'buy' ? p.holderFeeBuyBps : p.holderFeeSellBps) > 0 && eligibleAtFees >= p.minEligible;
-  const lpFee = feeAmount(received, lpFeeBps);
+  // A buy's LP fee is on the SOL that reached the vault; a sell's on the curve's output.
+  const buyLpFee = side === 'buy' ? feeAmount(received, lpFeeBps) : 0n;
   // A buy's cuts are the hook's quote fees; a sell's input side cuts nothing (the burn is not a cut), so its share is taken from the output.
   const inputProtocolFee = side === 'buy' ? protocolShare(before.creatorFee + before.holderFee, protocolShareBps) : 0n;
-  const netIn = received - lpFee - inputProtocolFee;
-  const failed = (failure: 'fees_exceed_input' | 'no_output' | 'insufficient_liquidity', protocolFee = inputProtocolFee): LaunchSwap => ({ ...before, holderFeeOn, received, lpFee, protocolFee, netIn, amountOut: null, delivered: null, failure });
+  const netIn = received - buyLpFee - inputProtocolFee;
+  const failed = (failure: 'fees_exceed_input' | 'no_output' | 'insufficient_liquidity', protocolFee = inputProtocolFee, carried: Partial<LaunchSwap> = {}): LaunchSwap => ({ ...before, holderFeeOn, received, lpFee: buyLpFee, protocolFee, netIn, amountOut: null, delivered: null, failure, ...carried });
   if (received <= 0n || netIn <= 0n) return failed('fees_exceed_input');
   const out = curveOutput(r, side, netIn);
   if (out <= 0n) return failed('no_output');
   if (out > (side === 'buy' ? r.baseReserve : r.quoteReserve)) return failed('insufficient_liquidity');
   if (side === 'buy') {
     const after = launchAfterSwap('buy', out, p);
-    return { ...before, burn: after.burn, holderFeeOn, received, lpFee, protocolFee: inputProtocolFee, netIn, amountOut: out, delivered: out - after.burn, failure: null };
+    return { ...before, burn: after.burn, holderFeeOn, received, lpFee: buyLpFee, protocolFee: inputProtocolFee, netIn, amountOut: out, delivered: out - after.burn, failure: null };
   }
-  const after = launchAfterSwap('sell', out, { ...p, eligible: eligibleAtFees });
+  // A sell: the LP fee leaves the curve's output before the hook is told the rest.
+  const lpFee = feeAmount(out, lpFeeBps);
+  if (lpFee >= out) return failed('no_output', 0n, { lpFee });
+  const told = out - lpFee;
+  const after = launchAfterSwap('sell', told, { ...p, eligible: eligibleAtFees });
   const protocolFee = protocolShare(after.creatorFee + after.holderFee, protocolShareBps);
-  if (after.creatorFee + after.holderFee + protocolFee >= out) return failed('no_output', protocolFee);
-  return { creatorFee: after.creatorFee, holderFee: after.holderFee, burn: before.burn, holderFeeOn, received, lpFee, protocolFee, netIn, amountOut: out, delivered: out - after.creatorFee - after.holderFee - protocolFee, failure: null };
+  if (after.creatorFee + after.holderFee + protocolFee >= told) return failed('no_output', protocolFee, { creatorFee: after.creatorFee, holderFee: after.holderFee, lpFee });
+  return { creatorFee: after.creatorFee, holderFee: after.holderFee, burn: before.burn, holderFeeOn, received, lpFee, protocolFee, netIn, amountOut: out, delivered: told - after.creatorFee - after.holderFee - protocolFee, failure: null };
 }
 
-/** What a launch-pool swap adds to its input reserve (the Rust reference's `to_reserve_in`): what reached the vault, less a buy's protocol fee. */
-export const launchSwapToReserve = (side: Side, q: Pick<LaunchSwap, 'received' | 'protocolFee'>): bigint => (side === 'buy' ? q.received - q.protocolFee : q.received);
+/**
+ * What a launch-pool swap adds to its input reserve (the Rust reference's `to_reserve_in`): on a buy
+ * what goes into the curve (what reached the vault less the LP fee and the share, both Bordrless's;
+ * 0 when they take it all), on a sell what reached the vault.
+ */
+export const launchSwapToReserve = (side: Side, q: Pick<LaunchSwap, 'received' | 'netIn'>): bigint => (side === 'buy' ? (q.netIn > 0n ? q.netIn : 0n) : q.received);
 
 /**
- * Whether a buy that lands leaves the pool's quote reserve at or above the graduation threshold, so
- * `graduate` can follow it in the same transaction (§8.2: the input after the creator and holder
- * fees, less the protocol fee, joins the reserve; the launch graduates once `quote_reserve >=
- * graduation_quote`).
+ * Whether a buy that lands leaves the launch ready to graduate, so `graduate` can follow it in the
+ * same transaction: the pool's quote reserve at or above the graduation threshold, or the curve sold
+ * out (the buy takes every token it has left). The LP fee does not compound, so the two come
+ * together, and a hook's cut on buys can keep the reserve just short of the threshold.
  */
 export function buyGraduates(r: Reserves, q: LaunchSwap, graduationQuote: bigint): boolean {
-  return q.failure === null && r.quoteReserve + launchSwapToReserve('buy', q) >= graduationQuote;
+  return q.failure === null && (r.quoteReserve + launchSwapToReserve('buy', q) >= graduationQuote || q.amountOut === r.baseReserve);
 }
 
 /**

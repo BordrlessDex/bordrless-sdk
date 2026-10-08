@@ -40,8 +40,8 @@ protocol lookup table, so **always include the loaded addresses** in the key lis
 | `direction` | 1 buy (quote in, token out), 0 sell |
 | `amountIn` | What left the trader's wallet, in the input token |
 | `burnIn`, `cutsIn`, `receivedIn` | From the input: burned, taken by hooks for someone, and what reached the pool |
-| `lpFee` | LP fee, in the input token |
-| `protocolFee` | Bordrless's take, **always in the quote (SOL)** |
+| `lpFee` | LP fee kept by the pool, in the input token. **0 on launch pools**: their LP fee is Bordrless's and is inside `protocolFee` |
+| `protocolFee` | Bordrless's take, **always in the quote (SOL)**. On a launch pool: the LP fee (at `lpFeeBps`) plus 25% of the hooks' cuts |
 | `amountOut` | What the curve gave, in the output token |
 | `burnOut`, `cutsOut`, `deliveredOut` | From the output: burned, taken by hooks, and what reached the recipient |
 | `deltasIn`, `deltasOut` | Each hook cut: the holding it went to and the amount |
@@ -51,6 +51,12 @@ protocol lookup table, so **always include the loaded addresses** in the key lis
 **Units follow the side.** Input-side fields (`amountIn`, `burnIn`, `cutsIn`, `receivedIn`, `lpFee`)
 are in the input token, SOL on a buy and the token on a sell. Output-side fields are in the other
 token. `protocolFee` is always SOL. Don't add `cutsIn` to `cutsOut`.
+
+**The LP fee on launch pools.** Since the 2026-10-08 upgrade a launch pool's LP fee goes to
+Bordrless in SOL instead of compounding in the pool: on a buy from the SOL that reached the pool,
+on a sell from the curve's SOL output. Events from then on carry `lpFee: 0` and the LP fee inside
+`protocolFee`; `lpFeeBps` is still the rate charged (the sniper fee included). Earlier events
+carry the LP fee in `lpFee`, in the input token. Ordinary pools are unchanged.
 
 What a trade is, as a user saw it:
 

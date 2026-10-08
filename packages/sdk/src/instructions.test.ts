@@ -316,6 +316,11 @@ describe('builders hold to the v2 IDLs (programs-summary §3)', () => {
     const taxed = swap.collectProtocolFees(trader, pool, base, collector, hook);
     holdToIdl('swap', 'collect_protocol_fees', taxed, 4);
     expect([...taxed.data.subarray(8)]).toEqual([4]);
+    // A launch pool's fees as SOL: anyone sends it, the collector is a wallet, the bridge's SOL accounts follow.
+    const crank = swap.collectProtocolFeesSol(trader, pool, collector);
+    holdToIdl('swap', 'collect_protocol_fees_sol', crank, 0);
+    expect([keyAt(crank, 3), keyAt(crank, 4), keyAt(crank, 7), keyAt(crank, 8), keyAt(crank, 9)]).toEqual([a.vaultAddress(pool, a.BRIDGED_SOL_MINT), collector, a.SOL_WRAPPER, a.SOL_VAULT, a.BRIDGED_SOL_MINT].map((x) => x.toBase58()));
+    expect(crank.data.length).toBe(8);
     holdToIdl('swap', 'finalize_curve', swap.finalizeCurve(a.LAUNCH_HOOK_AUTHORITY, 254, pool, base, SOL, k()), 0);
     const cfg = { admin: trader, protocolFeeBps: 100, feeCollector: trader, treasury: trader, poolCreationFeeLamports: 0n, paused: false, launchProtocolShareBps: 2_500 };
     const initCfg = swap.initConfig(trader, cfg);

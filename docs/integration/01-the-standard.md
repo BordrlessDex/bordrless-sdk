@@ -68,7 +68,8 @@ to its pool and keeps everything about the token's market:
 - display totals: `creatorFeesAccrued`, `holderFeesAccrued`, `burnedOnTrades`.
 
 **The curve and graduation.** 75% of the supply is sold on the curve. When the pool's real SOL
-reserve reaches `graduationQuote`, anyone can call `graduate`. It tops the pool up from the 25%
+reserve reaches `graduationQuote`, or the curve has sold out (`baseReserve` 0), anyone can call
+`graduate`. It tops the pool up from the 25%
 reserve so the price stays continuous, burns the rest of the reserve, drops the virtual reserves,
 and locks the LP tokens forever. **Trading continues in the same pool.** There's no migration and
 no new address to follow.
