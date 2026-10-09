@@ -79,9 +79,9 @@ the same transaction on mainnet (2026-10-09, `quote-buy.ts`):
 
 | Token | Rules | Quoted for 0.1 SOL | Simulated |
 | --- | --- | --- | --- |
-| hLife | Half-Life hook, creator 1% | 1,630,280.020655 | 1,630,280.020655 |
-| LIMITLESS | holder rewards 0.5%, creator 0.5% | 2,269,499.301361 | 2,269,499.301361 |
-| CTRL | none, creator 1% | 2,287,625.252001 | 2,287,625.252001 |
+| A Half-Life token | Half-Life hook, creator 1% | 1,630,280.020655 | 1,630,280.020655 |
+| A holder-rewards token | holder rewards 0.5%, creator 0.5% | 2,269,499.301361 | 2,269,499.301361 |
+| A plain token | none, creator 1% | 2,287,625.252001 | 2,287,625.252001 |
 
 Three inputs change the quote:
 
@@ -134,7 +134,7 @@ still fill.
 ## Fees and compute
 
 - **Compute:** simulate and request the units used plus 15%. A buy with SOL used 136,760
-  (CTRL), 152,376 (hLife) and 166,537 (LIMITLESS, holder rewards) compute units in mainnet
+  (a plain token), 152,376 (a Half-Life token) and 166,537 (a holder-rewards token) compute units in mainnet
   simulations on 2026-10-09. A custom hook adds its callbacks, and graduation in the same
   transaction adds much more. When you can't simulate, the Bordrless backend's fallbacks are a
   guide: 400,000 for a trade, 700,000 for a trade that graduates, 300,000 for a wallet-to-wallet

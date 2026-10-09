@@ -73,8 +73,8 @@ const priceAfter =
 Real output from mainnet (2026-10-08 and 09, after the LP fee change), a buy and a Half-Life sell:
 
 ```
-BUY   0.5 SOL  8236181.117965 hLife  price after 6.0287e-8 SOL  lp 0 SOL, protocol 0.002735 SOL, hook cuts 0.005 SOL in + 0 hLife out
-SELL  0.662457069 SOL  14811734.334883 hLife  price after 5.9255e-8 SOL  lp 0 hLife, protocol 0.046974558 SOL, hook cuts 2876498.054771 hLife in + 0.006708427 SOL out
+BUY   0.5 SOL  8236181.117965 TOKEN  price after 6.0287e-8 SOL  lp 0 SOL, protocol 0.002735 SOL, hook cuts 0.005 SOL in + 0 TOKEN out
+SELL  0.662457069 SOL  14811734.334883 TOKEN  price after 5.9255e-8 SOL  lp 0 TOKEN, protocol 0.046974558 SOL, hook cuts 2876498.054771 TOKEN in + 0.006708427 SOL out
 ```
 
 The buy's `cutsIn` is the 1% creator fee. Its `protocolFee` is the 0.3% LP fee on the 0.495 SOL
