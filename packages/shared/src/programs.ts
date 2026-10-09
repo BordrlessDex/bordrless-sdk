@@ -36,7 +36,22 @@ export const LOTTERY_HOOK = {
   tokenHookSigner: 'CFyuaxvKmpgnSMCoNqDKCcwxnTUeW8Mm1go1t3UMsvLH',
   hookAuthority: '6oZ9LkAfgmhmPYjXj3okjYK5sderddEo8fp8MR4H6Gx1',
   readme: 'https://github.com/BordrlessDex/bordrless-programs/tree/main/programs/lottery_hook',
+  /**
+   * The `LaunchConfig`s a lottery coin launches from, one per creator fee (basis points): each
+   * names this hook with `flags`, no token rules and that creator fee, made by the protocol with
+   * `pnpm admin lottery-configs` (which prints the lines to paste here). A creator fee without a
+   * config can't launch a lottery coin yet: the launch form says so, the backend refuses it
+   * (`lottery_off`). Created on mainnet 2026-10-09 by `pnpm admin lottery-configs`.
+   */
+  launchConfigs: {
+    50: 'CYm9FNY49gV7wjukpYFqkm9u7FQLrjp2GexeHwbncf1L',
+    100: 'GViQSt6znkGdiCrUYNTo3dJKMgfGS8eBHPSBjxfN2VS9',
+    200: 'Ejo4Ehg4x16MeBKn3Y2f1NU31CoBjnby4kv75azUD8hU',
+  } as Readonly<Partial<Record<number, string>>>,
 } as const;
+
+/** The creator fees (basis points) a lottery coin can launch with: those with a `LaunchConfig` in `LOTTERY_HOOK.launchConfigs`. */
+export const lotteryFeeChoices = (): number[] => Object.keys(LOTTERY_HOOK.launchConfigs).map(Number).filter((bps) => bps > 0);
 
 /**
  * Half-Life, Bordrless's own token hook (programs/half_life/README.md): the `LaunchConfig` the

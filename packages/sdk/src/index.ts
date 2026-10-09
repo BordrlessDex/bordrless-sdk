@@ -9,5 +9,6 @@ export * from './instructions.ts';
 export * from './transactions.ts';
 export * from './companion.ts';
 export * from './game.ts';
+export * from './gameKinds.ts';
 export * from './lotteryHook.ts';
 export * from './orao.ts';

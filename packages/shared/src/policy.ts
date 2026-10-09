@@ -6,7 +6,7 @@
  * `programs/tests/vectors/launch-fees.json`, which the Rust tests render from the reference the
  * programs are held to, and requires exact equality.
  */
-import type { CompanionSplitBps, CompanionTemplate, LaunchRules, LaunchRulesInput, Side } from './api.ts';
+import type { CompanionSplitBps, CompanionTemplate, GameRolloverReason, LaunchRules, LaunchRulesInput, LotteryRequest, Side } from './api.ts';
 import { HOOK_DATA_LEN, TOKEN_HOOK_FLAGS } from './programs.ts';
 
 export const BPS = 10_000n;
@@ -486,6 +486,116 @@ export const COMPANION_MAX_VEST_DAYS = 365;
 
 /** The whole creator fee to the launcher: an ordinary launch, with no companion. */
 export const LAUNCHER_SPLIT: Readonly<CompanionSplitBps> = { buybackBps: 0, holdersBps: 0, beneficiaryBps: 10_000 };
+
+// ---- lottery coins (docs/games.md) -----------------------------------------------------------------
+
+/**
+ * The companion program's game limits (`constants.rs`; `GAME_LIMITS` in the SDK, the same numbers):
+ * a round's length, the minimum pot, the prize's least share, a claim window's bounds, the most
+ * attempts, and the half of a round the attempts may take. The launch form holds its choices to
+ * them and the backend refuses anything outside them (`lotteryProblem`).
+ */
+export const LOTTERY_LIMITS = {
+  minRoundSecs: 3_600,
+  maxRoundSecs: 30 * DAY_SECS,
+  minMinPotLamports: 100_000_000n,
+  maxMinPotLamports: 1_000_000_000_000n,
+  minPrizeBps: 1_000,
+  minClaimWindowSecs: 300,
+  maxClaimWindowSecs: DAY_SECS,
+  maxAttempts: 16,
+  claimsPerRound: 2,
+  /** The most a pot holds while its hook is not audited: 10 SOL, the rest of the pot's share bought back. */
+  potCapLamports: 10_000_000_000n,
+  /** Lamports the setup pays for the hook's state and registry and the game's account (mainnet rent, 2026-10-08). */
+  rentLamports: 3_515_360n + 3_119_120n,
+} as const;
+
+/** The lottery the launch form starts with (docs/games.md, spec example 1): 6-hour rounds, 70% of the fee to the pot, 30% bought back, draws from 0.5 SOL paying the whole pot, 8 claim attempts of 10 minutes. */
+export const LOTTERY_DEFAULTS: Readonly<LotteryRequest> = { kind: 'lottery', roundSecs: 21_600, potBps: 7_000, minPotLamports: '500000000', prizeBps: 10_000, claimWindowSecs: 600, maxAttempts: 8 };
+
+/** The round lengths the form offers (seconds), each with its label. */
+export const LOTTERY_ROUND_CHOICES: readonly { secs: number; label: string }[] = [
+  { secs: 3_600, label: '1 hour' },
+  { secs: 21_600, label: '6 hours' },
+  { secs: DAY_SECS, label: '1 day' },
+  { secs: 7 * DAY_SECS, label: '7 days' },
+];
+/** The least a pot holds before a round is drawn, as the form offers it (lamports). */
+export const LOTTERY_MIN_POT_CHOICES: readonly { lamports: string; label: string }[] = [
+  { lamports: '100000000', label: '0.1 SOL' },
+  { lamports: '500000000', label: '0.5 SOL' },
+  { lamports: '1000000000', label: '1 SOL' },
+  { lamports: '5000000000', label: '5 SOL' },
+];
+/** What one draw pays of the pot, as the form offers it. */
+export const LOTTERY_PRIZE_CHOICES_BPS = [10_000, 5_000, 2_500] as const;
+/** The pot's share moves in steps of 10%, like the Split control's. */
+export const LOTTERY_POT_STEP_BPS = 1_000;
+
+/**
+ * The claim windows and attempts the form fixes for a round length: 8 attempts of 10 minutes for a
+ * round of 6 hours or more, 6 of 5 minutes for an hour (the attempts must fit in half a round).
+ */
+export function lotteryClaimsFor(roundSecs: number): { claimWindowSecs: number; maxAttempts: number } {
+  return roundSecs >= 21_600 ? { claimWindowSecs: 600, maxAttempts: 8 } : { claimWindowSecs: 300, maxAttempts: 6 };
+}
+
+const isWhole = (v: unknown, min: number, max: number): v is number => typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
+
+/** The lottery a launch request's `companion.game` names, each field a whole number; null when it is malformed (bounds are `lotteryProblem`'s). */
+export function lotteryRequestOf(raw: unknown): LotteryRequest | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (r.kind !== 'lottery') return null;
+  if (!isWhole(r.roundSecs, 0, 2 ** 32 - 1) || !isWhole(r.potBps, 0, 10_000) || !isWhole(r.prizeBps, 0, 10_000) || !isWhole(r.claimWindowSecs, 0, 2 ** 32 - 1) || !isWhole(r.maxAttempts, 0, 255)) return null;
+  if (typeof r.minPotLamports !== 'string' || !/^\d{1,20}$/.test(r.minPotLamports)) return null;
+  return { kind: 'lottery', roundSecs: r.roundSecs, potBps: r.potBps, minPotLamports: r.minPotLamports, prizeBps: r.prizeBps, claimWindowSecs: r.claimWindowSecs, maxAttempts: r.maxAttempts };
+}
+
+/**
+ * Why `create_game` would refuse this lottery with this split on these rules, in the words the
+ * launch form and the backend use (`companion_rules`); null when it would not. The program's own
+ * checks (`gameArgsProblem` in the SDK, the same sentences), and what a lottery coin's launch
+ * needs besides: a creator fee, no token rules (it launches from Bordrless's lottery config, which
+ * has none, and runs its own hook in the kit's place), and no holders' share.
+ */
+export function lotteryProblem(game: LotteryRequest, split: CompanionSplitBps, rules: LaunchRulesInput, creatorFeeBps: number): string | null {
+  const L = LOTTERY_LIMITS;
+  if (creatorFeeBps === 0) return 'There is no creator fee to fill the pot with: set one.';
+  if ((Object.keys(NO_RULES) as (keyof LaunchRulesInput)[]).some((k) => rules[k] !== 0)) return 'A lottery coin has no other token rules: its hook keeps the tickets.';
+  if (split.holdersBps !== 0) return 'A game coin runs its own hook, so it has no holder rewards: no holders’ part.';
+  if (!(game.potBps > 0) || split.buybackBps + split.holdersBps + split.beneficiaryBps + game.potBps !== 10_000) return 'The pot’s part and the split must add up to 10,000 basis points, with a pot.';
+  if (game.roundSecs < L.minRoundSecs || game.roundSecs > L.maxRoundSecs) return 'A round lasts an hour to 30 days.';
+  const minPot = BigInt(game.minPotLamports);
+  if (minPot < L.minMinPotLamports || minPot > L.maxMinPotLamports) return 'The minimum pot is 0.1 to 1,000 SOL.';
+  if (game.prizeBps < L.minPrizeBps || game.prizeBps > 10_000) return 'A draw pays 10% to 100% of the pot.';
+  if (game.claimWindowSecs < L.minClaimWindowSecs || game.claimWindowSecs > L.maxClaimWindowSecs) return 'A claim window lasts 5 minutes to a day.';
+  if (!(game.maxAttempts >= 1 && game.maxAttempts <= L.maxAttempts)) return 'A draw makes 1 to 16 attempts.';
+  if (game.claimWindowSecs * game.maxAttempts * L.claimsPerRound > game.roundSecs) return 'A draw’s attempts must fit in half a round.';
+  return null;
+}
+
+/** The copy rules of a lottery coin (docs/games.md): said on the launch form, the review step and the token page, never "provably fair", "guaranteed" or "audited". */
+export const LOTTERY_COPY = {
+  held: 'The pot is held by the companion program and paid out by code. Randomness by ORAO VRF.',
+  odds: 'Your odds = your tokens in the round. Sell before the payout and you forfeit.',
+  stop: 'Bordrless can stop this game: its pot would be bought back and burned. Nobody is paid.',
+  cap: 'Pot capped at 10 SOL until the game’s hook is audited.',
+  oracle: 'Randomness by ORAO VRF: ORAO’s three signers produce it. They could withhold or bias a draw; Bordrless can’t.',
+} as const;
+
+/** Why a round paid no prize, in a few words each (`GameRolloverReason`). */
+export const ROLLOVER_WORDS: Readonly<Record<GameRolloverReason, string>> = {
+  noTickets: 'Nobody held tickets',
+  roundForgotten: 'The round was forgotten',
+  noClaim: 'No winner claimed in time',
+  oracleSilent: 'ORAO never answered',
+  blocked: 'Stopped by Bordrless',
+  late: 'Drawn too late',
+  oracleUnreadable: 'ORAO’s answer unreadable',
+  oracleUnpaid: 'The pot could not pay ORAO',
+};
 
 /** Whether a split is the whole fee to the launcher (no companion needed). */
 export const isLauncherSplit = (s: CompanionSplitBps): boolean => s.buybackBps === 0 && s.holdersBps === 0 && s.beneficiaryBps === 10_000;

@@ -246,7 +246,10 @@ describe('errors are explained by the program that failed (codes overlap)', () =
     expect(explainProgramError('companion', 6048)).toMatchObject({ name: 'StaleSeed', explanation: expect.stringMatching(/newest slot/) });
     // v1's codes keep their numbers: v2 only appends.
     expect(explainProgramError('companion', 6011).name).toBe('CustomHookUnsupported');
-    expect([PROGRAM_ERRORS.companion.size, PROGRAM_ERRORS.lotteryHook.size]).toEqual([49, 6]);
+    // Phase 2 appends three more (the jackpot's and the streak's steps).
+    expect([PROGRAM_ERRORS.companion.size, PROGRAM_ERRORS.lotteryHook.size]).toEqual([52, 6]);
+    expect(explainProgramError('companion', 6049).name).toBe('WrongGameKind');
+    expect(explainProgramError('companion', 6050)).toMatchObject({ name: 'NoShare', explanation: expect.stringMatching(/forfeits the share/) });
     expect(explainProgramError('lotteryHook', 6005)).toMatchObject({ program: 'lotteryHook', name: 'NotEligible' });
     const companionId = a.COMPANION_PROGRAM.toBase58();
     const failed = explainFailure([`Program ${companionId} invoke [1]`, `Program ${companionId} failed: custom program error: 0x${(6043).toString(16)}`])!;

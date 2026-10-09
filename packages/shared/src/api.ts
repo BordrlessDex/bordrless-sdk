@@ -581,8 +581,130 @@ export interface LaunchPrepareRequest {
   companion?: CompanionRequest;
 }
 
-/** A launch's companion as the launch request names it: a split of the creator fee, or one of the preset splits by name. */
-export type CompanionRequest = { split: CompanionSplitBps; vestDays?: number } | { template: CompanionTemplate; vestDays?: number };
+/**
+ * A launch's companion as the launch request names it: a split of the creator fee, or one of the
+ * preset splits by name; with `game`, a lottery coin (docs/games.md): the split's holders' share is
+ * then 0 and the pot's part (`game.potBps`) makes the four add up to 10,000.
+ */
+export type CompanionRequest = { split: CompanionSplitBps; vestDays?: number; game?: LotteryRequest } | { template: CompanionTemplate; vestDays?: number };
+
+/**
+ * A lottery coin's game as the launch request names it (docs/games.md "The companion's game"):
+ * every setting `create_game` fixes before the launch. Bounds: `LOTTERY_LIMITS` (`lotteryProblem`).
+ */
+export interface LotteryRequest {
+  kind: 'lottery';
+  /** A round's length, seconds: an hour to 30 days. Every holder's tokens held since a round began are their tickets in it. */
+  roundSecs: number;
+  /** The pot's part of every creator fee claim, basis points: with the split's buyback and launcher parts it adds up to 10,000. */
+  potBps: number;
+  /** No draw while the pot holds less, lamports: 0.1 to 1,000 SOL. */
+  minPotLamports: Amount;
+  /** The part of the pot one draw pays, basis points: 10% to 100%. */
+  prizeBps: number;
+  /** How long each claim attempt stays open, seconds: 5 minutes to a day. */
+  claimWindowSecs: number;
+  /** Attempts a draw makes before it rolls over, 1 to 16; all of them within half a round. */
+  maxAttempts: number;
+}
+
+/** A lottery coin's settings as its token page shows them (`CompanionSummary.game`): fixed at the launch, and the hook's terms. */
+export interface GameSummary {
+  kind: 'lottery';
+  /** The game's account, `PDA(["game", mint])` under the companion program. */
+  address: Address;
+  /** The coin's token hook, which keeps the tickets (the lottery hook). */
+  hook: Address;
+  roundSecs: number;
+  potBps: number;
+  minPot: Amount;
+  prizeBps: number;
+  claimWindowSecs: number;
+  maxAttempts: number;
+  /** The most the pot may hold while the hook is not audited (lamports); null for an audited hook. */
+  potCap: Amount | null;
+  audited: boolean;
+  /** Bordrless stopped this hook's games: the pot and its share go to the buyback and are burned. */
+  blocked: boolean;
+  /** Prizes paid so far, lamports, and how many. */
+  prizesTotal: Amount;
+  prizesPaid: number;
+}
+
+/** Why a round paid no prize (the companion's `RolloverReason`). */
+export type GameRolloverReason = 'noTickets' | 'roundForgotten' | 'noClaim' | 'oracleSilent' | 'blocked' | 'late' | 'oracleUnreadable' | 'oracleUnpaid';
+
+/** One round's draw as the indexer saw it (`GameStatus.draws`), newest first. */
+export interface GameDraw {
+  round: number;
+  /** When the round ended (its tickets final), unix seconds. */
+  roundEndsAt: number;
+  /** `requested`: ORAO asked; `revealed`: its answer stored, claims open; `paid`: the prize paid; `rolledOver`: no prize. */
+  status: 'requested' | 'revealed' | 'paid' | 'rolledOver';
+  /** The round's ticket total, base units. */
+  total: Amount;
+  /** ORAO's request account for the round's seed; null when no seed was committed. */
+  request: Address | null;
+  winner: Address | null;
+  /** Lamports paid; null unless paid. */
+  prize: Amount | null;
+  /** The ticket attempt that paid, 0-based; null unless paid. */
+  attempt: number | null;
+  reason: GameRolloverReason | null;
+  /** The transaction of the draw's last step, and when it landed. */
+  signature: string;
+  at: number | null;
+}
+
+/** The caller's place in the current round (`GameStatus.you`, with `?wallet=`). */
+export interface GameYou {
+  wallet: Address;
+  /** Tokens the wallet holds, base units. */
+  balance: Amount;
+  /** Its tickets in the current round, base units (its range's weight); 0 until it is written this round. */
+  tickets: Amount;
+  /** The wallet's holding has been written this round (it traded, or was entered): its tickets are registered. */
+  entered: boolean;
+  /** Its share of the round's tickets so far, 0 to 1; null without tickets. */
+  odds: number | null;
+  /** Its tickets in the round before (the one a draw may be for now). */
+  previousTickets: Amount;
+}
+
+/** A lottery coin's live state (`CompanionStatus.game`, docs/games.md): the pot, the round, the draw, the caller's tickets and the draw history. */
+export interface GameStatus extends GameSummary {
+  /** Bridged SOL the pot holds, lamports. */
+  pot: Amount;
+  /** Chain time the status was read at, unix seconds. */
+  now: number;
+  /** The current round (`floor(now / roundSecs)`) and when it ends. */
+  round: number;
+  roundEndsAt: number;
+  /** Tickets registered in the current round so far, base units (the hook's header). */
+  tickets: Amount;
+  /** The round before, and its tickets: what the next draw is for once the round ends. */
+  previousRound: number;
+  previousTickets: Amount;
+  /** The least the pot must hold for a round to be drawn (the minimum, or the cap when lower; 0.1 SOL once dormant). */
+  drawThreshold: Amount;
+  /** The draw in progress, when one is. */
+  draw: { round: number; status: 'requested' | 'revealed'; request: Address; prize: Amount; revealedAt: number | null; claimsEndAt: number } | null;
+  lastWinner: Address | null;
+  you: GameYou | null;
+  draws: GameDraw[];
+}
+
+/** `POST /v1/game/enter/prepare`: a holder's own `enter` (docs/games.md): their whole balance registered as tickets for the current round, when the holding was not written this round yet. */
+export interface GameEnterRequest {
+  wallet: Address;
+  mint: Address;
+}
+
+export interface GameEnterResponse {
+  transactions: PreparedTx[];
+  /** The round the tickets count in. */
+  round: number;
+}
 
 /** The companion templates (`COMPANION_SPLITS`; `COMPANION_TEMPLATES` in the SDK). */
 export type CompanionTemplate = 'buysItself' | 'rugProofDev' | 'buybackAndReward';
@@ -622,6 +744,8 @@ export interface CompanionSummary {
   devBag: { total: Amount; vested: Amount; released: Amount; vestEndsAt: number } | null;
   /** When the next buyback may run while SOL waits for one (it also waits while the price runs above its reference); null otherwise. */
   nextBuybackAt: number | null;
+  /** The lottery this companion runs (docs/games.md): its settings and the hook's terms; null for a companion without a game. */
+  game: GameSummary | null;
 }
 
 /**
@@ -636,6 +760,8 @@ export interface CompanionStatus {
   beneficiary: Address | null;
   /** Lamports a refund returns now; null unless `set-up`. */
   refundable: Amount | null;
+  /** The lottery this companion runs, live (docs/games.md), the caller's tickets with `?wallet=`; null for a companion without a game (absent from older servers). */
+  game?: GameStatus | null;
 }
 
 /** `POST /v1/companion/refund/prepare`: a companion's funding back to the wallet that set it up, for a launch that never happened. The mint's key signs it after the wallet. */

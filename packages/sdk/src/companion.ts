@@ -20,14 +20,22 @@
  * authority's. A game coin's token moves (`devBuy`, `buyback`, `release`) carry its custom hook:
  * pass `LaunchKeys` with `customHook` (`launchKeysOf(launch, lotteryHook.accounts(mint))`), and the
  * builders add the hook's slice and its registry, which the program resolves the extras from.
+ *
+ * Phase 2 (docs/games.md "The jackpot", "The streak"): `createGameV2` makes a game of any kind,
+ * with its kind's settings (`GameKindArgs`); a jackpot is closed round by round by `settle`, a
+ * streak's epochs by `closeEpoch`, `claimShare` (one receipt per owner and epoch) and
+ * `closeReceipt`. A Studio game hook (upgradeable only by Studio's key or the protocol's) is taken
+ * without a status when its ProgramData is passed (`createGameV2` always passes it,
+ * `createGameWithProgramData` for a lottery); it is not audited, so its pot is capped at 10 SOL.
  */
-import { PublicKey, type AccountMeta, type TransactionInstruction, TransactionInstruction as Ix } from '@solana/web3.js';
+import { PublicKey, type AccountMeta, type Connection, type TransactionInstruction, TransactionInstruction as Ix } from '@solana/web3.js';
 import BN from 'bn.js';
 import { COMPANION_SPLITS, type CompanionTemplate } from '@bordrless/shared';
 import * as a from './addresses.ts';
 import { CODERS } from './coders.ts';
 import { roundEnd, validRoundSecs } from './game.ts';
-import { customHookTokenHook, kitTokenHook, type TokenHook } from './hooks.ts';
+import { MAX_MIN_STREAK_SECS, MAX_TIMER_SECS, MIN_TIMER_SECS } from './gameKinds.ts';
+import { customHookTokenHook, kitTokenHook, type HookAccountList, type TokenHook } from './hooks.ts';
 import { PROTOCOL_PROGRAMS } from './inspect.ts';
 import { bridge, kit, launch, token, type CreateLaunchArgs, type LaunchKeys } from './instructions.ts';
 import { drawSeed, oraoRequestV2, type SeedSlot } from './orao.ts';
@@ -89,6 +97,10 @@ export interface Companion {
   roundSecs: number;
   /** v2: when `burnStranded` last burned a blocked game's buyback, a blocked game's pot last moved into the buyback, or a blocked game's fee claim last credited the buyback at least what it held (0: never); the next burn waits its whole period from here. */
   strandedBurnedAt: number;
+  /** v2.1: the game's kind (`'lottery'` for every companion made before phase 2, game or not). */
+  gameKind: GameKind;
+  /** v2.1: the part of `pendingPot` a closed streak epoch still owes its holders (a lowered cap never trims it); 0 for every other kind. */
+  potLocked: bigint;
 }
 
 /**
@@ -148,15 +160,16 @@ const isZero = (seed: Uint8Array): boolean => seed.every((b) => b === 0);
 
 // ---- games: settings -------------------------------------------------------------------------------
 
-/** The kinds of game a companion runs (`GameKind`); phase 1 has the lottery. A kind added later is appended. */
-export type GameKind = 'lottery';
+/** The kinds of game a companion runs (`GameKind`, Borsh-numbered in this order): the lottery (phase 1), the last-buyer jackpot and the holding streak (phase 2). */
+export type GameKind = 'lottery' | 'jackpot' | 'streak';
+export const GAME_KINDS: readonly GameKind[] = ['lottery', 'jackpot', 'streak'];
 /** Where a game's draw is (`DrawStatus`). `committed` is never set: `draw` commits its seed and requests it in one instruction (the variant keeps its number). */
 export type DrawStatus = 'idle' | 'committed' | 'requested' | 'revealed';
 /** Why a round paid no prize (`RolloverReason`, the `RolledOver` event's `reason`). */
 export const ROLLOVER_REASONS = ['noTickets', 'roundForgotten', 'noClaim', 'oracleSilent', 'blocked', 'late', 'oracleUnreadable', 'oracleUnpaid'] as const;
 export type RolloverReason = (typeof ROLLOVER_REASONS)[number];
 
-/** `create_game`'s arguments. */
+/** `create_game`'s arguments (and `create_game_v2`'s, beside `GameKindArgs`). A jackpot has no rounds (`roundSecs` 0), no claim windows or attempts (0); a streak's epochs are its rounds, its `claimWindowSecs` the least a closed epoch leaves for claims (5 minutes to half an epoch), with no attempts (0). */
 export interface GameArgs {
   kind: GameKind;
   /** The coin's token hook, prepared for the mint with `roundSecs` (the lottery hook, or one the protocol vetted); the launch's config must name it. */
@@ -176,14 +189,28 @@ export interface GameArgs {
   maxAttempts: number;
 }
 
+/** `create_game_v2`'s kind settings (`GameKindArgs`), each what the hook's kind header says; all zero for a lottery. */
+export interface GameKindArgs {
+  /** Jackpot: a round ends this long after its last qualifying buy (5 minutes to 30 days). */
+  timerSecs: number;
+  /** Jackpot: the least a qualifying buy delivers, in base units (at least 1). */
+  minTokens: bigint;
+  /** Streak: a holding shares in an epoch only if, by its end, it has sent nothing for this long (at most a year). */
+  minStreakSecs: number;
+  /** Streak: the least weight that shares (at least 1). */
+  minWeight: bigint;
+}
+export const NO_KIND_ARGS: Readonly<GameKindArgs> = { timerSecs: 0, minTokens: 0n, minStreakSecs: 0, minWeight: 0n };
+
 /**
  * The program's game limits (`constants.rs`): the pot cap of a hook not audited (10 SOL, never
  * more; the protocol may set 0.1 to 10 SOL), the minimum pot's bounds, the least prize, the claim
  * window's bounds, the most attempts, the share of a round the attempts may take (half), what a
  * draw leaves the reveal before its last claim window (10 minutes), how old the slot a draw's seed
  * is made from may be (3 slots, `oracle::SEED_SLOTS`), dormancy (30 days or 4 rounds; retired
- * after 2 dormant periods), the most registry extras a game hook may list besides the launch, and
- * the stranded-buyback wait.
+ * after 2 dormant periods), the most registry extras a game hook may list besides the launch
+ * (`create_game`, phase 1's lottery: 3; `create_game_v2` and a jackpot's or a streak's launch: 2,
+ * so the launch fits a packet at the site's longest name and URI), and the stranded-buyback wait.
  */
 export const GAME_LIMITS = {
   defaultPotCap: 10_000_000_000n,
@@ -201,10 +228,17 @@ export const GAME_LIMITS = {
   dormantRounds: 4,
   retireDormantPeriods: 2,
   maxGameHookExtras: 3,
+  maxGameHookExtrasV2: 2,
   strandedSecs: 30 * 86_400,
   strandedIntervals: 4,
   maxBountyBps: 100,
+  minTimerSecs: MIN_TIMER_SECS,
+  maxTimerSecs: MAX_TIMER_SECS,
+  maxMinStreakSecs: MAX_MIN_STREAK_SECS,
 } as const;
+
+/** The protocol's keys a Studio game hook may be upgradeable by for `create_game` to take it without a status (Studio's and the protocol's: `HOOK_UPGRADE_AUTHORITIES`). */
+export const GAME_HOOK_UPGRADE_AUTHORITIES: readonly PublicKey[] = [new PublicKey('CS1NRyXNCPxEUP4CRoa26cHQSeSJCxXh5SPijwFhDW6W'), new PublicKey('5xsibKwtiN6ruxsYrEyWVpV3KcwuzSPbQd1n28a7spEd')];
 
 /** The lottery the launch page offers (spec example 1): 70% of fees to the pot, 30% bought back; 6-hour rounds; draws from 0.5 SOL paying the whole pot; 8 attempts of 10 minutes. */
 export const LOTTERY_DEFAULTS = {
@@ -217,25 +251,76 @@ export const LOTTERY_DEFAULTS = {
   maxAttempts: 8,
 } as const;
 
+/** A jackpot the launch page offers (spec example 2): 70% of fees to the pot, 30% bought back; a 10-minute timer; half the pot to the last buyer, from 0.5 SOL. The minimum buy is the hook's. */
+export const JACKPOT_DEFAULTS = { split: { buybackBps: 3_000, holdersBps: 0, beneficiaryBps: 0 }, potBps: 7_000, roundSecs: 0, minPot: 500_000_000n, prizeBps: 5_000, claimWindowSecs: 0, maxAttempts: 0, timerSecs: 600 } as const;
+/** A streak the launch page offers (spec example 3): 70% of fees to the pot, 30% bought back; weekly epochs sharing the whole pot among those who held through the epoch; an hour at least for claims. The minimum weight is the hook's. */
+export const STREAK_DEFAULTS = { split: { buybackBps: 3_000, holdersBps: 0, beneficiaryBps: 0 }, potBps: 7_000, roundSecs: 7 * 86_400, minPot: 100_000_000n, prizeBps: 10_000, claimWindowSecs: 3_600, maxAttempts: 0, minStreakSecs: 7 * 86_400 } as const;
+
 /**
- * Why `create_game` would refuse these settings for a companion with these buyback limits, in the
- * words the launch form and the backend can show; null when it would not (`process_create_game`'s
- * checks on its arguments; the hook's state, registry and status are checked on chain).
+ * Why `create_game` (a lottery) or `create_game_v2` (any kind, with `kindArgs`) would refuse these
+ * settings for a companion with these buyback limits, in the words the launch form and the backend
+ * can show; null when it would not (`check_game_args`; the hook's state, kind header, registry and
+ * status are checked on chain).
  */
-export function gameArgsProblem(args: GameArgs, c: Pick<CompanionArgs, 'maxBuyback' | 'buybackInterval'>): string | null {
+export function gameArgsProblem(args: GameArgs, c: Pick<CompanionArgs, 'maxBuyback' | 'buybackInterval'>, kindArgs: GameKindArgs = NO_KIND_ARGS): string | null {
   const s = args.split;
-  if (args.kind !== 'lottery') return 'Phase 1 runs lotteries only.';
+  const k = kindArgs;
+  if (!GAME_KINDS.includes(args.kind)) return 'A game is a lottery, a jackpot or a streak.';
   if (!(args.potBps > 0) || s.buybackBps + s.holdersBps + s.beneficiaryBps + args.potBps !== 10_000) return 'The pot’s part and the split must add up to 10,000 basis points, with a pot.';
   if (s.holdersBps !== 0) return 'A game coin runs its own hook, so it has no holder rewards: no holders’ part.';
   if (c.maxBuyback < 10_000_000n || c.buybackInterval < 60 || c.buybackInterval > 30 * 86_400) return 'A game needs buyback limits: a cap of at least 0.01 SOL and a minute to 30 days between buybacks.';
-  if (!validRoundSecs(args.roundSecs)) return 'A round lasts an hour to 30 days.';
   if (args.minPot < GAME_LIMITS.minMinPot || args.minPot > GAME_LIMITS.maxMinPot) return 'The minimum pot is 0.1 to 1,000 SOL.';
-  if (args.prizeBps < GAME_LIMITS.minPrizeBps || args.prizeBps > 10_000) return 'A draw pays 10% to 100% of the pot.';
-  if (args.claimWindowSecs < GAME_LIMITS.minClaimWindowSecs || args.claimWindowSecs > GAME_LIMITS.maxClaimWindowSecs) return 'A claim window lasts 5 minutes to a day.';
-  if (!(args.maxAttempts >= 1 && args.maxAttempts <= GAME_LIMITS.maxAttempts)) return 'A draw makes 1 to 16 attempts.';
-  if (args.claimWindowSecs * args.maxAttempts * GAME_LIMITS.claimsPerRound > args.roundSecs) return 'A draw’s attempts must fit in half a round.';
+  if (args.prizeBps < GAME_LIMITS.minPrizeBps || args.prizeBps > 10_000) return 'A game pays 10% to 100% of the pot at a time.';
+  switch (args.kind) {
+    case 'lottery':
+      if (k.timerSecs !== 0 || k.minTokens !== 0n || k.minStreakSecs !== 0 || k.minWeight !== 0n) return 'A lottery takes no jackpot or streak settings.';
+      if (!validRoundSecs(args.roundSecs)) return 'A round lasts an hour to 30 days.';
+      if (args.claimWindowSecs < GAME_LIMITS.minClaimWindowSecs || args.claimWindowSecs > GAME_LIMITS.maxClaimWindowSecs) return 'A claim window lasts 5 minutes to a day.';
+      if (!(args.maxAttempts >= 1 && args.maxAttempts <= GAME_LIMITS.maxAttempts)) return 'A draw makes 1 to 16 attempts.';
+      if (args.claimWindowSecs * args.maxAttempts * GAME_LIMITS.claimsPerRound > args.roundSecs) return 'A draw’s attempts must fit in half a round.';
+      break;
+    case 'jackpot':
+      if (args.roundSecs !== 0 || args.claimWindowSecs !== 0 || args.maxAttempts !== 0) return 'A jackpot has no rounds, claim windows or attempts (all 0).';
+      if (k.timerSecs < GAME_LIMITS.minTimerSecs || k.timerSecs > GAME_LIMITS.maxTimerSecs) return 'A jackpot’s timer lasts 5 minutes to 30 days.';
+      if (k.minTokens < 1n) return 'A qualifying buy is at least one base unit.';
+      if (k.minStreakSecs !== 0 || k.minWeight !== 0n) return 'A jackpot takes no streak settings.';
+      break;
+    case 'streak':
+      if (!validRoundSecs(args.roundSecs)) return 'An epoch lasts an hour to 30 days.';
+      if (args.claimWindowSecs < GAME_LIMITS.minClaimWindowSecs || args.claimWindowSecs > GAME_LIMITS.maxClaimWindowSecs || args.claimWindowSecs * GAME_LIMITS.claimsPerRound > args.roundSecs) return 'A streak leaves claims 5 minutes to a day, at most half an epoch.';
+      if (args.maxAttempts !== 0) return 'A streak has no attempts (0).';
+      if (k.timerSecs !== 0 || k.minTokens !== 0n) return 'A streak takes no jackpot settings.';
+      if (k.minStreakSecs > GAME_LIMITS.maxMinStreakSecs) return 'A streak asks at most a year without sending.';
+      if (k.minWeight < 1n) return 'The least weight that shares is at least one base unit.';
+      break;
+  }
   if ([...PROTOCOL_PROGRAMS, a.COMPANION_PROGRAM, a.ORAO_VRF_PROGRAM].some((p) => p.equals(args.hook))) return 'The game’s hook must be a token hook of its own, not one of Bordrless’s programs.';
   return null;
+}
+
+/**
+ * How many accounts a game hook's registry lists besides the launch of `mint` (`["launch", mint]`
+ * under the launchpad, by key or as that PDA), as `check_hook_registry` counts them.
+ */
+export function gameHookExtras(list: HookAccountList, mint: PublicKey): number {
+  const launchAddress = a.launchAddress(mint);
+  const isLaunch = (s: HookAccountList['accounts'][number]['source']): boolean =>
+    s.kind === 'key'
+      ? s.key.equals(launchAddress)
+      : s.program.equals(a.LAUNCH_PROGRAM) && s.seeds.length === 2 && s.seeds[0]!.kind === 'literal' && Buffer.from(s.seeds[0]!.bytes).equals(Buffer.from('launch')) && s.seeds[1]!.kind === 'account' && s.seeds[1]!.index === 1;
+  return list.accounts.filter((x) => !isLaunch(x.source)).length;
+}
+
+/**
+ * Why the companion would refuse a game hook's registry for `mint` (`TooManyHookExtras`), null when
+ * it would not: `create_game_v2` (`v2`, any kind) and a jackpot's or a streak's launch take at most
+ * `GAME_LIMITS.maxGameHookExtrasV2` (2) accounts besides the launch; `create_game` (phase 1's
+ * lottery) `GAME_LIMITS.maxGameHookExtras` (3).
+ */
+export function gameRegistryProblem(list: HookAccountList, mint: PublicKey, v2 = true): string | null {
+  const max = v2 ? GAME_LIMITS.maxGameHookExtrasV2 : GAME_LIMITS.maxGameHookExtras;
+  const extras = gameHookExtras(list, mint);
+  return extras > max ? `The game hook's registry lists ${extras} accounts besides the launch; at most ${max}, so the launch fits a transaction.` : null;
 }
 
 // ---- the builders ----------------------------------------------------------------------------------
@@ -405,7 +490,72 @@ export const companion = {
     const named = [rw(authority, true), ro(a.COMPANION_PROGRAM_DATA), rw(a.hookStatusAddress(hook)), ro(a.SYSTEM_PROGRAM)];
     return build('setHookStatus', { hook, args: { audited: args.audited, potCap: bn(args.potCap), blocked: args.blocked } }, named, []);
   },
+
+  // ---- phase 2: the jackpot, the streak, Studio hooks ----
+
+  /** `createGame` with the hook's ProgramData passed (read-only): a lottery on a Studio hook upgradeable only by Studio's key or the protocol's is then taken without a status. */
+  createGameWithProgramData(payer: PublicKey, mint: PublicKey, args: GameArgs): TransactionInstruction {
+    const ix = companion.createGame(payer, mint, args);
+    ix.keys.push(ro(a.programDataAddress(args.hook)));
+    return ix;
+  },
+  /**
+   * `create_game_v2(args, kind)`: a game of any kind for `mint` (whose keypair signs), `payer`
+   * paying the rent. The hook must be prepared for the mint first (in the same setup transaction:
+   * `studioGameHook.prepare`), its kind header saying what `kind` says; its status account and its
+   * ProgramData are passed (a hook only the protocol's keys can upgrade needs no status).
+   */
+  createGameV2(payer: PublicKey, mint: PublicKey, args: GameArgs, kind: GameKindArgs): TransactionInstruction {
+    const named = [rw(payer, true), ro(mint, true), rw(a.companionAddress(mint)), rw(a.gameAddress(mint)), ro(a.gameStateAddress(args.hook, mint)), ro(a.registryAddress(args.hook, mint)), ro(a.hookStatusAddress(args.hook)), ro(a.SYSTEM_PROGRAM)];
+    const data = {
+      args: { kind: { [args.kind]: {} }, hook: args.hook, split: args.split, potBps: args.potBps, roundSecs: args.roundSecs, minPot: bn(args.minPot), prizeBps: args.prizeBps, claimWindowSecs: args.claimWindowSecs, maxAttempts: args.maxAttempts },
+      kind: { timerSecs: kind.timerSecs, minTokens: bn(kind.minTokens), minStreakSecs: kind.minStreakSecs, minWeight: bn(kind.minWeight) },
+    };
+    return build('createGameV2', data, named, [ro(a.programDataAddress(args.hook))]);
+  },
+  /**
+   * `settle` (anyone): the oldest jackpot round that is over (`settleRound`), whose buyer is
+   * `buyer`: paid `prizeBps` of the pot as SOL if their holding still holds what they bought, with
+   * nothing sent since (the sender paid the bounty), or paid nothing when the pot is below its
+   * minimum (`JackpotUnfunded`); else forfeited (an address that can't be paid, or a round left
+   * unsettled 30 days after its timer, is forfeited too). Refused while no round is over (`NotDue`),
+   * or while the launch's unclaimed fees could fund the prize (`FeesUnclaimed`: send
+   * `claimFees` first, in the same transaction).
+   */
+  settle(cranker: PublicKey, mint: PublicKey, hook: PublicKey, buyer: PublicKey): TransactionInstruction {
+    const creator = a.companionCreatorAddress(mint);
+    const named = [rw(cranker, true), rw(a.companionAddress(mint)), rw(creator), rw(a.gameAddress(mint)), ro(a.hookStatusAddress(hook)), ro(a.launchAddress(mint)), ro(a.holdingAddress(mint, buyer)), ro(a.SYSTEM_PROGRAM)];
+    return build('settle', {}, named, [ro(a.gameStateAddress(hook, mint)), rw(buyer), ro(a.holdingAddress(a.BRIDGED_SOL_MINT, a.launchAddress(mint))), ...unwrapAccounts(creator)]);
+  },
+  /** `retire` of a jackpot or a streak (anyone): the hook's state passed, so the program waits while a round or an epoch the pot can pay now is still to be settled or closed (`DrawPending`). */
+  retireGame(cranker: PublicKey, mint: PublicKey, hook: PublicKey): TransactionInstruction {
+    const ix = companion.retire(cranker, mint, hook);
+    // The hook's state, and the holdings a fee claim would bring the pot from (the launch's fees, the creator's surplus): a prize they would fund is due too.
+    ix.keys.push(ro(a.gameStateAddress(hook, mint)), ro(a.holdingAddress(a.BRIDGED_SOL_MINT, a.launchAddress(mint))), ro(a.holdingAddress(a.BRIDGED_SOL_MINT, a.companionCreatorAddress(mint))));
+    return ix;
+  },
+  /** `close_epoch(epoch)` (anyone): once streak epoch `epoch` is over (during the one after it), its pot and total fixed and its claims opened; or it rolls over (no weight, too late). */
+  closeEpoch(cranker: PublicKey, mint: PublicKey, hook: PublicKey, epoch: number): TransactionInstruction {
+    return build('closeEpoch', { epoch }, gameStep(cranker, mint, hook), [ro(a.gameStateAddress(hook, mint))]);
+  },
+  /** `claim_share(epoch)` (anyone, for any holder): `owner`'s share of the closed epoch, paid to `owner` as SOL; `cranker` pays the receipt's rent (back by `closeReceipt`) and is paid the bounty. Once per owner and epoch. */
+  claimShare(cranker: PublicKey, mint: PublicKey, hook: PublicKey, epoch: number, owner: PublicKey): TransactionInstruction {
+    const creator = a.companionCreatorAddress(mint);
+    const named = [rw(cranker, true), rw(a.companionAddress(mint)), rw(creator), rw(a.gameAddress(mint)), ro(a.hookStatusAddress(hook)), ro(a.launchAddress(mint)), ro(a.holdingAddress(mint, owner)), rw(owner), rw(receiptAddress(mint, epoch, owner)), ro(a.SYSTEM_PROGRAM)];
+    return build('claimShare', { epoch }, named, unwrapAccounts(creator));
+  },
+  /** `close_receipt` (anyone): `owner`'s receipt of epoch `epoch` closed once that epoch's claims have ended, its rent to `payer` (`ShareReceipt.payer`). */
+  closeReceipt(mint: PublicKey, epoch: number, owner: PublicKey, payer: PublicKey): TransactionInstruction {
+    return new Ix({ programId: a.COMPANION_PROGRAM, keys: [rw(receiptAddress(mint, epoch, owner)), rw(payer), ro(a.gameAddress(mint))], data: CODERS.companion.instruction.encode('closeReceipt', {}) });
+  },
 };
+
+/** The receipt of `owner`'s claim of streak epoch `epoch` of `mint`'s game: `PDA(["claimed", game, u32_le(epoch), owner])`. */
+export function receiptAddress(mint: PublicKey, epoch: number, owner: PublicKey): PublicKey {
+  const e = Buffer.alloc(4);
+  e.writeUInt32LE(epoch);
+  return PublicKey.findProgramAddressSync([Buffer.from('claimed'), a.gameAddress(mint).toBuffer(), e, owner.toBuffer()], a.COMPANION_PROGRAM)[0];
+}
 
 // ---- decoders --------------------------------------------------------------------------------------
 
@@ -446,6 +596,8 @@ export function decodeCompanion(data: Buffer): Companion {
     pendingPot: big(r.pendingPot),
     roundSecs: num(r.roundSecs),
     strandedBurnedAt: num(r.strandedBurnedAt),
+    gameKind: variant(r.gameKind) as GameKind,
+    potLocked: big(r.potLocked),
   };
 }
 
@@ -497,6 +649,14 @@ export interface Game {
   paidSeed: Uint8Array;
   paidRound: number;
   paidStreak: number;
+  /** Jackpot: the timer, the least qualifying buy, and the last round settled (paid or forfeited; only later rounds can be). 0 for every other kind. */
+  timerSecs: number;
+  minTokens: bigint;
+  paidBuys: bigint;
+  /** Streak: the least streak and weight that share, and what the claim epoch's pot (`prize`; the epoch is `round`, its total `total`, open while `status` is `revealed`) has paid so far. 0 for every other kind. */
+  minStreakSecs: number;
+  minWeight: bigint;
+  epochPaid: bigint;
 }
 
 /** A `Game` account, by its IDL name `game`. */
@@ -540,8 +700,55 @@ export function decodeGame(data: Buffer): Game {
     paidSeed: bytes(r.paidSeed),
     paidRound: num(r.paidRound),
     paidStreak: num(r.paidStreak),
+    timerSecs: num(r.timerSecs),
+    minTokens: big(r.minTokens),
+    paidBuys: big(r.paidBuys),
+    minStreakSecs: num(r.minStreakSecs),
+    minWeight: big(r.minWeight),
+    epochPaid: big(r.epochPaid),
   };
 }
+
+/** A streak share claimed (`ShareReceipt`, `receiptAddress`): it refuses a second claim of the epoch; its rent returns to `payer` once the epoch's claims end. */
+export interface ShareReceipt {
+  version: number;
+  bump: number;
+  game: PublicKey;
+  epoch: number;
+  owner: PublicKey;
+  payer: PublicKey;
+  /** Paid to the owner (after the sender's bounty). */
+  amount: bigint;
+  claimedAt: number;
+}
+
+/** A receipt's size, and where its game and payer sit (after the discriminator, `version`, `bump`; `game`, `epoch`, `owner`, `payer`). */
+export const SHARE_RECEIPT_LEN = 126;
+export const SHARE_RECEIPT_OFFSETS = { game: 10, epoch: 42, owner: 46, payer: 78 } as const;
+
+/** The receipts of `mint`'s streak game, those `payer` paid for only when given (`getProgramAccounts` on the companion: size, discriminator, game, payer): what `closeReceipt` returns the rent of once their epoch's claims end. */
+export async function fetchShareReceipts(connection: Connection, mint: PublicKey, payer?: PublicKey): Promise<{ address: PublicKey; receipt: ShareReceipt }[]> {
+  const disc = CODERS.companion.accounts.memcmp('shareReceipt');
+  const filters = [{ dataSize: SHARE_RECEIPT_LEN }, { memcmp: { offset: disc.offset ?? 0, bytes: disc.bytes! } }, { memcmp: { offset: SHARE_RECEIPT_OFFSETS.game, bytes: a.gameAddress(mint).toBase58() } }];
+  if (payer) filters.push({ memcmp: { offset: SHARE_RECEIPT_OFFSETS.payer, bytes: payer.toBase58() } });
+  const found = await connection.getProgramAccounts(a.COMPANION_PROGRAM, { commitment: 'confirmed', filters });
+  return found.flatMap(({ pubkey, account }) => {
+    try {
+      return [{ address: pubkey, receipt: decodeShareReceipt(account.data) }];
+    } catch {
+      return [];
+    }
+  });
+}
+
+/** A `ShareReceipt` account, by its IDL name `shareReceipt`. */
+export function decodeShareReceipt(data: Buffer): ShareReceipt {
+  const r = CODERS.companion.accounts.decode('shareReceipt', data) as Record<string, unknown>;
+  return { version: num(r.version), bump: num(r.bump), game: r.game as PublicKey, epoch: num(r.epoch), owner: r.owner as PublicKey, payer: r.payer as PublicKey, amount: big(r.amount), claimedAt: num(r.claimedAt) };
+}
+
+/** The last moment streak epoch `epoch` may be closed: a whole claim window before its claims end; later, it rolls over (`close_epoch`'s `Late`). */
+export const streakLastClose = (g: Pick<Game, 'roundSecs' | 'claimWindowSecs'>, epoch: number): number => Number(sat(BigInt(gameClaimsEnd(epoch, g.roundSecs)) - BigInt(g.claimWindowSecs)));
 
 /** `set_hook_status`'s arguments. */
 export interface HookStatusArgs {

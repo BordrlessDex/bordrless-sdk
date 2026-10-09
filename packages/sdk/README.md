@@ -149,6 +149,13 @@ companion.reveal(cranker, mint, hook, request);       // once ORAO answers
 companion.claimPrize(cranker, mint, hook, attempt, winnerHolding);
 ```
 
+**Jackpot and streak coins (0.7.0 and later).** `companion.createGameV2` creates any kind. A jackpot
+pays the last qualifying buyer on the bonding curve when the timer runs out (`companion.settle`), if
+they made no send since; a streak shares each epoch's pot among holders who held since it began
+without sending (`closeEpoch`, `claimShare`, `closeReceipt`). Game hooks Studio deploys (upgradeable
+only by Bordrless's keys) are accepted automatically; starters are in the programs repo
+(`programs/tests/fixtures/starters`).
+
 Every step is permissionless. Until a game's hook is audited, its pot is capped at 10 SOL; a game
 the protocol blocks has its pot bought back and burned, paying no one. The draw is verifiable, not
 "provably fair": ORAO's signers are trusted to answer. The design, the keeper's loop and every rule:
