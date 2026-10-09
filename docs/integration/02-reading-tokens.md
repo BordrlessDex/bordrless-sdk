@@ -49,11 +49,12 @@ const progress = launch.status === 1 ? 1 : Number(pool.quoteReserve) / Number(la
 const lpFeeNow = sniperLpFee(now, launch.createdAt, launch.sniperWindowSecs, launch.sniperStartBps, launch.lpFeeBps);
 ```
 
-What it returned for a Half-Life token on 2026-10-09, 9% of the way along its curve:
+What it returns, in shape (illustrative values for a token on the Half-Life hook, about 9% of the
+way along its curve):
 
 ```
-name: 'Half Life', symbol: 'hLife', decimals: 6, supply: '1000000000',
-priceSol: 6.0287e-8, marketCapSol: 60.29, liquiditySol: '9.002072541', curveProgress: 0.0932,
+name: '<name>', symbol: '<symbol>', decimals: 6, supply: '1000000000',
+priceSol: 6.03e-8, marketCapSol: 60.3, liquiditySol: '9.0', curveProgress: 0.093,
 lpFeeBpsNow: 30, creatorFeeBps: 100, protocolShareBps: 2500,
 tokenHook: 'Half-Life (exit fee halving every 6 h held)', trades: '71'
 ```

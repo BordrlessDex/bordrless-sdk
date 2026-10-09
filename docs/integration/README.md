@@ -73,7 +73,7 @@ SDK. Each example is read-only and was run against mainnet:
 ```sh
 git clone https://github.com/BordrlessDex/bordrless-sdk && cd bordrless-sdk
 pnpm install && pnpm build
-RPC_URL=<your mainnet RPC> node examples/read-launch.ts BWgqmV24qL5fFXMBhb77z3Moce8BYHKB7UzDZ11imB5X
+RPC_URL=<your mainnet RPC> node examples/read-launch.ts <MINT>
 ```
 
 Node 23.6 or later runs the `.ts` files directly (Node 22.6+ with `--experimental-strip-types`). Use your own RPC: the public one rate-limits
