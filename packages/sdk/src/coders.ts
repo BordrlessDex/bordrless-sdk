@@ -22,6 +22,7 @@ export const IDL = {
   taxHook: require('../idl/tax_hook.json') as Idl,
   halfLife: require('../idl/half_life.json') as Idl,
   companion: require('../idl/bordrless_companion.json') as Idl,
+  lotteryHook: require('../idl/lottery_hook.json') as Idl,
 };
 
 function coder(idl: Idl): Coder {
@@ -38,6 +39,7 @@ export const CODERS = {
   taxHook: coder(IDL.taxHook),
   halfLife: coder(IDL.halfLife),
   companion: coder(IDL.companion),
+  lotteryHook: coder(IDL.lotteryHook),
 };
 
 export type ProgramName = keyof typeof CODERS;

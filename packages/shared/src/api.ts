@@ -107,7 +107,64 @@ export interface CustomHookInfo {
   upgradeAuthority: Address | null;
   /** True: `upgradeAuthority` can upgrade it. False: nobody can (final). Null: not read, so nothing is claimed either way. */
   upgradeable: boolean | null;
+  /** What the hook does, for a hook Studio built (`HookAbout`); null (or absent) for any other, which the site describes from its flags. */
+  about?: HookAbout | null;
 }
+
+/**
+ * Bordrless's official summary of a hook Studio deployed: written once by the assistant from the
+ * deployed source (comments and strings blanked), its flags and its review, then never changed and
+ * never the author's to edit. A new build is a new program, with a summary of its own.
+ */
+export interface HookSummary {
+  /** At most `HOOK_SUMMARY_LIMITS.title` characters. */
+  title: string;
+  /** One or two plain sentences: what the hook does to transfers, buys and sells. */
+  text: string;
+  /** The build it was written for (sha256 of the deployed binary); null when the build had none. */
+  buildHash: string | null;
+  at: number;
+}
+
+/** Figures the behaviour simulator measured on a hook (numbers, never model text). Reserved: not filled yet. */
+export interface HookMeasured {
+  /** The largest cut seen on one transfer, bps of it. */
+  maxCutBps: number | null;
+  /** Transfers it refused, of `runs`. */
+  refusals: number | null;
+  runs: number | null;
+}
+
+/**
+ * What a token hook Studio built does (`GET /v1/hooks/:program/about`, and on `CustomHookInfo.about`,
+ * `LaunchConfigData.customHook.about`, `MarketplaceListing.hookAbout`): Bordrless's official summary
+ * first, the author's own words second. Null for a hook Studio didn't build.
+ */
+export interface HookAbout {
+  program: Address;
+  /** The Studio project's name, as its author called it. */
+  title: string;
+  /** Bordrless's summary; null until it is written (the site then says what the flags allow). */
+  summary: HookSummary | null;
+  /** "What your hook does", in the author's words (at most `HOOK_ABOUT_CHARS`); empty when none was written. */
+  about: string;
+  studioProject: string;
+  /** The worst verdict of Studio's automated checks of the deployed source (not an audit); null when none is kept. */
+  reviewVerdict: 'pass' | 'warn' | null;
+  /** sha256 of the deployed binary. */
+  buildHash: string | null;
+  /** Studio keeps its source for anyone to read. */
+  sourceAvailable: boolean;
+  /** The marketplace listing that shows its source (its Studio config, when listed); null when not listed. */
+  listing: Address | null;
+  /** Reserved for the behaviour simulator's figures; absent for now. */
+  measured?: HookMeasured | null;
+}
+
+/** "What your hook does": the most an author writes, in characters (the Studio field and what is served). */
+export const HOOK_ABOUT_CHARS = 280;
+/** The official summary's limits, in characters. */
+export const HOOK_SUMMARY_LIMITS = { title: 40, text: 320 } as const;
 
 /** How a pool's protocol fee is taken (§3.1): a flat rate of the quote (`protocolFeeBps`, ordinary pools), or a share of what the hooks cut (`protocolShareBps`, launch pools). */
 export type ProtocolModel = 'flat' | 'share';
@@ -120,7 +177,7 @@ export type ProtocolModel = 'flat' | 'share';
 export interface LaunchConfigData {
   rules: LaunchRulesInput;
   creatorFeeBps: number;
-  customHook: { program: Address; flags: number } | null;
+  customHook: { program: Address; flags: number; /** As `CustomHookInfo.about`. */ about?: HookAbout | null } | null;
   label: string;
 }
 
@@ -281,6 +338,8 @@ export interface LaunchDetail extends LaunchSummary {
   ruleStats: RuleStats;
   /** The bridged-SOL holding holder rewards are paid from; null without holder rewards. */
   holderVault: Address | null;
+  /** The program that is this launch's creator (docs/companions.md), read live; null for a launch whose creator is a wallet. */
+  companion: CompanionSummary | null;
 }
 
 /** `GET /v1/launches?sort=`: newest first by default; `rewards24h` most paid to holders in 24 h first; `fees` lowest buy-then-sell fee first. */
@@ -510,17 +569,86 @@ export interface LaunchPrepareRequest {
    */
   config?: Address;
   /**
-   * A companion (docs/companions.md): the launch's creator is a program, so its creator fees are
-   * bought back and burned, streamed to holders or paid to the launcher by code, with no keeper.
-   * The launcher is the beneficiary; a first buy is then the companion's, vesting to them over
-   * `vestDays`. Not with the creator wallet lock or a custom hook; the holders' templates need
-   * holder rewards.
+   * Where the creator fee goes when it isn't all paid to the launcher (docs/companions.md): the
+   * launch's creator is then a program, a companion, that buys the token back and burns it,
+   * streams to holders or pays the launcher, by `split` (basis points summing to 10,000), with no
+   * keeper. A `template` names one of the three preset splits (kept for older clients). The
+   * launcher is the beneficiary; a first buy is then the companion's, vesting to them over
+   * `vestDays` (0 to 365, default 30). Refused (`companion_rules`) with the creator wallet lock, a
+   * launch config (listed or not, with or without a hook), no creator fee, a share for holders
+   * without holder rewards, or a split that doesn't add up.
    */
-  companion?: { template: CompanionTemplate; vestDays?: number };
+  companion?: CompanionRequest;
 }
 
-/** The companion templates (`COMPANION_TEMPLATES` in the SDK). */
+/** A launch's companion as the launch request names it: a split of the creator fee, or one of the preset splits by name. */
+export type CompanionRequest = { split: CompanionSplitBps; vestDays?: number } | { template: CompanionTemplate; vestDays?: number };
+
+/** The companion templates (`COMPANION_SPLITS`; `COMPANION_TEMPLATES` in the SDK). */
 export type CompanionTemplate = 'buysItself' | 'rugProofDev' | 'buybackAndReward';
+
+/** What a companion does with every creator fee it claims, in basis points summing to 10,000. */
+export interface CompanionSplitBps {
+  /** Bought back on the token's own pool and burned. */
+  buybackBps: number;
+  /** Streamed to holders through the kit (the launch has holder rewards). */
+  holdersBps: number;
+  /** Paid to the launcher (the beneficiary), in SOL. */
+  beneficiaryBps: number;
+}
+
+/** A launch's companion as its token page shows it (`LaunchDetail.companion`): lamports and token base units as strings. */
+export interface CompanionSummary {
+  /** The companion's account, `PDA(["companion", mint])` under the companion program. */
+  address: Address;
+  /** The wallet that launched it: paid its part of the fees, and the dev bag as it vests. */
+  beneficiary: Address;
+  /** The template whose split this is; null for another split. */
+  template: CompanionTemplate | null;
+  split: CompanionSplitBps;
+  /** Creator fees the companion has claimed, all time. */
+  claimed: Amount;
+  /** Spent buying the token back on its pool. */
+  boughtBack: Amount;
+  /** Tokens those buybacks burned. */
+  burned: Amount;
+  /** Shared with holders through the kit. */
+  shared: Amount;
+  /** Paid to the launcher. */
+  paidToLauncher: Amount;
+  /** Claimed and waiting for its step: the next buyback, the next share, the launcher's next payout. */
+  pending: { buyback: Amount; holders: Amount; launcher: Amount };
+  /** The launcher's first buy, held by the companion: its tokens, the part vested now, the part sent to the launcher, and when the vest ends; null without one. */
+  devBag: { total: Amount; vested: Amount; released: Amount; vestEndsAt: number } | null;
+  /** When the next buyback may run while SOL waits for one (it also waits while the price runs above its reference); null otherwise. */
+  nextBuybackAt: number | null;
+}
+
+/**
+ * `GET /v1/companion/:mint`: a mint's companion as a launch that may not have finished needs it.
+ * `none`: no companion was set up for the mint; `set-up`: set up, its launch not made (its funding
+ * can be taken back, `refundable`); `launched`.
+ */
+export interface CompanionStatus {
+  mint: Address;
+  state: 'none' | 'set-up' | 'launched';
+  /** The wallet it pays; null with none. */
+  beneficiary: Address | null;
+  /** Lamports a refund returns now; null unless `set-up`. */
+  refundable: Amount | null;
+}
+
+/** `POST /v1/companion/refund/prepare`: a companion's funding back to the wallet that set it up, for a launch that never happened. The mint's key signs it after the wallet. */
+export interface CompanionRefundRequest {
+  wallet: Address;
+  mint: Address;
+}
+
+export interface CompanionRefundResponse {
+  transaction: PreparedTx;
+  /** Lamports it returns. */
+  refundable: Amount;
+}
 
 export interface LaunchPrepareResponse {
   intentId: string;
@@ -649,6 +777,13 @@ export interface BridgeAsset {
    * opened. Absent from backends that predate it.
    */
   pool?: BridgePool | null;
+  /**
+   * The platform token on the overview only: base units bought back from protocol revenue and held
+   * by the treasury (docs page /docs/tokenomics): its holding of the bridged version, plus the SPL
+   * version it holds that is still to be bridged. Read live from the chain; null when it could not
+   * be read. Absent from backends that predate it and from any other asset.
+   */
+  boughtBack?: Amount | null;
 }
 
 /** A bridged token's pool on the DEX (`BridgeAsset.pool`): where it is, since when, and its last price. */

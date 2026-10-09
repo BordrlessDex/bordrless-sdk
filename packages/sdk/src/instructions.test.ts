@@ -8,9 +8,11 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import BN from 'bn.js';
 import { Keypair, PublicKey, type AccountMeta, type Connection, type TransactionInstruction } from '@solana/web3.js';
-import { FIXED_ADDRESSES, HALF_LIFE, HOOK_SIGNERS, PROTOCOL_LOOKUP_TABLE_ADDRESSES, RULE_BOUNDS } from '@bordrless/shared';
+import { FIXED_ADDRESSES, HALF_LIFE, HOOK_SIGNERS, LOTTERY_HOOK, PROTOCOL_LOOKUP_TABLE_ADDRESSES, RULE_BOUNDS } from '@bordrless/shared';
 import * as a from './addresses.ts';
-import { COMPANION_TEMPLATES, companion, companionVested } from './companion.ts';
+import { COMPANION_TEMPLATES, LOTTERY_DEFAULTS, companion, companionVested, type GameArgs } from './companion.ts';
+import { LOTTERY_HOOK_FLAGS, lotteryHook } from './lotteryHook.ts';
+import { drawSeed, oraoRequestV2 } from './orao.ts';
 import { NO_LAUNCH_RULES, type LaunchRulesData } from './accounts.ts';
 import { CODERS, IDL, type ProgramName } from './coders.ts';
 import { MAX_CUSTOM_HOOK_EXTRAS, customHookLaunchAccounts, customHookSlice, decodeHookAccountList, encodeHookAccountList, fetchTokenHook, kitHookExtras, kitHookSlice, kitRegistryList, kitTokenHook, launchPoolRegistryList, resolveCustomHookAccounts, resolveHookAccounts, tokenHookOf, tokenHookSlice } from './hooks.ts';
@@ -34,7 +36,7 @@ interface IdlAccount {
 }
 type RawIdl = { address: string; instructions: { name: string; discriminator: number[]; accounts: IdlAccount[] }[] };
 
-const PROGRAM_ID: Record<ProgramName, PublicKey> = { token: a.TOKEN_PROGRAM, swap: a.SWAP_PROGRAM, bridge: a.BRIDGE_PROGRAM, launch: a.LAUNCH_PROGRAM, kit: a.KIT_PROGRAM, taxHook: a.TAX_HOOK_PROGRAM, halfLife: a.HALF_LIFE_PROGRAM, companion: a.COMPANION_PROGRAM };
+const PROGRAM_ID: Record<ProgramName, PublicKey> = { token: a.TOKEN_PROGRAM, swap: a.SWAP_PROGRAM, bridge: a.BRIDGE_PROGRAM, launch: a.LAUNCH_PROGRAM, kit: a.KIT_PROGRAM, taxHook: a.TAX_HOOK_PROGRAM, halfLife: a.HALF_LIFE_PROGRAM, companion: a.COMPANION_PROGRAM, lotteryHook: a.LOTTERY_HOOK_PROGRAM };
 
 /**
  * The instruction against the IDL's: its fixed accounts in order with their flags and addresses, and
@@ -670,3 +672,127 @@ describe('companions (docs/companions.md): each step against the IDL, its inner 
     expect(companionVested({ launched: false, launchedAt: 0, vestSecs: 10, devTokens: 7n }, 100)).toBe(0n);
   });
 });
+
+describe('companion games (docs/companions.md "Games"): each builder against the IDL, the custom hook on every token move', () => {
+  const mint = k();
+  const [payer, cranker, beneficiary, winner, authority] = [k(), k(), k(), k(), k()];
+  const creator = a.companionCreatorAddress(mint);
+  const hook = a.LOTTERY_HOOK_PROGRAM;
+  const unwrap = bridge.unwrapSol(creator, 0n).keys.length + 1;
+  const seed = new Uint8Array(32).fill(7);
+  const treasury = k();
+  const args: GameArgs = { kind: 'lottery', hook, ...LOTTERY_DEFAULTS };
+  const gameKeys = launchKeys(mint, SOL, 30, NO_LAUNCH_RULES, lotteryHook.accounts(mint));
+  const signers = (ix: TransactionInstruction) => ix.keys.filter((m) => m.isSigner).map((m) => m.pubkey.toBase58());
+  const registry = a.registryAddress(hook, mint).toBase58();
+
+  it('derives the lottery hook\'s fixed addresses to the constants it compiled in', () => {
+    expect(a.TOKEN_HOOK_SIGNER_LOTTERY.toBase58()).toBe(LOTTERY_HOOK.tokenHookSigner);
+    expect(a.LOTTERY_HOOK_AUTHORITY.toBase58()).toBe(LOTTERY_HOOK.hookAuthority);
+    expect(PublicKey.findProgramAddressSync([Buffer.from('hook-authority')], hook)[1]).toBe(255);
+    expect(LOTTERY_HOOK_FLAGS).toBe(145);
+    expect(a.lotteryStateAddress(mint).equals(PublicKey.findProgramAddressSync([Buffer.from('state'), mint.toBuffer()], hook)[0])).toBe(true);
+    expect(a.gameAddress(mint).equals(PublicKey.findProgramAddressSync([Buffer.from('game'), mint.toBuffer()], a.COMPANION_PROGRAM)[0])).toBe(true);
+    expect(a.oraclePayerAddress(mint).equals(PublicKey.findProgramAddressSync([Buffer.from('oracle'), mint.toBuffer()], a.COMPANION_PROGRAM)[0])).toBe(true);
+    expect(a.hookStatusAddress(hook).equals(PublicKey.findProgramAddressSync([Buffer.from('hook-status'), hook.toBuffer()], a.COMPANION_PROGRAM)[0])).toBe(true);
+    expect(a.oraoRequestAddress(seed).equals(PublicKey.findProgramAddressSync([Buffer.from('orao-vrf-randomness-request'), seed], a.ORAO_VRF_PROGRAM)[0])).toBe(true);
+    expect(PublicKey.findProgramAddressSync([Buffer.from('orao-vrf-network-configuration')], a.ORAO_VRF_PROGRAM)[0].equals(a.ORAO_NETWORK_STATE)).toBe(true);
+  });
+
+  it('the lottery hook: prepare (the mint signs) and enter (nobody signs)', () => {
+    const prepare = lotteryHook.prepare(payer, mint, 21_600);
+    holdToIdl('lotteryHook', 'prepare', prepare, 0);
+    expect(signers(prepare)).toEqual([payer.toBase58(), mint.toBase58()]);
+    expect([keyAt(prepare, 2), keyAt(prepare, 3)]).toEqual([a.lotteryStateAddress(mint).toBase58(), registry]);
+    expect(prepare.data.readUInt32LE(8)).toBe(21_600);
+    const enter = lotteryHook.enter(mint, winner);
+    holdToIdl('lotteryHook', 'enter', enter, 0);
+    expect(signers(enter)).toEqual([]);
+    expect(keyAt(enter, 2)).toBe(a.holdingAddress(mint, winner).toBase58());
+    expect(lotteryHook.accounts(mint).extras.map(metaOf)).toEqual([
+      [a.lotteryStateAddress(mint).toBase58(), false, true],
+      [a.launchAddress(mint).toBase58(), false, false],
+    ]);
+  });
+
+  it('create_game: the mint signs; the hook\'s state, registry and status are passed', () => {
+    const ix = companion.createGame(payer, mint, args);
+    holdToIdl('companion', 'create_game', ix, 0);
+    expect(signers(ix)).toEqual([payer.toBase58(), mint.toBase58()]);
+    expect([keyAt(ix, 4), keyAt(ix, 5), keyAt(ix, 6)]).toEqual([a.lotteryStateAddress(mint).toBase58(), registry, a.hookStatusAddress(hook).toBase58()]);
+    const decoded = CODERS.companion.instruction.decode(ix.data) as { name: string; data: { args: Record<string, unknown> } };
+    expect(decoded.name).toBe('createGame');
+    expect(Object.keys(decoded.data.args.kind as object)).toEqual(['lottery']);
+    expect([decoded.data.args.potBps, decoded.data.args.roundSecs, String(decoded.data.args.minPot), decoded.data.args.maxAttempts]).toEqual([7_000, 21_600, '500000000', 8]);
+  });
+
+  it('the draw: draw (it commits the seed and requests it; with and without the breaker\'s paid request), reveal, claim_prize, expire, retire', () => {
+    const at = { slot: 454_000_123n, hash: new Uint8Array(32).fill(9) };
+    const drawn = drawSeed(mint, 81_234, 0, at.slot, at.hash);
+    const orao = oraoRequestV2(a.oraclePayerAddress(mint), treasury, drawn);
+    const draw = companion.draw(cranker, mint, hook, 81_234, at, treasury);
+    holdToIdl('companion', 'draw', draw, 2 + orao.keys.length + 1 + unwrap);
+    expect(draw.keys.slice(9, 11).map(metaOf)).toEqual([
+      [a.lotteryStateAddress(mint).toBase58(), false, false],
+      [a.SLOT_HASHES_SYSVAR.toBase58(), false, false],
+    ]);
+    // ORAO's request for the seed, made in the draw: its account writable, the oracle payer signing
+    // only inside the program.
+    expect(draw.keys.slice(11, 11 + orao.keys.length + 1).map(metaOf)).toEqual([...orao.keys.map((m) => [m.pubkey.toBase58(), false, m.isWritable]), [a.ORAO_VRF_PROGRAM.toBase58(), false, false]]);
+    expect(draw.keys.some((m) => m.pubkey.equals(a.oraoRequestAddress(drawn)) && m.isWritable)).toBe(true);
+    expect(signers(draw)).toEqual([cranker.toBase58()]);
+    const decoded = CODERS.companion.instruction.decode(draw.data) as { name: string; data: { round: number; slot: BN } };
+    expect([decoded.name, decoded.data.round, decoded.data.slot.toString()]).toEqual(['draw', 81_234, '454000123']);
+    // With the breaker's paid request: read too (the pot pays for no seed it can't request).
+    const drawAfter = companion.draw(cranker, mint, hook, 81_234, at, treasury, new Uint8Array(32).fill(8));
+    holdToIdl('companion', 'draw', drawAfter, 2 + orao.keys.length + 1 + unwrap + 1);
+    expect(metaOf(drawAfter.keys.at(-1)!)).toEqual([a.oraoRequestAddress(new Uint8Array(32).fill(8)).toBase58(), false, false]);
+    const requestKey = a.oraoRequestAddress(seed);
+    holdToIdl('companion', 'reveal', companion.reveal(cranker, mint, hook, requestKey), 1);
+    holdToIdl('companion', 'expire', companion.expire(cranker, mint, hook, requestKey), 1);
+    holdToIdl('companion', 'retire', companion.retire(cranker, mint, hook), 0);
+    const claim = companion.claimPrize(cranker, mint, hook, 3, winner);
+    holdToIdl('companion', 'claim_prize', claim, 1 + unwrap);
+    expect(keyAt(claim, 6)).toBe(a.holdingAddress(mint, winner).toBase58());
+    expect(metaOf(claim.keys[10]!)).toEqual([winner.toBase58(), false, true]);
+    expect(claim.data[8]).toBe(3);
+  });
+
+  it('burn_stranded pays nobody (its sender read-only); set_hook_status is signed by the upgrade authority', () => {
+    const burn = companion.burnStranded(cranker, mint, hook);
+    holdToIdl('companion', 'burn_stranded', burn, unwrap);
+    expect(metaOf(burn.keys[0]!)).toEqual([cranker.toBase58(), true, false]);
+    const status = companion.setHookStatus(authority, hook, { audited: false, potCap: 5_000_000_000n, blocked: true });
+    holdToIdl('companion', 'set_hook_status', status, 0);
+    expect(keyAt(status, 1)).toBe(a.programDataAddress(a.COMPANION_PROGRAM).toBase58());
+    expect(keyAt(status, 2)).toBe(a.hookStatusAddress(hook).toBase58());
+  });
+
+  it('a game coin\'s token moves carry its hook: the swap\'s slice, the burn\'s and the transfer\'s hook slots, and the registry last', () => {
+    const slice = customHookSlice(lotteryHook.accounts(mint)).map(metaOf);
+    const dev = companion.devBuy(beneficiary, gameKeys, 1_000_000_000n, 7n);
+    holdToIdl('companion', 'dev_buy', dev, dev.keys.length - 7);
+    expect(metaOf(dev.keys.at(-1)!)).toEqual([registry, false, false]);
+    const swapIx = launch.swap(gameKeys, creator, creator, 1, 1_000_000_000n, 7n);
+    expect(swapIx.keys.slice(15, 19).map(metaOf)).toEqual(slice);
+    const buyback = companion.buyback(cranker, gameKeys, false);
+    holdToIdl('companion', 'buyback', buyback, buyback.keys.length - 7);
+    expect(metaOf(buyback.keys.at(-1)!)).toEqual([registry, false, false]);
+    const burn = token.burn(creator, a.holdingAddress(mint, creator), mint, 0n, customHookTokenHookOf(mint));
+    expect(buyback.keys.map(metaOf)).toEqual(expect.arrayContaining(burn.keys.map(metaOf).map(([key, , w]) => [key, false, w])));
+    const release = companion.release(cranker, gameKeys, false, beneficiary);
+    holdToIdl('companion', 'release', release, release.keys.length - 7);
+    expect(metaOf(release.keys.at(-1)!)).toEqual([registry, false, false]);
+    expect(release.keys.map((m) => m.pubkey.toBase58())).toEqual(expect.arrayContaining([hook.toBase58(), a.TOKEN_HOOK_SIGNER_LOTTERY.toBase58(), a.lotteryStateAddress(mint).toBase58()]));
+    // A game companion's claim passes its hook's status; a kit companion's does not.
+    const claim = companion.claimFees(cranker, mint, hook);
+    holdToIdl('companion', 'claim_fees', claim, launch.claimCreatorFees(creator, mint, SOL).keys.length + 1 + unwrap + 1);
+    expect(metaOf(claim.keys.at(-1)!)).toEqual([a.hookStatusAddress(hook).toBase58(), false, false]);
+    expect(companion.claimFees(cranker, mint).keys.length).toBe(claim.keys.length - 1);
+    // A kit coin's steps carry no registry.
+    const kitKeys = launchKeys(mint, SOL, 30, EVERY_RULE);
+    for (const ix of [companion.devBuy(beneficiary, kitKeys, 1n, 1n), companion.buyback(cranker, kitKeys, true), companion.release(cranker, kitKeys, true, beneficiary)]) expect(ix.keys.some((m) => m.pubkey.toBase58() === registry)).toBe(false);
+  });
+});
+
+const customHookTokenHookOf = (mint: PublicKey) => ({ program: a.LOTTERY_HOOK_PROGRAM, signer: a.TOKEN_HOOK_SIGNER_LOTTERY, extras: lotteryHook.accounts(mint).extras });

@@ -13,7 +13,8 @@
  * for a new mint without knowing its code. The backend refuses source that leaves the template's
  * limits (`StaticCheck`) before it is built, reviewed or paid for.
  */
-import type { Address, PreparedTx } from './api.ts';
+import type { Address, HookAbout, PreparedTx } from './api.ts';
+import { TOKEN_HOOK_FLAGS as HOOK_FLAG_BITS } from './programs.ts';
 
 // ---- projects ---------------------------------------------------------------------------------------
 
@@ -199,9 +200,15 @@ export interface ReviewFinding {
   location: string | null;
 }
 
-/** `POST /v1/studio/projects/:id/review`: the static checks, then the assistant's security review. */
+/**
+ * `POST /v1/studio/projects/:id/review`: the static checks, then the automated security review (two
+ * independent model runs, the worse kept). Every run of a source (and the hook flags read from it,
+ * `detectHookFlags`) is kept: the review shown is the worst of them, its findings merged, and a
+ * source that failed once stays failed (only a change to the source clears it). Automated checks,
+ * not an audit.
+ */
 export interface StudioReview {
-  /** `fail`: a static check failed or a critical/high finding; deploy is refused. */
+  /** `fail`: a static check failed or a critical/high finding; deploy is refused. The worst of every run of this source and these flags. */
   verdict: 'pass' | 'warn' | 'fail';
   checks: StaticCheck[];
   findings: ReviewFinding[];
@@ -209,6 +216,10 @@ export interface StudioReview {
   summary: string;
   /** sha256 of the source reviewed. */
   sourceHash: string;
+  /** The hook flags the source was reviewed with, read from the source itself (`detectHookFlags`). Absent on reviews made before flags were recorded. */
+  hookFlags?: number;
+  /** How many review runs of this source and these flags the verdict and findings merge. */
+  runs?: number;
   at: number;
 }
 
@@ -224,6 +235,22 @@ export interface StudioBuild {
   log: string;
   sourceHash: string;
   at: number;
+  /** Studio's trading test of what was built (the worker's simulator): a deploy needs `pass`. Absent on builds from before it. */
+  sim?: StudioSim | null;
+}
+
+/** The simulator's verdict on a build: launched, bought, sold and sent by several wallets over a simulated year. */
+export interface StudioSim {
+  pass: boolean;
+  /** Why it failed, in the simulator's words (the first few). */
+  reasons: string[];
+  /** The most the hook took from one transfer, in bps, and the cap it was held to. */
+  cutMaxBps: number | null;
+  capBps: number | null;
+  /** Operations the hook refused. */
+  refusedTotal: number;
+  /** What the test can't see (amount triggers, wallets it never used, after a year). */
+  notes: string[];
 }
 
 // ---- deploy -----------------------------------------------------------------------------------------
@@ -318,8 +345,13 @@ export interface MarketplaceListing {
   studioSource: boolean;
   /** Who can upgrade the hook now (null: final, or no hook). */
   hookUpgradeAuthority: Address | null;
-  /** The source passed review when it was deployed. */
-  reviewVerdict: 'pass' | 'warn' | null;
+  /**
+   * The worst verdict of the automated checks over every review run of the deployed source (not an
+   * audit, and not a seal); null when Studio did not build the hook or has no review of it.
+   */
+  reviewVerdict: 'pass' | 'warn' | 'fail' | null;
+  /** What its hook does, when Studio built it: Bordrless's summary and the author's words (`HookAbout`); null or absent otherwise. */
+  hookAbout?: HookAbout | null;
   launches: number;
   /** Paid to the author so far, lamports. */
   authorEarned: string;
@@ -368,6 +400,29 @@ export const PROTOCOL_UPGRADE_AUTHORITY = '5xsibKwtiN6ruxsYrEyWVpV3KcwuzSPbQd1n2
  */
 export const HOOK_UPGRADE_AUTHORITIES: readonly string[] = [STUDIO_UPGRADE_AUTHORITY, PROTOCOL_UPGRADE_AUTHORITY];
 
+/** The one sentence the site gives a config whose hook someone outside Bordrless can upgrade. */
+export const HOOK_AUTHORITY_PROBLEM = 'This config’s hook can be upgraded by someone outside Bordrless, so it can’t launch here.';
+
+/** The error code the backend refuses such a config with (`POST /v1/launch/prepare`). */
+export const HOOK_AUTHORITY_CODE = 'hook_upgrade_authority';
+
+/** The Solana CLI command that makes a deployed hook immutable (signed by its current upgrade authority): the way a hook built outside Studio can launch. */
+export const hookFinalCommand = (program = '<PROGRAM_ID>'): string => `solana program set-upgrade-authority ${program} --final`;
+
+/**
+ * The launch program's rule for a config's own hook (`create_config`, docs/hooks-v2.md §5.8), on its
+ * upgrade info: accepted when nobody can upgrade it (`upgradeable: false`), or when its upgrade
+ * authority is one of `HOOK_UPGRADE_AUTHORITIES` (Bordrless Studio's key or the protocol's). Only a
+ * hook some other key is known to be able to upgrade is refused: one whose upgrade info could not be
+ * read is not (the launch program checked it when the config was made; the SDK's
+ * `hookAuthorityProblem` and the marketplace watch read it the same way). A config without a hook
+ * (`customHook` null: the launchpad's and the kit's own programs) passes.
+ */
+export function hookAuthorityAccepted(customHook: string | null, hook: { upgradeAuthority: string | null; upgradeable: boolean | null } | null): boolean {
+  if (customHook === null || hook === null || hook.upgradeable !== true || hook.upgradeAuthority === null) return true;
+  return HOOK_UPGRADE_AUTHORITIES.includes(hook.upgradeAuthority);
+}
+
 /** `bordrless_launch::constants::MAX_AUTHOR_SHARE_BPS`: half the creator fee, the most the program lets a listed config pay its author. */
 export const MAX_AUTHOR_SHARE_BPS = 5_000;
 /**
@@ -395,3 +450,101 @@ export const STUDIO_STARTERS: readonly { id: string; name: string; blurb: string
   { id: 'sell-tax', name: 'Sell tax to a wallet', blurb: 'A cut of every sell sent to a wallet you choose; buys and transfers pass free.' },
   { id: 'cooldown', name: 'Transfer cooldown', blurb: 'A holding that received tokens cannot send them on for a while, stamped in its hook data.' },
 ];
+
+// ---- the hook's flags, read from its source ---------------------------------------------------------
+
+/** Comments, string and char literals blanked (newlines kept), so only code is read. */
+function codeOnly(src: string): string {
+  let out = '';
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i] as string;
+    const n = src[i + 1];
+    if (c === '/' && n === '/') {
+      while (i < src.length && src[i] !== '\n') i += 1;
+    } else if (c === '/' && n === '*') {
+      let depth = 1;
+      i += 2;
+      while (i < src.length && depth > 0) {
+        if (src[i] === '/' && src[i + 1] === '*') (depth += 1), (i += 2);
+        else if (src[i] === '*' && src[i + 1] === '/') (depth -= 1), (i += 2);
+        else {
+          if (src[i] === '\n') out += '\n';
+          i += 1;
+        }
+      }
+    } else if (c === 'r' && (n === '"' || n === '#') && !/[A-Za-z0-9_]/.test(src[i - 1] ?? '')) {
+      let j = i + 1;
+      let hashes = 0;
+      while (src[j] === '#') (hashes += 1), (j += 1);
+      if (src[j] !== '"') {
+        out += c;
+        i += 1;
+        continue;
+      }
+      const end = '"' + '#'.repeat(hashes);
+      const close = src.indexOf(end, j + 1);
+      i = close < 0 ? src.length : close + end.length;
+      out += ' ';
+    } else if (c === '"') {
+      i += 1;
+      while (i < src.length && src[i] !== '"') i += src[i] === '\\' ? 2 : 1;
+      i += 1;
+      out += ' ';
+    } else {
+      out += c;
+      i += 1;
+    }
+  }
+  return out;
+}
+
+/** A function's body (between its braces), or null when it isn't there. */
+function bodyOf(code: string, name: string): string | null {
+  const m = new RegExp(`\\bfn\\s+${name}\\s*\\(`).exec(code);
+  if (!m) return null;
+  const open = code.indexOf('{', m.index);
+  if (open < 0) return null;
+  let depth = 0;
+  for (let k = open; k < code.length; k += 1) {
+    if (code[k] === '{') depth += 1;
+    else if (code[k] === '}') {
+      depth -= 1;
+      if (depth === 0) return code.slice(open + 1, k);
+    }
+  }
+  return null;
+}
+
+/** The Studio template's untouched callbacks: a callback left like this does nothing, so it isn't subscribed. */
+const STUB_BODIES = new Set(['check_call(&ctx,&args)?;Ok(HookReturn::default())', 'check_call(&ctx,&args)']);
+
+const CALLBACK_FLAGS: readonly [string, number][] = [
+  ['before_transfer', HOOK_FLAG_BITS.BEFORE_TRANSFER],
+  ['after_transfer', HOOK_FLAG_BITS.AFTER_TRANSFER],
+  ['before_mint', HOOK_FLAG_BITS.BEFORE_MINT],
+  ['after_mint', HOOK_FLAG_BITS.AFTER_MINT],
+  ['before_burn', HOOK_FLAG_BITS.BEFORE_BURN],
+  ['after_burn', HOOK_FLAG_BITS.AFTER_BURN],
+];
+
+/**
+ * The token hook flags a Studio hook needs, read from its own source (never chosen by hand): each
+ * callback whose body the author changed from the template's stub; cuts (TRANSFER_RETURNS_DELTA)
+ * when before_transfer runs and the code builds a `Delta` or fills `deltas`; hook data
+ * (WRITES_HOOK_DATA) when the code sets a holding's `source_hook_data`/`destination_hook_data`
+ * (reading `args.…_hook_data` needs no flag). It leans to including a bit: a flag the code doesn't
+ * use is harmless, a missing one makes the token program refuse the hook's answer. 0: the hook does
+ * nothing yet.
+ */
+export function detectHookFlags(files: readonly { path: string; content: string }[]): number {
+  const code = files.filter((f) => f.path.endsWith('.rs')).map((f) => codeOnly(f.content)).join('\n');
+  let flags = 0;
+  for (const [name, bit] of CALLBACK_FLAGS) {
+    const body = bodyOf(code, name);
+    if (body !== null && !STUB_BODIES.has(body.replace(/\s+/g, ''))) flags |= bit;
+  }
+  if (flags & HOOK_FLAG_BITS.BEFORE_TRANSFER && (/\bDelta\s*\{/.test(code) || /\bdeltas\s*:/.test(code) || /\.deltas\b/.test(code))) flags |= HOOK_FLAG_BITS.TRANSFER_RETURNS_DELTA;
+  if (flags && /(?<!args\.)\b(source|destination)_hook_data\b/.test(code)) flags |= HOOK_FLAG_BITS.WRITES_HOOK_DATA;
+  return flags;
+}

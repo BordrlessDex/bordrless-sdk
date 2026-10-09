@@ -132,6 +132,28 @@ A companion launch needs the protocol lookup table's 22 addresses (`companionRea
 design, its limits and what it refuses:
 [docs/companions.md](https://github.com/BordrlessDex/bordrless-programs/blob/main/docs/companions.md).
 
+## Lottery coins: companion v2 (0.6.0 and later)
+
+A companion can now run a game. A share of every fee claim fills a pot held by the companion; each
+round a draw (ORAO VRF) picks a holder, weighted by the tokens they hold, and the companion pays
+the prize as SOL. The coin's token hook is Bordrless's lottery hook
+(`HqFWsCBQ416DAfevJ9TspyT5yXGGoYTCpcreiGkCgWcr`), which gives holders ticket ranges each round.
+
+```ts
+import { companion, lotteryHook, findWinningHolding, fetchSeedSlot } from '@bordrless/sdk';
+
+// before the launch, signed by the mint: companion.create → lotteryHook.prepare → companion.createGame
+lotteryHook.enter(mint, owner);                       // a holder registers their tickets for the round
+companion.draw(cranker, mint, hook, round, await fetchSeedSlot(connection), treasury, paidSeed);
+companion.reveal(cranker, mint, hook, request);       // once ORAO answers
+companion.claimPrize(cranker, mint, hook, attempt, winnerHolding);
+```
+
+Every step is permissionless. Until a game's hook is audited, its pot is capped at 10 SOL; a game
+the protocol blocks has its pot bought back and burned, paying no one. The draw is verifiable, not
+"provably fair": ORAO's signers are trusted to answer. The design, the keeper's loop and every rule:
+[docs/games.md](https://github.com/BordrlessDex/bordrless-programs/blob/main/docs/games.md).
+
 ## Where to read more
 
 - The SDK page, with the hook interface and the examples: https://bordrless.app/sdk

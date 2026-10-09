@@ -28,8 +28,23 @@ const PROGRAM_OF: ReadonlyMap<string, ProgramName> = new Map([
   [a.HALF_LIFE_PROGRAM.toBase58(), 'halfLife'],
 ]);
 
-/** The SDK's name of a Bordrless program id; null for any other program. */
+/** Every program the SDK has a coder for, by id: the indexed ones above, the companion and the lottery hook. */
+const ANY_PROGRAM_OF: ReadonlyMap<string, ProgramName> = new Map<string, ProgramName>([...PROGRAM_OF, [a.COMPANION_PROGRAM.toBase58(), 'companion'], [a.LOTTERY_HOOK_PROGRAM.toBase58(), 'lotteryHook']]);
+
+/** The SDK's name of a Bordrless program id whose events the indexer reads (`INDEXED_EVENT_PROGRAMS`); null for any other program. */
 export const programNameOf = (programId: string | PublicKey): ProgramName | null => PROGRAM_OF.get(typeof programId === 'string' ? programId : programId.toBase58()) ?? null;
+/** The SDK's name of any Bordrless program id it has a coder for, the companion and the lottery hook included; null for any other program. */
+export const anyProgramNameOf = (programId: string | PublicKey): ProgramName | null => ANY_PROGRAM_OF.get(typeof programId === 'string' ? programId : programId.toBase58()) ?? null;
+
+/**
+ * The programs whose events `eventsOf` reads unless told otherwise: what the indexer stores, keyed
+ * by ordinal. The companion's and the lottery hook's events (`GAME_EVENT_PROGRAMS`: a game's draw
+ * history, `DrawCommitted` … `PrizePaid`, `RolledOver`, `Entered`) are read when asked for, so the
+ * ordinals of a transaction the indexer already stored never change.
+ */
+export const INDEXED_EVENT_PROGRAMS: readonly ProgramName[] = [...PROGRAM_OF.values()];
+/** The companion and the lottery hook: pass `[...INDEXED_EVENT_PROGRAMS, ...GAME_EVENT_PROGRAMS]` to `eventsOf` to read a game's events too. */
+export const GAME_EVENT_PROGRAMS: readonly ProgramName[] = ['companion', 'lotteryHook'];
 
 export interface DecodedEvent {
   ordinal: number;
@@ -78,15 +93,16 @@ export function decodeEventPayload(program: ProgramName, payload: Buffer): { nam
  * Every event of a transaction, from its inner instructions, in order. `accountKeys` is the full key
  * list (static, then lookup-table writable, then readonly: v0 transactions load the event authorities
  * from the protocol table); `inner` is every inner instruction in execution order; `decodeData`
- * turns the RPC's base58 data into bytes.
+ * turns the RPC's base58 data into bytes; `programs` are the programs whose events are read
+ * (`INDEXED_EVENT_PROGRAMS` by default), and ordinals count only those.
  */
-export function eventsOf(accountKeys: string[], inner: RawInnerInstruction[], decodeData: (data: string) => Buffer): DecodedEvent[] {
+export function eventsOf(accountKeys: string[], inner: RawInnerInstruction[], decodeData: (data: string) => Buffer, programs: readonly ProgramName[] = INDEXED_EVENT_PROGRAMS): DecodedEvent[] {
   const out: DecodedEvent[] = [];
   for (const ix of inner) {
     const programId = accountKeys[ix.programIdIndex];
     if (!programId) continue;
-    const program = PROGRAM_OF.get(programId);
-    if (!program) continue;
+    const program = ANY_PROGRAM_OF.get(programId);
+    if (!program || !programs.includes(program)) continue;
     const bytes = decodeData(ix.data);
     if (bytes.length < 16 || !bytes.subarray(0, 8).equals(EVENT_IX_TAG)) continue;
     // A real event CPI has the event authority as its only account.

@@ -16,6 +16,26 @@ export const PROGRAM_IDS = {
   halfLife: '53SpmtkdPWQ63mWoDeXk8P9tuwiT4ed2Wx4fwfy5NSF8',
   /** Companions (programs/bordrless_companion, docs/companions.md): a launch whose creator is a program, its fees bought back, shared with holders or vested by code. */
   companion: '6ZUM1gWBH9hBBNoJoaVAGwSftyZ6CUda6vUZTW9MsJuo',
+  /**
+   * The lottery hook (programs/lottery_hook, docs/companions.md "Games"): a lottery coin's token
+   * hook under the game ticket standard; its companion holds the pot and draws. Not deployed yet
+   * (2026-10-08): companion v2 and this hook go live together, after their audit.
+   */
+  lotteryHook: 'HqFWsCBQ416DAfevJ9TspyT5yXGGoYTCpcreiGkCgWcr',
+} as const;
+
+/**
+ * The lottery hook's fixed facts (programs/lottery_hook/README.md): the flags a `LaunchConfig`
+ * names for it (`BEFORE_TRANSFER | BEFORE_BURN | WRITES_HOOK_DATA`, exactly what a companion game
+ * launch accepts), the token program's signer of its callbacks (`["hook-authority", hook]` under
+ * the token program) and its own `["hook-authority"]`, which signs `write_hook_data` in `enter`.
+ */
+export const LOTTERY_HOOK = {
+  program: PROGRAM_IDS.lotteryHook,
+  flags: 145,
+  tokenHookSigner: 'CFyuaxvKmpgnSMCoNqDKCcwxnTUeW8Mm1go1t3UMsvLH',
+  hookAuthority: '6oZ9LkAfgmhmPYjXj3okjYK5sderddEo8fp8MR4H6Gx1',
+  readme: 'https://github.com/BordrlessDex/bordrless-programs/tree/main/programs/lottery_hook',
 } as const;
 
 /**

@@ -11,7 +11,7 @@ import anchor from '@anchor-lang/core';
 import type { PublicKey } from '@solana/web3.js';
 import * as a from './addresses.ts';
 import { IDL, type ProgramName } from './coders.ts';
-import { programNameOf } from './events.ts';
+import { anyProgramNameOf } from './events.ts';
 
 const { LangErrorCode, LangErrorMessage } = anchor;
 
@@ -36,6 +36,7 @@ export const PROGRAM_ERRORS: Readonly<Record<ProgramName, ReadonlyMap<number, Pr
   taxHook: table(IDL.taxHook),
   halfLife: table(IDL.halfLife),
   companion: table(IDL.companion),
+  lotteryHook: table(IDL.lotteryHook),
 };
 
 const ANCHOR_ERRORS: ReadonlyMap<number, ProgramErrorEntry> = new Map(
@@ -95,6 +96,19 @@ const EXPLANATIONS: Partial<Record<ProgramName, Readonly<Record<string, string>>
     WrongHookSigner: 'The token program’s signer for this hook is wrong. Refresh and try again.',
     InvalidLabel: 'A config’s label is at most 32 bytes.',
   },
+  companion: {
+    PotTooSmall: 'The pot is below the game’s minimum: the draw waits for more fees.',
+    RoundNotOver: 'Only the round that just ended can be drawn, once.',
+    DrawPending: 'A draw is already in progress.',
+    OracleNotFulfilled: 'The randomness oracle has not answered yet. Try again in a few seconds.',
+    AttemptClosed: 'This attempt’s claim window is not open.',
+    NotTheWinner: 'This holding does not hold the drawn ticket.',
+    NotEligible: 'This owner can’t win: only wallets hold tickets, never the launch, its pool or the companion’s creator address.',
+    DrawLate: 'Too late: a draw’s claims end with the round after the drawn one.',
+    OracleUnanswered: 'The oracle has not answered the pot’s last paid request: the pot pays for a new one only after a backoff.',
+    GameHookNotAccepted: 'A game’s hook must be Bordrless’s lottery hook, or one the protocol has vetted, and not blocked.',
+    StaleSeed: 'The draw landed too long after the slot it was built from (or the oracle had already answered that slot’s seed). Build it again from the newest slot.',
+  },
   kit: {
     MaxWalletExceeded: 'This would take the receiving wallet above max wallet. Buy less, or wait for graduation, when max wallet lifts.',
     CreatorLocked: "The creator's wallet is locked: it can't sell, send or add liquidity until the creator wallet lock ends.",
@@ -129,12 +143,12 @@ const sentence = (text: string): string => {
   return /[.!?]$/.test(capital) ? capital : `${capital}.`;
 };
 
-const PROGRAM_IDS_BY_NAME: Readonly<Record<ProgramName, PublicKey>> = { token: a.TOKEN_PROGRAM, swap: a.SWAP_PROGRAM, bridge: a.BRIDGE_PROGRAM, launch: a.LAUNCH_PROGRAM, kit: a.KIT_PROGRAM, taxHook: a.TAX_HOOK_PROGRAM, halfLife: a.HALF_LIFE_PROGRAM, companion: a.COMPANION_PROGRAM };
+const PROGRAM_IDS_BY_NAME: Readonly<Record<ProgramName, PublicKey>> = { token: a.TOKEN_PROGRAM, swap: a.SWAP_PROGRAM, bridge: a.BRIDGE_PROGRAM, launch: a.LAUNCH_PROGRAM, kit: a.KIT_PROGRAM, taxHook: a.TAX_HOOK_PROGRAM, halfLife: a.HALF_LIFE_PROGRAM, companion: a.COMPANION_PROGRAM, lotteryHook: a.LOTTERY_HOOK_PROGRAM };
 
 /** The error `code` of `program` (its SDK name or its id), explained. */
 export function explainProgramError(program: ProgramName | string | PublicKey, code: number): ProgramErrorInfo {
   const byName = typeof program === 'string' && Object.hasOwn(PROGRAM_IDS_BY_NAME, program);
-  const name: ProgramName | null = byName ? (program as ProgramName) : programNameOf(program);
+  const name: ProgramName | null = byName ? (program as ProgramName) : anyProgramNameOf(program);
   const programId = byName ? PROGRAM_IDS_BY_NAME[program as ProgramName].toBase58() : typeof program === 'string' ? program : program.toBase58();
   const entry = code >= 6000 ? (name ? PROGRAM_ERRORS[name].get(code) : undefined) : ANCHOR_ERRORS.get(code);
   if (!entry) return { program: name, programId, code, name: null, message: null, explanation: `The transaction failed with error ${code}${name ? ` in the ${name} program` : ''}.` };
@@ -167,7 +181,7 @@ export function explainFailure(logs: readonly string[], err?: unknown): ProgramE
   const failed = failedProgram(logs);
   if (failed) {
     if (failed.code !== null) return explainProgramError(failed.programId, failed.code);
-    const program = programNameOf(failed.programId);
+    const program = anyProgramNameOf(failed.programId);
     return { program, programId: failed.programId, code: null, name: null, message: failed.message, explanation: sentence(failed.message) };
   }
   const custom = (err as { InstructionError?: [number, { Custom?: number } | string] } | null | undefined)?.InstructionError?.[1];

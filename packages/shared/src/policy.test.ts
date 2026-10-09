@@ -3,6 +3,10 @@ import type { LaunchRulesInput } from './api.ts';
 import {
   BURN_CHOICES_BPS,
   CLAIM_DUST_LAMPORTS,
+  COMPANION_DEFAULT_VEST_DAYS,
+  COMPANION_SPLITS,
+  COMPANION_TEMPLATE_LIST,
+  COMPANION_VEST_CHOICES_DAYS,
   CREATOR_FEE_CHOICES_BPS,
   CREATOR_LOCK_CHOICES_DAYS,
   CURVE_BPS,
@@ -29,6 +33,16 @@ import {
   buyGraduates,
   buyLockedUntil,
   checkLaunchRules,
+  COMPANION_MAX_VEST_DAYS,
+  LAUNCHER_SPLIT,
+  companionPaysHolders,
+  companionRequestSplit,
+  companionSplitProblem,
+  companionTakesFirstBuy,
+  companionTemplateOf,
+  isLauncherSplit,
+  splitPaysHolders,
+  splitTakesFirstBuy,
   compoundFeeBps,
   creatorAndHolderFees,
   curveImpactBps,
@@ -1019,5 +1033,60 @@ describe('Half-Life', () => {
     expect(HALF_LIFE.program).toBe(PROGRAM_IDS.halfLife);
     expect(HALF_LIFE.flags).toBe(TOKEN_HOOK_FLAGS.BEFORE_TRANSFER | TOKEN_HOOK_FLAGS.TRANSFER_RETURNS_DELTA | TOKEN_HOOK_FLAGS.WRITES_HOOK_DATA);
     expect(RULE_PATHS.map((p) => p.name)).toContain('Half-Life');
+  });
+});
+
+describe('companion templates', () => {
+  it('split every creator fee claim in full, in the order the form offers them', () => {
+    expect(COMPANION_TEMPLATE_LIST).toEqual(['buysItself', 'rugProofDev', 'buybackAndReward']);
+    for (const t of COMPANION_TEMPLATE_LIST) {
+      const s = COMPANION_SPLITS[t];
+      expect(s.buybackBps + s.holdersBps + s.beneficiaryBps, t).toBe(10_000);
+    }
+    expect(COMPANION_TEMPLATE_LIST.filter(companionPaysHolders)).toEqual(['rugProofDev', 'buybackAndReward']);
+    // The token that buys itself has no dev at all: no first buy.
+    expect(COMPANION_TEMPLATE_LIST.filter(companionTakesFirstBuy)).toEqual(['rugProofDev', 'buybackAndReward']);
+    expect(COMPANION_VEST_CHOICES_DAYS).toContain(COMPANION_DEFAULT_VEST_DAYS);
+  });
+
+  it('names the template of a split, and none for any other', () => {
+    expect(companionTemplateOf({ buybackBps: 0, holdersBps: 5_000, beneficiaryBps: 5_000 })).toBe('rugProofDev');
+    expect(companionTemplateOf({ buybackBps: 10_000, holdersBps: 0, beneficiaryBps: 0 })).toBe('buysItself');
+    expect(companionTemplateOf({ buybackBps: 2_500, holdersBps: 2_500, beneficiaryBps: 5_000 })).toBeNull();
+  });
+});
+
+describe('a custom split of the creator fee', () => {
+  const rewards = { ...NO_RULES, holderFeeBuyBps: 50, holderFeeSellBps: 50 };
+  const split = (buybackBps: number, holdersBps: number, beneficiaryBps: number) => ({ buybackBps, holdersBps, beneficiaryBps });
+
+  it('reads a request’s split, or a template’s, and nothing malformed', () => {
+    expect(companionRequestSplit({ split: split(5_000, 2_000, 3_000), vestDays: 7 })).toEqual(split(5_000, 2_000, 3_000));
+    expect(companionRequestSplit({ template: 'buybackAndReward' })).toEqual(COMPANION_SPLITS.buybackAndReward);
+    // A split wins over a template; a split with a bad share is not read as the template.
+    expect(companionRequestSplit({ template: 'buysItself', split: split(0, 0, 10_000) })).toEqual(LAUNCHER_SPLIT);
+    for (const bad of [null, 'buysItself', {}, { template: 'nope' }, { split: null }, { split: split(5_000.5, 0, 4_999.5) }, { split: split(-1, 0, 10_001) }, { split: { buybackBps: '5000', holdersBps: 0, beneficiaryBps: 5_000 } }, { split: split(20_000, 0, 0) }]) {
+      expect(companionRequestSplit(bad), JSON.stringify(bad)).toBeNull();
+    }
+  });
+
+  it('refuses what the program refuses, in plain sentences, and takes every split that adds up', () => {
+    expect(companionSplitProblem(split(5_000, 5_000, 0), rewards, 100)).toBeNull();
+    expect(companionSplitProblem(split(7_000, 0, 3_000), NO_RULES, 50)).toBeNull();
+    expect(companionSplitProblem(LAUNCHER_SPLIT, NO_RULES, 100)).toBeNull();
+    expect(companionSplitProblem(split(5_000, 4_000, 0), rewards, 100)).toMatch(/add up to 100%/);
+    expect(companionSplitProblem(split(5_000, 5_000, 1), rewards, 100)).toMatch(/add up to 100%/);
+    expect(companionSplitProblem(split(5_000.5, 4_999.5, 0), rewards, 100)).toMatch(/whole number/);
+    expect(companionSplitProblem(split(10_000, 0, 0), { ...NO_RULES, creatorLockDays: 30 }, 100)).toMatch(/creator wallet lock/);
+    expect(companionSplitProblem(split(10_000, 0, 0), NO_RULES, 0)).toMatch(/no creator fee/);
+    expect(companionSplitProblem(split(0, 10_000, 0), NO_RULES, 100)).toBe('A share of the creator fee for holders needs holder rewards on.');
+    expect(companionSplitProblem(split(0, 10_000, 0), { ...NO_RULES, holderFeeSellBps: 100 }, 100)).toBeNull();
+  });
+
+  it('knows a split with a dev and one that pays holders', () => {
+    expect([split(10_000, 0, 0), split(9_000, 0, 1_000), split(0, 10_000, 0)].map(splitTakesFirstBuy)).toEqual([false, true, true]);
+    expect([split(10_000, 0, 0), split(9_000, 1_000, 0)].map(splitPaysHolders)).toEqual([false, true]);
+    expect([LAUNCHER_SPLIT, split(0, 1, 9_999)].map(isLauncherSplit)).toEqual([true, false]);
+    expect(COMPANION_DEFAULT_VEST_DAYS).toBeLessThanOrEqual(COMPANION_MAX_VEST_DAYS);
   });
 });

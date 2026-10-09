@@ -15,6 +15,8 @@ export const KIT_PROGRAM = new PublicKey(PROGRAM_IDS.kit);
 export const TAX_HOOK_PROGRAM = new PublicKey(PROGRAM_IDS.taxHook);
 export const HALF_LIFE_PROGRAM = new PublicKey(PROGRAM_IDS.halfLife);
 export const COMPANION_PROGRAM = new PublicKey(PROGRAM_IDS.companion);
+/** The lottery hook (`programs/lottery_hook`): a lottery coin's token hook under the game ticket standard. */
+export const LOTTERY_HOOK_PROGRAM = new PublicKey(PROGRAM_IDS.lotteryHook);
 export const SYSTEM_PROGRAM = new PublicKey(SYSTEM_PROGRAM_ID);
 export const SPL_TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 export const SPL_TOKEN_2022_PROGRAM = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
@@ -185,3 +187,41 @@ export const companionAddress = (mint: PublicKey): PublicKey => pda([enc('compan
 /** The launch's creator when it has a companion: `PDA(["creator", mint])`, system-owned, signed for only by the companion. */
 export const companionCreatorAddress = (mint: PublicKey): PublicKey => pda([enc('creator'), mint.toBuffer()], COMPANION_PROGRAM);
 export const COMPANION_EVENT_AUTHORITY = pda([enc('__event_authority')], COMPANION_PROGRAM);
+
+// ---- Games (companion v2, docs/companions.md "Games") ------------------------------------------------
+
+/** A companion's game: `PDA(["game", mint])` under the companion. */
+export const gameAddress = (mint: PublicKey): PublicKey => pda([enc('game'), mint.toBuffer()], COMPANION_PROGRAM);
+/** What the protocol says of a game hook (audited, pot cap, blocked): `PDA(["hook-status", hook])` under the companion. It need not exist. */
+export const hookStatusAddress = (hook: PublicKey): PublicKey => cached(`hs:${hook.toBase58()}`, () => pda([enc('hook-status'), hook.toBuffer()], COMPANION_PROGRAM));
+/** The payer of a game's oracle requests: `PDA(["oracle", mint])` under the companion, system-owned (ORAO's refunds land there, never with the creator address). */
+export const oraclePayerAddress = (mint: PublicKey): PublicKey => pda([enc('oracle'), mint.toBuffer()], COMPANION_PROGRAM);
+/** The companion's ProgramData: its upgrade authority (the protocol's) writes hook statuses. */
+export const COMPANION_PROGRAM_DATA = programDataAddress(COMPANION_PROGRAM);
+/** A game hook's state for a mint (game ticket standard v1): `PDA(["state", mint])` under the hook, its header first. */
+export const gameStateAddress = (hook: PublicKey, mint: PublicKey): PublicKey => pda([enc('state'), mint.toBuffer()], hook);
+/** The lottery hook's state for a mint. */
+export const lotteryStateAddress = (mint: PublicKey): PublicKey => gameStateAddress(LOTTERY_HOOK_PROGRAM, mint);
+/** The lottery hook's registry for a mint: `["bordrless-hook-accounts", mint]` under the hook. */
+export const lotteryRegistryAddress = (mint: PublicKey): PublicKey => registryAddress(LOTTERY_HOOK_PROGRAM, mint);
+/** The token program's signer of the lottery hook's callbacks (`CFyuax…`). */
+export const TOKEN_HOOK_SIGNER_LOTTERY = tokenHookSigner(LOTTERY_HOOK_PROGRAM);
+/** The lottery hook's `["hook-authority"]` (`6oZ9Lk…`, bump 255): it signs the token program's `write_hook_data` in `enter`. */
+export const LOTTERY_HOOK_AUTHORITY = hookAuthority(LOTTERY_HOOK_PROGRAM);
+export const LOTTERY_EVENT_AUTHORITY = eventAuthority(LOTTERY_HOOK_PROGRAM);
+/** The incinerator: lamports sent to it are burned (where `burn_stranded` sends a blocked game's stranded buyback). */
+export const INCINERATOR = new PublicKey('1nc1nerator11111111111111111111111111111111');
+/** The slot hashes sysvar: `draw` makes its seed from the parent slot's hash. */
+export const SLOT_HASHES_SYSVAR = new PublicKey('SysvarS1otHashes111111111111111111111111111');
+
+// ---- ORAO VRF (the games' randomness; docs/companions.md "Games") --------------------------------------
+
+/** ORAO VRF, classic (not the callback variant `VRFCBe…`): the one oracle the companion calls. */
+export const ORAO_VRF_PROGRAM = new PublicKey('VRFzZoJdhFWL8rkvu87LpKM3RbcVezpMEc6X5GVDr7y');
+/** ORAO's network state, `PDA(["orao-vrf-network-configuration"])` under ORAO: its fee and treasury (`decodeOraoNetworkState`). */
+export const ORAO_NETWORK_STATE = new PublicKey('5ER1oENnV4srxYdAynUfRzWeQCPQaqMiAp4VqyMbSqnK');
+/** ORAO's request account for `seed`: `PDA(["orao-vrf-randomness-request", seed])` under ORAO, where the randomness lands. */
+export const oraoRequestAddress = (seed: Uint8Array): PublicKey => {
+  if (seed.length !== 32) throw new RangeError(`a seed is 32 bytes, not ${seed.length}`);
+  return pda([enc('orao-vrf-randomness-request'), Buffer.from(seed)], ORAO_VRF_PROGRAM);
+};

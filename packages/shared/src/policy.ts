@@ -6,7 +6,7 @@
  * `programs/tests/vectors/launch-fees.json`, which the Rust tests render from the reference the
  * programs are held to, and requires exact equality.
  */
-import type { LaunchRules, LaunchRulesInput, Side } from './api.ts';
+import type { CompanionSplitBps, CompanionTemplate, LaunchRules, LaunchRulesInput, Side } from './api.ts';
 import { HOOK_DATA_LEN, TOKEN_HOOK_FLAGS } from './programs.ts';
 
 export const BPS = 10_000n;
@@ -457,6 +457,91 @@ export const DEFAULT_RULE_PRESET: RulePresetName = 'Plain';
 /** The preset of this name. */
 export function presetNamed(name: RulePresetName): RulePreset {
   return RULE_PRESETS.find((p) => p.name === name) ?? RULE_PRESETS[0]!;
+}
+
+// ---- companions (docs/companions.md) -----------------------------------------------------------------
+
+/**
+ * The companion templates' splits of every creator fee claim: the one list the launch form, the
+ * token page and the backend read (`COMPANION_TEMPLATES` in the SDK is this object).
+ */
+export const COMPANION_SPLITS: Readonly<Record<CompanionTemplate, Readonly<CompanionSplitBps>>> = {
+  /** No dev at all: every creator fee buys the token back and burns it. */
+  buysItself: { buybackBps: 10_000, holdersBps: 0, beneficiaryBps: 0 },
+  /** Half to holders through the kit, half to the launcher, whose first buy vests (holder rewards needed). */
+  rugProofDev: { buybackBps: 0, holdersBps: 5_000, beneficiaryBps: 5_000 },
+  /** Half bought back and burned, half to holders (holder rewards needed). */
+  buybackAndReward: { buybackBps: 5_000, holdersBps: 5_000, beneficiaryBps: 0 },
+};
+
+/** The templates in the order the launch form offers them. */
+export const COMPANION_TEMPLATE_LIST: readonly CompanionTemplate[] = ['buysItself', 'rugProofDev', 'buybackAndReward'];
+
+/** How long the launcher's first buy vests over, as the launch form offers it (days), and the default (the backend's too). */
+export const COMPANION_VEST_CHOICES_DAYS = [7, 30, 90] as const;
+export const COMPANION_DEFAULT_VEST_DAYS = 30;
+
+/** The longest a first buy may vest over, days (the program's limit is a year). */
+export const COMPANION_MAX_VEST_DAYS = 365;
+
+/** The whole creator fee to the launcher: an ordinary launch, with no companion. */
+export const LAUNCHER_SPLIT: Readonly<CompanionSplitBps> = { buybackBps: 0, holdersBps: 0, beneficiaryBps: 10_000 };
+
+/** Whether a split is the whole fee to the launcher (no companion needed). */
+export const isLauncherSplit = (s: CompanionSplitBps): boolean => s.buybackBps === 0 && s.holdersBps === 0 && s.beneficiaryBps === 10_000;
+
+/** A split with a share for holders needs holder rewards on. */
+export const splitPaysHolders = (s: CompanionSplitBps): boolean => s.holdersBps > 0;
+
+/** Whether a split takes a first buy: every fee bought back and burned means no dev at all. */
+export const splitTakesFirstBuy = (s: CompanionSplitBps): boolean => s.buybackBps < 10_000;
+
+/** A template that pays holders needs holder rewards on. */
+export const companionPaysHolders = (template: CompanionTemplate): boolean => splitPaysHolders(COMPANION_SPLITS[template]);
+
+/** Whether a template takes a first buy: the token that buys itself has no dev at all. */
+export const companionTakesFirstBuy = (template: CompanionTemplate): boolean => splitTakesFirstBuy(COMPANION_SPLITS[template]);
+
+const isShare = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 10_000;
+
+/**
+ * The split a launch request's `companion` names: its own `split` (each share a whole number of
+ * basis points, 0 to 10,000; their sum is checked by `companionSplitProblem`), or a template's;
+ * `null` when it names neither (a malformed request).
+ */
+export function companionRequestSplit(raw: unknown): CompanionSplitBps | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (r.split !== undefined) {
+    if (typeof r.split !== 'object' || r.split === null) return null;
+    const s = r.split as Record<string, unknown>;
+    if (!isShare(s.buybackBps) || !isShare(s.holdersBps) || !isShare(s.beneficiaryBps)) return null;
+    return { buybackBps: s.buybackBps, holdersBps: s.holdersBps, beneficiaryBps: s.beneficiaryBps };
+  }
+  if (typeof r.template === 'string' && Object.hasOwn(COMPANION_SPLITS, r.template)) return { ...COMPANION_SPLITS[r.template as CompanionTemplate] };
+  return null;
+}
+
+/**
+ * Why a companion with this split can't run these rules, in the words the launch form and the
+ * backend use (`companion_rules`); null when it can. The program's own checks (`BadSplit`,
+ * `CreatorLockUnsupported`, `HolderRewardsOff`), and a creator fee for it to run.
+ */
+export function companionSplitProblem(split: CompanionSplitBps, rules: Pick<LaunchRulesInput, 'holderFeeBuyBps' | 'holderFeeSellBps' | 'creatorLockDays'>, creatorFeeBps: number): string | null {
+  if (![split.buybackBps, split.holdersBps, split.beneficiaryBps].every(isShare)) return 'Each share of the creator fee is a whole number of basis points, 0 to 10,000.';
+  if (split.buybackBps + split.holdersBps + split.beneficiaryBps !== 10_000) return 'The creator fee’s shares must add up to 100% (10,000 basis points).';
+  if (rules.creatorLockDays > 0) return 'A creator fee run by a program can’t come with the creator wallet lock: the program vests your first buy instead.';
+  if (creatorFeeBps === 0) return 'There is no creator fee for a program to run: set one.';
+  if (splitPaysHolders(split) && !rewardsOn(rules)) return 'A share of the creator fee for holders needs holder rewards on.';
+  return null;
+}
+
+/** The template whose split this is, or null for any other split. */
+export function companionTemplateOf(split: CompanionSplitBps): CompanionTemplate | null {
+  return COMPANION_TEMPLATE_LIST.find((t) => {
+    const s = COMPANION_SPLITS[t];
+    return s.buybackBps === split.buybackBps && s.holdersBps === split.holdersBps && s.beneficiaryBps === split.beneficiaryBps;
+  }) ?? null;
 }
 
 /** Kit module bits (§4.2). */

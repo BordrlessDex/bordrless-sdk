@@ -2,13 +2,14 @@
  * Build your own (docs/hooks-v2.md §5.7, §5.8), read and checked the way `create_config` and
  * `create_launch` check it, before anything is signed: a `LaunchConfig` by its key (the rules
  * against the launch config's bounds, the creator fee, the custom hook's rules), a hook program
- * (deployed, none of the protocol's, who can upgrade it) and whether the hook has been prepared for
+ * (deployed, none of the protocol's, who can upgrade it: immutable, or only Bordrless Studio's key
+ * or the protocol's, as `create_config` requires) and whether the hook has been prepared for
  * a mint (its registry at `["bordrless-hook-accounts", mint]`). Every problem is one plain sentence,
  * the same the launch form shows. And the one-call way to make a config: a fresh keypair, the
  * instruction, and the key to paste.
  */
 import { Keypair, PublicKey, type AccountInfo, type Connection, type TransactionInstruction } from '@solana/web3.js';
-import { HOOK_UPGRADE_AUTHORITIES, PROGRAM_IDS, TOKEN_HOOK_FLAGS_ALL, checkLaunchRules, kitModules, type LaunchRulesInput } from '@bordrless/shared';
+import { HOOK_AUTHORITY_PROBLEM, HOOK_UPGRADE_AUTHORITIES, PROGRAM_IDS, TOKEN_HOOK_FLAGS_ALL, checkLaunchRules, hookAuthorityAccepted, kitModules, type LaunchRulesInput } from '@bordrless/shared';
 import { HALF_LIFE_PROGRAM, LAUNCH_CONFIG, LAUNCH_PROGRAM, TAX_HOOK_PROGRAM, programDataAddress, registryAddress, BPF_LOADER_UPGRADEABLE, SYSTEM_PROGRAM } from './addresses.ts';
 import { LAUNCH_CONFIG_LABEL_MAX, decodeLaunchConfig, decodeLaunchConfigAccount, launchRulesInputOf, type LaunchConfig, type LaunchConfigAccount, type LaunchRulesData } from './accounts.ts';
 import { MAX_CUSTOM_HOOK_EXTRAS, decodeHookAccountList, resolveCustomHookAccounts, type CustomHookAccounts, type HookAccountList } from './hooks.ts';
@@ -71,6 +72,15 @@ export async function fetchProgramUpgradeInfo(connection: Connection, program: P
   return programUpgradeInfoOf(p ?? null, d ?? null);
 }
 
+/**
+ * Whether the launch program accepts a config's own hook for who can upgrade it
+ * (`hookAuthorityAccepted` in @bordrless/shared): no hook, an immutable one, or one only Bordrless
+ * Studio's key or the protocol's can upgrade. Only a known outside authority is refused.
+ */
+export function hookAcceptedBy(hook: PublicKey | null, info: ProgramUpgradeInfo | null): boolean {
+  return hookAuthorityAccepted(hook?.toBase58() ?? null, info ? { upgradeAuthority: info.upgradeAuthority?.toBase58() ?? null, upgradeable: info.upgradeable } : null);
+}
+
 // ---- checking a config as the programs do ------------------------------------------------------------------
 
 /** The custom-hook rules of `create_config` and `create_launch` (§5.8), on what the program account shows; each sentence as the form prints it. */
@@ -114,6 +124,12 @@ export interface ConfigInspectionResult {
   problems: string[];
   /** The custom hook program's upgrade info; null without a hook. */
   hook: ProgramUpgradeInfo | null;
+  /**
+   * The launch program accepts the hook for who can upgrade it (`hookAcceptedBy`): immutable, or
+   * only Bordrless Studio's key or the protocol's. True without a hook. When false, `problems` holds
+   * `HOOK_AUTHORITY_PROBLEM` (unless the hook is not even deployed, which says so instead).
+   */
+  hookAccepted: boolean;
   /** With a hook and a mint: the hook's accounts resolved from its registry for the mint, or null when the hook has not been prepared for it. */
   hookAccounts: CustomHookAccounts | null;
   /** With a hook and a mint: whether the registry exists; null otherwise. */
@@ -128,8 +144,9 @@ export interface ConfigInspectionResult {
 /**
  * Reads a `LaunchConfig` by its key and checks it as `create_launch` would, now (the launch config's
  * bounds may have changed since it was made): two round trips at most. With `mint`, also whether a
- * custom hook has been prepared for that mint (its registry), and the hook's accounts. Null when no
- * `LaunchConfig` lives at the address.
+ * custom hook has been prepared for that mint (its registry), and the hook's accounts. A hook someone
+ * outside Bordrless can upgrade is a problem (`hookAccepted`). Null when no `LaunchConfig` lives at
+ * the address.
  */
 export async function inspectConfig(connection: Connection, address: PublicKey, mint: PublicKey | null = null): Promise<ConfigInspectionResult | null> {
   const [configInfo, launchConfigInfo] = await connection.getMultipleAccountsInfo([address, LAUNCH_CONFIG], 'confirmed');
@@ -152,19 +169,25 @@ export async function inspectConfig(connection: Connection, address: PublicKey, 
   let hook: ProgramUpgradeInfo | null = null;
   let hookAccounts: CustomHookAccounts | null = null;
   let registryReady: boolean | null = null;
+  let hookAccepted = true;
   const halfLife = config.customHook !== null && config.customHook.equals(HALF_LIFE_PROGRAM);
   if (config.customHook) {
     const keys = [config.customHook, programDataAddress(config.customHook), ...(mint ? [registryAddress(config.customHook, mint)] : [])];
     const [programInfo, programData, registryInfo] = await connection.getMultipleAccountsInfo(keys, 'confirmed');
     hook = programUpgradeInfoOf(programInfo ?? null, programData ?? null);
     problems.push(...customHookProblems(config.customHook, config.customHookFlags, config.rules, programInfo ?? null));
+    hookAccepted = hookAcceptedBy(config.customHook, hook);
+    // One sentence: a hook that is not deployed already says so.
+    if (!hookAccepted && hook.executable) problems.push(HOOK_AUTHORITY_PROBLEM);
     if (mint) {
       const list = registryInfo && registryInfo.owner.equals(config.customHook) ? decodeHookAccountList(registryInfo.data) : null;
       registryReady = list !== null;
       // Half-Life's registry is the same for every mint and its `prepare` is permissionless: the launch prepares it.
       if (!list && halfLife) hookAccounts = halfLifeIx.accounts(mint);
-      else if (!list) problems.push('Prepare the hook for this mint first: its registry at ["bordrless-hook-accounts", mint] does not exist yet.');
-      else {
+      else if (!list) {
+        // A hook the site refuses can't launch, prepared or not: its one sentence says so, not this one.
+        if (hookAccepted) problems.push('Prepare the hook for this mint first: its registry at ["bordrless-hook-accounts", mint] does not exist yet.');
+      } else {
         const long = registryLengthProblem(list);
         if (long) problems.push(long);
         try {
@@ -175,7 +198,7 @@ export async function inspectConfig(connection: Connection, address: PublicKey, 
       }
     }
   } else problems.push(...customHookProblems(null, config.customHookFlags, config.rules, null));
-  return { address, config, rules, problems, hook, hookAccounts, registryReady, halfLife };
+  return { address, config, rules, problems, hook, hookAccepted, hookAccounts, registryReady, halfLife };
 }
 
 /** What `inspectTokenHook` found about a hook program for a mint. */
@@ -184,6 +207,8 @@ export interface TokenHookInspection {
   info: ProgramUpgradeInfo;
   /** The hook is none of the protocol's programs. */
   ownProgram: boolean;
+  /** The launch program accepts it for who can upgrade it (`hookAcceptedBy`). */
+  accepted: boolean;
   /** The registry for `mint` exists and decodes. */
   registryReady: boolean;
   /** The accounts resolved for the launch, or null when the registry is missing or cannot serve a launch. */
@@ -191,11 +216,16 @@ export interface TokenHookInspection {
   problems: string[];
 }
 
-/** A hook program and whether it has been prepared for `mint` (§5.8): deployed, its own, its registry present and usable for a launch. */
+/**
+ * A hook program and whether it has been prepared for `mint` (§5.8): deployed, its own, upgradeable
+ * by nobody or only by Bordrless (`hookAuthorityProblem`), its registry present and usable for a
+ * launch.
+ */
 export async function inspectTokenHook(connection: Connection, program: PublicKey, mint: PublicKey): Promise<TokenHookInspection> {
   const [programInfo, programData, registryInfo] = await connection.getMultipleAccountsInfo([program, programDataAddress(program), registryAddress(program, mint)], 'confirmed');
   const info = programUpgradeInfoOf(programInfo ?? null, programData ?? null);
   const ownProgram = !PROTOCOL_PROGRAMS.some((p) => p.equals(program));
+  const accepted = hookAcceptedBy(program, info);
   const problems: string[] = [];
   if (!ownProgram) problems.push('The hook must be a program of your own, not one of Bordrless’s.');
   else if (!info.executable) problems.push('The hook program is not deployed on this cluster.');
@@ -213,7 +243,7 @@ export async function inspectTokenHook(connection: Connection, program: PublicKe
       problems.push(error instanceof Error ? `${error.message}.` : 'The hook’s registry cannot be resolved for a launch.');
     }
   }
-  return { program, info, ownProgram, registryReady: list !== null, accounts, problems };
+  return { program, info, ownProgram, accepted, registryReady: list !== null, accounts, problems };
 }
 
 // ---- making a config -------------------------------------------------------------------------------------

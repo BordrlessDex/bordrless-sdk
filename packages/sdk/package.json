@@ -1,6 +1,6 @@
 {
   "name": "@bordrless/sdk",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "description": "TypeScript client of the Bordrless programs: addresses, account and event decoding from the IDLs, instruction builders, and the resolution of a hook's extra accounts.",
   "license": "Apache-2.0",

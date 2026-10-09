@@ -11,6 +11,8 @@ import { Keypair, PublicKey } from '@solana/web3.js';
 import * as a from './addresses.ts';
 import { NO_LAUNCH_RULES, type LaunchRulesData } from './accounts.ts';
 import { MAX_CUSTOM_HOOK_EXTRAS, kitTokenHook } from './hooks.ts';
+import { companion, type GameArgs } from './companion.ts';
+import { lotteryHook } from './lotteryHook.ts';
 import { bridge, kit, launch, launchKeys, setComputeUnitLimit, setComputeUnitPrice, token } from './instructions.ts';
 import { PACKET_DATA_SIZE, buildV0Transaction, checkProtocolLookupTable, companionReady, createProtocolLookupTable, protocolLookupTable, transactionSize, v0KeyCounts } from './transactions.ts';
 
@@ -104,6 +106,57 @@ describe('v0 transactions with the protocol lookup table reproduce the measured 
     };
     expect(bytes(MAX_CUSTOM_HOOK_EXTRAS)).toBeLessThanOrEqual(PACKET_DATA_SIZE);
     expect(bytes(MAX_CUSTOM_HOOK_EXTRAS + 1)).toBeGreaterThan(PACKET_DATA_SIZE);
+  });
+
+  it('a launch through a companion fits with the 22-address table, a custom hook with MAX_CUSTOM_HOOK_EXTRAS included (the companion program refuses a custom hook; the wire would not)', () => {
+    const launcher = k();
+    const longest = { name: 'N'.repeat(32), symbol: 'S'.repeat(10), uri: 'ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi', creatorFeeBps: 50, virtualQuote: 28_125_000_000n, rules: NO_LAUNCH_RULES };
+    const bytes = (options: Parameters<typeof launch.createLaunch>[6]): number => {
+      const mint = k();
+      const inner = launch.createLaunch(a.companionCreatorAddress(mint), mint, k(), SOL, 30, longest, options);
+      return measure(launcher, [companion.launch(launcher, mint, inner, longest)], [table]).bytes;
+    };
+    const extras = (n: number) => Array.from({ length: n }, () => ({ pubkey: k(), isSigner: false, isWritable: true }));
+    // Inline rules 950 bytes; from a config 982; a config naming a hook with 4 registry extras 1,213 of 1,232.
+    expect(bytes(undefined)).toBe(950);
+    expect(bytes({ launchConfig: k(), customHook: null })).toBe(982);
+    const withHook = bytes({ launchConfig: k(), customHook: { program: k(), extras: extras(MAX_CUSTOM_HOOK_EXTRAS) } });
+    expect(withHook).toBe(1_213);
+    expect(withHook).toBeLessThanOrEqual(PACKET_DATA_SIZE);
+  });
+
+  it('a lottery coin: its setup, its launch through the companion and every game step fit, at the sizes companion_game.rs measured', () => {
+    // As `a_game_launch_fits_mainnet_limits` (bordrless-programs, programs/tests/tests/companion_game.rs) builds
+    // them, with the 22-address table: the same instructions, the same keys, so the same bytes on the wire.
+    const launcher = k();
+    const mint = k();
+    const hook = a.LOTTERY_HOOK_PROGRAM;
+    const createArgs = { split: { buybackBps: 10_000, holdersBps: 0, beneficiaryBps: 0 }, bountyBps: 50, maxBuyback: 1_000_000_000n, buybackInterval: 60, vestSecs: 0, fund: 500_000_000n };
+    const game: GameArgs = { kind: 'lottery', hook, split: { buybackBps: 3_000, holdersBps: 0, beneficiaryBps: 0 }, potBps: 7_000, roundSecs: 3_600, minPot: 100_000_000n, prizeBps: 10_000, claimWindowSecs: 300, maxAttempts: 6 };
+    const setup = buildV0Transaction(launcher, [companion.create(launcher, launcher, mint, createArgs), lotteryHook.prepare(launcher, mint, game.roundSecs), companion.createGame(launcher, mint, game)], blockhash, [table]);
+    expect(transactionSize(setup)).toBe(765);
+    // The launch from a config naming the hook, at the longest metadata the programs' test sends (a Pinata URI of 128 bytes).
+    const args = { name: 'N'.repeat(32), symbol: 'TENCHARSXX', uri: `https://gateway.pinata.cloud/ipfs/${'b'.repeat(94)}`, creatorFeeBps: 200, virtualQuote: 28_125_000_000n, rules: NO_LAUNCH_RULES };
+    const inner = launch.createLaunch(a.companionCreatorAddress(mint), mint, k(), SOL, 30, args, { launchConfig: k(), customHook: lotteryHook.accounts(mint) });
+    const launched = measure(launcher, [companion.launch(launcher, mint, inner, args)], [table]);
+    expect([launched.keys, launched.bytes]).toEqual([35, 1_177]);
+    // Every step, as the keeper sends it.
+    const keeper = k();
+    const keys = launchKeys(mint, SOL, 30, NO_LAUNCH_RULES, lotteryHook.accounts(mint));
+    const seed = new Uint8Array(32).fill(3);
+    const treasury = new PublicKey('9ZTHWWZDpB36UFe1vszf2KEpt83vwi27jDqtHQ7NSXyR');
+    const steps: [string, PublicKey, Parameters<typeof buildV0Transaction>[1], number][] = [
+      ['draw (commit and request)', keeper, [companion.draw(keeper, mint, hook, 1, { slot: 2n, hash: new Uint8Array(32).fill(3) }, treasury)], 731],
+      ['draw with the paid request', keeper, [companion.draw(keeper, mint, hook, 1, { slot: 2n, hash: new Uint8Array(32).fill(3) }, treasury, new Uint8Array(32).fill(4))], 764],
+      ['reveal', keeper, [companion.reveal(keeper, mint, hook, a.oraoRequestAddress(seed))], 469],
+      ['claim_prize', keeper, [companion.claimPrize(keeper, mint, hook, 0, k())], 586],
+      ['expire', keeper, [companion.expire(keeper, mint, hook, a.oraoRequestAddress(seed))], 469],
+      ['claim_fees', keeper, [companion.claimFees(keeper, mint, hook)], 530],
+      ['buyback', keeper, [companion.buyback(keeper, keys, false)], 886],
+      ['dev_buy', launcher, [companion.devBuy(launcher, keys, 1_000_000_000n, 1n)], 891],
+      ['release', keeper, [companion.release(keeper, keys, false, launcher)], 648],
+    ];
+    for (const [name, payer, ixs, bytes] of steps) expect(measure(payer, ixs, [table]).bytes, name).toBe(bytes);
   });
 
   it('keeps every invoked program static and loads only what it may', () => {

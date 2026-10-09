@@ -11,7 +11,7 @@ import * as a from './addresses.ts';
 import { FEE_MODEL_FLAT, FEE_MODEL_SHARE, HOLDING_SIZE, KIT_CONFIG_SIZE, LAUNCH_CONFIG_ACCOUNT_SIZE, apiLaunchRules, decodeHolding, decodeKitConfig, decodeLaunch, decodeLaunchConfig, decodeLaunchConfigAccount, decodeMint, decodePool, decodeSwapConfig, hasCustomHook, isVerifiedKitToken, kitExcludes, kitHookDataOf, kitModulesOf, kitRewardsOf, launchConfigOf, launchRulesFromInput, launchRulesInputOf, poolSharesCuts } from './accounts.ts';
 import { CODERS, IDL, type ProgramName } from './coders.ts';
 import { PROGRAM_ERRORS, explainFailure, explainProgramError, failedProgram } from './errors.ts';
-import { EVENT_IX_TAG, eventsOf, launchSwapCuts, typedEvent, type DecodedEvent, type LaunchConfigCreatedEvent, type SwappedEvent } from './events.ts';
+import { EVENT_IX_TAG, GAME_EVENT_PROGRAMS, INDEXED_EVENT_PROGRAMS, eventsOf, launchSwapCuts, typedEvent, type DecodedEvent, type LaunchConfigCreatedEvent, type SwappedEvent } from './events.ts';
 
 const k = (): PublicKey => Keypair.generate().publicKey;
 const SOL = a.BRIDGED_SOL_MINT;
@@ -198,6 +198,22 @@ describe('v2 events, decoded by the program that emitted them', () => {
     expect(typedEvent(decodeOne(emitted('kit', a.KIT_PROGRAM, 'rewardsShared', { mint, from: owner, amount: bn(1_000_000), totalShared: bn(3_000_000) })))).toEqual({ kind: 'kit.RewardsShared', mint: mint.toBase58(), from: owner.toBase58(), amount: 1_000_000n, totalShared: 3_000_000n });
   });
 
+  it('reads a game\'s events (the companion\'s and the lottery hook\'s) only when asked, so an indexed transaction\'s ordinals never move', () => {
+    const [game, mint] = [k(), k()];
+    const revealed = emitted('companion', a.COMPANION_PROGRAM, 'drawRevealed', { game, mint, round: 82_870, seed: Array(32).fill(7), randomness: Array(64).fill(9), cranker: k() });
+    const decode = (d: string) => Buffer.from(d, 'base64');
+    expect(eventsOf(revealed.keys, revealed.inner, decode)).toEqual([]);
+    const both = [...INDEXED_EVENT_PROGRAMS, ...GAME_EVENT_PROGRAMS];
+    const [ev] = eventsOf(revealed.keys, revealed.inner, decode, both);
+    expect([ev?.program, ev?.name, ev?.data.round, ev?.data.mint]).toEqual(['companion', 'drawRevealed', 82_870, mint.toBase58()]);
+    const rolled = emitted('companion', a.COMPANION_PROGRAM, 'rolledOver', { game, mint, round: 7, reason: { oracleSilent: {} }, pendingPot: bn(5) });
+    expect(eventsOf(rolled.keys, rolled.inner, decode, both)[0]?.data).toMatchObject({ round: 7, reason: { oracleSilent: {} }, pendingPot: '5' });
+    const entered = emitted('lotteryHook', a.LOTTERY_HOOK_PROGRAM, 'entered', { mint, holding: k(), owner: k(), round: 82_871, start: bn(100), weight: bn(50), total: bn(150) });
+    expect(eventsOf(entered.keys, entered.inner, decode)).toEqual([]);
+    expect(eventsOf(entered.keys, entered.inner, decode, both)[0]).toMatchObject({ program: 'lotteryHook', name: 'entered', data: { round: 82_871, start: '100', weight: '50', total: '150' } });
+    expect(INDEXED_EVENT_PROGRAMS).not.toContain('companion');
+  });
+
   it('ignores a self-CPI that does not come from the program\'s event authority', () => {
     const e = emitted('kit', a.KIT_PROGRAM, 'kitGraduated', { mint: k(), ts: bn(9) });
     const forged = { keys: [e.keys[0]!, k().toBase58()], inner: e.inner };
@@ -221,6 +237,21 @@ describe('errors are explained by the program that failed (codes overlap)', () =
     expect(explainProgramError('kit', 6999).name).toBeNull();
     expect(explainProgramError('swap', 6037)).toMatchObject({ name: 'NotBridgedSol', message: "the pool's quote is not bridged SOL" });
     expect([PROGRAM_ERRORS.kit.size, PROGRAM_ERRORS.launch.size, PROGRAM_ERRORS.swap.size, PROGRAM_ERRORS.token.size, PROGRAM_ERRORS.bridge.size, PROGRAM_ERRORS.taxHook.size]).toEqual([29, 44, 38, 27, 14, 6]);
+  });
+
+  it('explains the companion\'s game errors and the lottery hook\'s, read from the logs of a failed step', () => {
+    expect(explainProgramError('companion', 6039)).toMatchObject({ program: 'companion', name: 'NotTheWinner', explanation: 'This holding does not hold the drawn ticket.' });
+    // 6045 is no longer returned (a held breaker rolls the round over); it keeps its number.
+    expect(explainProgramError('companion', 6045).name).toBe('OracleUnanswered');
+    expect(explainProgramError('companion', 6048)).toMatchObject({ name: 'StaleSeed', explanation: expect.stringMatching(/newest slot/) });
+    // v1's codes keep their numbers: v2 only appends.
+    expect(explainProgramError('companion', 6011).name).toBe('CustomHookUnsupported');
+    expect([PROGRAM_ERRORS.companion.size, PROGRAM_ERRORS.lotteryHook.size]).toEqual([49, 6]);
+    expect(explainProgramError('lotteryHook', 6005)).toMatchObject({ program: 'lotteryHook', name: 'NotEligible' });
+    const companionId = a.COMPANION_PROGRAM.toBase58();
+    const failed = explainFailure([`Program ${companionId} invoke [1]`, `Program ${companionId} failed: custom program error: 0x${(6043).toString(16)}`])!;
+    expect([failed.program, failed.name, failed.explanation]).toEqual(['companion', 'DrawLate', 'Too late: a draw’s claims end with the round after the drawn one.']);
+    expect(explainProgramError(a.LOTTERY_HOOK_PROGRAM, 6002)).toMatchObject({ program: 'lotteryHook', name: 'BadRoundSecs' });
   });
 
   it('finds the innermost failure in the logs of a swap that the kit refused', () => {
