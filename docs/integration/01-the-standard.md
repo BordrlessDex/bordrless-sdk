@@ -19,7 +19,7 @@ URI points to Metaplex-style JSON (`name`, `symbol`, `description`, `image`, `ex
 
 A `Holding` holds `mint`, `owner`, `amount`, an optional `delegate` and `delegatedAmount`, `frozen`,
 and **64 bytes of `hookData`** that only the mint's hook can write (for example, holder-reward
-accounting or a Half-Life age). `token.createHolding(payer, mint, owner)` is idempotent; the rent is
+accounting, a Half-Life age, or a game coin's ticket ranges). `token.createHolding(payer, mint, owner)` is idempotent; the rent is
 about 0.0023 SOL. A holding can be closed with `close_holding` once it is empty and its hook data is
 zero.
 
@@ -50,8 +50,10 @@ launch pool has the launchpad as its pool hook, which applies the launch's fees.
 Bordrless is paid in one of two ways, fixed per pool (`Pool.feeModel`):
 
 - **Ordinary pools** (`FEE_MODEL_FLAT`): a flat `protocolFeeBps` of the quote side, 1% today.
-- **Launch pools** (`FEE_MODEL_SHARE`): `protocolShareBps` (25%) of what the launch's rules and its
-  token hook take on each swap, in SOL. A launch whose rules take nothing pays Bordrless nothing.
+- **Launch pools** (`FEE_MODEL_SHARE`): the pool's LP fee (`lpFeeBps`, 0.3%, higher during the
+  sniper window) plus `protocolShareBps` (25%) of what the launch's rules and its token hook take
+  on each swap, all in SOL. A launch whose rules take nothing pays Bordrless only the LP fee
+  (since the 2026-10-08 upgrade; [Indexing trades](03-indexing-trades.md#swapped-a-trade)).
 
 ## Launches
 
@@ -64,7 +66,11 @@ to its pool and keeps everything about the token's market:
   (250,000,000), `graduationQuote`;
 - fees: `lpFeeBps` (0.3%), `creatorFeeBps` (0–2%), and the sniper fee `sniperStartBps` (80%) falling
   linearly to `lpFeeBps` over `sniperWindowSecs` (30 s) after `createdAt`;
-- the token rules (`rules`, `modules`) and an optional `customHook`;
+- the token rules (`rules`, `modules`), an optional `customHook`, and the `config` (`LaunchConfig`)
+  it was made from, if any, with `authorShareBps` when that config pays its author part of the
+  creator fee;
+- `creator`, who is paid the creator fee: a wallet, or a companion program's address
+  ([Companions](02-reading-tokens.md#creators-that-are-programs-companions));
 - display totals: `creatorFeesAccrued`, `holderFeesAccrued`, `burnedOnTrades`.
 
 **The curve and graduation.** 75% of the supply is sold on the curve. When the pool's real SOL
@@ -84,6 +90,12 @@ no new address to follow.
 | `bordrless_bridge` | `CtLkuFVitoXHTa86Hfp8KmfSDfqJaMYFWr6EGmQVsKb7` | `Wrapper`, `Config` |
 | `bordrless_kit` | `14RJQXPdJfkehit6ezktjd3xujamf8nVSKw2shKamaEH` | `KitConfig` |
 | `half_life` | `53SpmtkdPWQ63mWoDeXk8P9tuwiT4ed2Wx4fwfy5NSF8` | `HalfLifeState` |
+| `tax_hook` (the example custom hook) | `8tjnVSreJGBRQFyDBf1SyyhBgLsdBxa2rHYh9sbxFyX7` | `TaxConfig` |
+| `bordrless_companion` | `6ZUM1gWBH9hBBNoJoaVAGwSftyZ6CUda6vUZTW9MsJuo` | `Companion`, `Game`, `HookStatus`, `ShareReceipt` |
+| `lottery_hook` | `HqFWsCBQ416DAfevJ9TspyT5yXGGoYTCpcreiGkCgWcr` | `LotteryState` |
+
+Jackpot and streak coins run a hook program of their own, one per coin, deployed by Bordrless
+Studio ([Hooks](05-hooks-and-risk.md#game-coins)).
 
 The same ids are used on devnet and localnet. `PROGRAM_IDS` in `@bordrless/shared` has them all.
 
@@ -91,7 +103,8 @@ The same ids are used on devnet and localnet. `PROGRAM_IDS` in `@bordrless/share
 
 All accounts are Anchor accounts: an 8-byte discriminator, then the fields in IDL order, Borsh
 encoded. Decode them with the SDK (`decodeMint`, `decodeHolding`, `decodePool`, `decodeLaunch`,
-`decodeKitConfig`, `decodeWrapper`, `decodeHalfLifeState`) or with the IDLs in
+`decodeKitConfig`, `decodeWrapper`, `decodeHalfLifeState`, `decodeCompanion`, `decodeGame`,
+`decodeHookStatus`, `decodeShareReceipt`, `decodeLotteryState`) or with the IDLs in
 [`packages/sdk/idl`](../../packages/sdk/idl).
 
 | Account | Size | Discriminator (hex) | Fixed offsets for `memcmp` filters |
@@ -102,8 +115,13 @@ encoded. Decode them with the SDK (`decodeMint`, `decodeHolding`, `decodePool`, 
 | `Launch` | 565 | `903333a3ce55d526` | `mint` 10, `creator` 42, `pool` 74, `status` 138 |
 | `LaunchConfig` | 176 | `12a109e066911d5e` | |
 | `KitConfig` | 431 | `bf93e526a1148293` | |
-| `Wrapper` | | `a10b6d77563da388` | |
-| `HalfLifeState` | | `2b0e53c31ce2df53` | |
+| `Wrapper` | 221 | `a10b6d77563da388` | |
+| `HalfLifeState` | 251 | `2b0e53c31ce2df53` | |
+| `Companion` | 300 | `bd15f745f5640a0f` | |
+| `Game` | 486 | `1b5aa67d4a647912` | |
+| `HookStatus` | 124 | `a575cfc68c7a0d76` | |
+| `ShareReceipt` | 126 | `52ebecd6eea75371` | `game` 10, `epoch` 42, `owner` 46, `payer` 78 |
+| `LotteryState` | 322 | `c4d2cadbcc3f8555` | the game header from 8 ([games.md](https://github.com/BordrlessDex/bordrless-programs/blob/main/docs/games.md#the-game-ticket-standard-bordrless-game)) |
 
 Each program's own `Config` shares the discriminator `9b0caae01efacc82`; tell them apart by owner.
 Use the offsets only for `getProgramAccounts` filters, and decode with the SDK or IDL, since fields
@@ -122,6 +140,7 @@ after an optional key move.
 The lookup table holds the fixed addresses every swap uses: its first 18 never change, and later
 addresses are only ever appended (it holds 22 since companions, which the last 4 serve), so a
 transaction compiled against it keeps meaning the same accounts. Don't check its length; check its
-first entries (`checkProtocolLookupTable`). Put it in every v0 transaction you build. Measured on mainnet tokens, a buy or sell with SOL is 787–920 bytes with the table and
+first entries (`checkProtocolLookupTable`; `companionReady` checks all 22). Put it in every v0
+transaction you build. Measured on mainnet tokens, a buy or sell with SOL is 787–920 bytes with the table and
 1,063–1,196 bytes without it, out of Solana's 1,232. Without the table there's no room left for a
 priority fee, a graduation or a claim.

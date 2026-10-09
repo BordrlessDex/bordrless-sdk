@@ -8,7 +8,7 @@ CPIs. No off-chain service is needed.
 The Anchor IDLs of every program are in [`packages/sdk/idl`](../../packages/sdk/idl) and in
 [bordrless-programs/idl](https://github.com/BordrlessDex/bordrless-programs/tree/main/idl):
 `bordrless_token`, `bordrless_swap`, `bordrless_launch`, `bordrless_kit`, `bordrless_bridge`,
-`tax_hook`, `half_life`. Any Anchor client (anchorpy, anchor-go, solana-go with an IDL generator,
+`tax_hook`, `half_life`, `bordrless_companion`, `lottery_hook`. Any Anchor client (anchorpy, anchor-go, solana-go with an IDL generator,
 the Rust `anchor-client`) can decode the accounts and events and encode the instructions from them.
 
 - **Accounts:** 8-byte discriminator, then Borsh. Discriminators, sizes and filter offsets are in
@@ -23,6 +23,10 @@ the Rust `anchor-client`) can decode the accounts and events and encode the inst
   program lists its extra accounts. The format and the resolver are in
   [`crates/bordrless-hook`](https://github.com/BordrlessDex/bordrless-programs/tree/main/crates/bordrless-hook)
   (`HookAccountList`, `resolve`). The TypeScript twin is `packages/sdk/src/hooks.ts`.
+- **Game state:** a game hook's state header and each holding's ticket slots are fixed byte
+  layouts, in [`crates/bordrless-game`](https://github.com/BordrlessDex/bordrless-programs/tree/main/crates/bordrless-game)
+  and [docs/games.md](https://github.com/BordrlessDex/bordrless-programs/blob/main/docs/games.md#the-game-ticket-standard-bordrless-game);
+  the TypeScript twins are `game.ts` and `gameKinds.ts`.
 
 ## Rust
 
@@ -33,13 +37,20 @@ Depend on them with the `no-entrypoint` feature:
 bordrless-token = { git = "https://github.com/BordrlessDex/bordrless-programs", features = ["no-entrypoint"] }
 bordrless-swap = { git = "https://github.com/BordrlessDex/bordrless-programs", features = ["no-entrypoint"] }
 bordrless-launch = { git = "https://github.com/BordrlessDex/bordrless-programs", features = ["no-entrypoint"] }
+bordrless-companion = { git = "https://github.com/BordrlessDex/bordrless-programs", features = ["no-entrypoint"] }
 bordrless-core = { git = "https://github.com/BordrlessDex/bordrless-programs" }
+bordrless-game = { git = "https://github.com/BordrlessDex/bordrless-programs" }
 ```
 
 - `bordrless_token::client`: `holding_address`, `create_holding`, `transfer`, `read_holding`.
 - `bordrless_swap::client`: `pool_address`, `vault_address`, `swap`, `token_hook_slice`.
 - `bordrless_launch::client`: `launch_address`, `pool_address`, `swap`, `swap_with_base_slice`,
   `graduate`, `custom_hook_slice`.
+- `bordrless_companion::client`: `companion_address`, `creator_address`, `game_address`, the steps
+  (`claim_fees`, `buyback`, `release`, `draw`, `claim_prize`, `settle`, `close_epoch`,
+  `claim_share`, …). `lottery_hook::client` (crate `lottery-hook`): `state_address`, `extras`,
+  `prepare`.
+- `bordrless_game`: the game ticket standard's header and slot readers and its rules.
 - `bordrless_core`: the fee and curve math the programs run (`swap_out`, `fee_amount`,
   `protocol_share`, `quote_value`). The TypeScript quote in `@bordrless/shared` is pinned to it by
   shared test vectors.

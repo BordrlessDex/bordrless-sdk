@@ -16,12 +16,49 @@ Read it from the mint (`hookProgram`, `hookFlags`, `hookAuthority`) and the laun
 | **No token hook** | `mint.hookProgram === null` | Nothing. Plain token | — |
 | **The kit** (Bordrless launch rules) | `hookProgram` is the kit `14RJQX…aEH` and `isVerifiedKitToken(mintKey, mint, launch, kitConfig)` | Only the rules fixed at launch, below | The rules |
 | **Half-Life** (Bordrless's own hook) | `hookProgram` is `53Spmtk…NSF8` | An exit fee on transfers out, burned. No refusals | The holder's current exit fee |
-| **A custom hook** | any other `hookProgram` | Anything: refuse transfers (a honeypot), take cuts | **"Custom hook, unverified"** and the program |
+| **Lottery hook** (Bordrless's own game hook) | `hookProgram` is `HqFWsC…GWcr` | Keeps ticket ranges in hook data. Never refuses a transfer, takes no cut, never sees SOL | "Lottery coin" and the game ([below](#game-coins)) |
+| **A game coin's Studio hook** (jackpot, streak) | `launch.customHook` is `companion.gameHook` of a [companion launch](02-reading-tokens.md#creators-that-are-programs-companions) | Keeps game state in hook data. Takes no cut (flags 145). Per-coin code: treat a refusal as possible | "Jackpot coin" / "Streak coin" and the game |
+| **A custom hook** | any other `hookProgram` (a Studio hook, or anyone's) | Anything: refuse transfers (a honeypot), take cuts | **"Custom hook, unverified"**, the program, and [who can upgrade it](#who-can-upgrade-a-hook) |
 
-For any hooked token, also check `mint.hookAuthority`. **`null` means the hook can never be
-changed.** Otherwise someone can swap the hook later. Launchpad tokens always have it `null`.
-Whether the hook program itself is upgradeable:
-`fetchProgramUpgradeInfo(connection, mint.hookProgram)`.
+For any hooked token, also check `mint.hookAuthority`. **`null` means the mint can never be pointed
+at another hook program.** Otherwise someone can swap the hook later. Launchpad tokens always have
+it `null`. Whether the hook program's own code can change is the next question.
+
+## Who can upgrade a hook
+
+A hook program that someone can upgrade can be swapped for other code after launch, whatever the
+mint says. Since 2026-10-08 the launchpad refuses a `LaunchConfig` naming a custom hook
+(`HookUpgradeable`) unless the hook is **immutable** or upgradeable **only by Bordrless**: Bordrless
+Studio's key `CS1NRyXNCPxEUP4CRoa26cHQSeSJCxXh5SPijwFhDW6W` or the protocol's
+`5xsibKwtiN6ruxsYrEyWVpV3KcwuzSPbQd1n28a7spEd` (`HOOK_UPGRADE_AUTHORITIES` in `@bordrless/shared`).
+The check runs when the config is made, not at each launch, so read it yourself for any token:
+
+```ts
+import { STUDIO_UPGRADE_AUTHORITY } from '@bordrless/shared';
+import { decodeMint, fetchProgramUpgradeInfo, hookAuthorityProblem } from '@bordrless/sdk';
+
+const hookProgram = decodeMint((await connection.getAccountInfo(mint))!.data).hookProgram!; // a launch's: launch.customHook
+const info = await fetchProgramUpgradeInfo(connection, hookProgram);
+const problem = hookAuthorityProblem(info);  // a sentence when someone outside Bordrless can upgrade it, else null
+const immutable = info.upgradeable === false;
+const studio = info.upgradeAuthority?.toBase58() === STUDIO_UPGRADE_AUTHORITY;
+```
+
+| Upgrade authority | Show |
+| --- | --- |
+| none (`upgradeable === false`) | "Immutable hook" |
+| Studio's key | "Built with Bordrless Studio; Bordrless can upgrade it" |
+| the protocol's key | Bordrless's own hooks (the kit, Half-Life, the lottery hook, `tax_hook`): "Upgradeable by Bordrless" |
+| anyone else (`hookAuthorityProblem` returns a sentence) | A warning: whoever holds that key can change the hook at any time |
+| unknown (`upgradeable === null`) | Treat as upgradeable |
+
+`inspectTokenHook(connection, program, mint)` reads the same plus the hook's registry in one call.
+
+**Studio hooks.** Bordrless Studio lets anyone write a token hook with an AI assistant; Studio
+builds and deploys it as its own program, and the creator never gets its upgrade authority.
+Studio's review before a deploy is automatic and is not a guarantee of the code: a Studio hook may
+refuse transfers (a cooldown) or take cuts (a sell tax) like any custom hook. Show what it does
+from simulation and its `Transferred` cuts, never as vetted by Bordrless.
 
 ## The kit's rules
 
@@ -40,9 +77,10 @@ All of these are taken by the program and included in `quoteLaunchSwap`
 ([Trading](04-trading.md)). Creator fee + holder rewards + burn is at most 3% per side.
 
 **Holder rewards** are paid in bridged SOL. What a holder can claim:
-`rewardsClaimable(kitRewardsOf(kit), vaultAmount, now, holding.amount, kitHookDataOf(holding), kitExcludes(kit, owner))?.payable`
+`rewardsClaimable(kitRewardsOf(kitConfig), vaultAmount, now, holding.amount, kitHookDataOf(holding), kitExcludes(kitConfig, owner)).payable`
 from `@bordrless/shared` and the SDK (`vaultAmount` is the balance of the reward vault
-`launch.holderVault`). Claim with `kit.claim(owner, mint, kit.rewardMint)`, then
+`launch.holderVault`; `kitConfig` is `decodeKitConfig` of `launch.kitConfig`). Claim with
+`kit.claim(owner, mint, kitConfig.rewardMint)`, then
 `bridge.unwrapSolAbove(owner, before)` for SOL.
 
 ## Half-Life
@@ -73,6 +111,59 @@ On a sell the DEX also counts the fee as a cut and takes Bordrless's 25% share o
 from the proceeds. So `quoteLaunchSwap(pool, 'sell', amount - fee, …)` overstates the SOL out by that
 share. **Simulate a Half-Life sell for the exact figure** ([Trading](04-trading.md#quoting-exactly)).
 Full details are in [Half-Life](https://github.com/BordrlessDex/bordrless-programs/tree/main/programs/half_life).
+
+## Game coins
+
+A game coin's creator is a [companion](02-reading-tokens.md#creators-that-are-programs-companions)
+running a lottery, a jackpot or a streak, paid in SOL from its pot. A lottery coin's token hook is
+Bordrless's lottery hook; a jackpot or streak coin's is a hook Studio deployed for that coin. A
+companion takes a game hook only if it is the lottery hook, has a status from the protocol, or is
+upgradeable only by Bordrless's keys, and never a blocked one. A game's pot is capped at 10 SOL
+unless the protocol's `HookStatus` for its hook says otherwise
+([Game coins](02-reading-tokens.md#game-coins)).
+
+Lottery coins launch from one of three `LaunchConfig`s the protocol made on mainnet, each naming
+the lottery hook with flags 145 and no token rules (`LOTTERY_HOOK.launchConfigs` in
+`@bordrless/shared`; `launch.config` says which):
+
+| Creator fee | `LaunchConfig` |
+| --- | --- |
+| 0.5% | `CYm9FNY49gV7wjukpYFqkm9u7FQLrjp2GexeHwbncf1L` |
+| 1% | `GViQSt6znkGdiCrUYNTo3dJKMgfGS8eBHPSBjxfN2VS9` |
+| 2% | `Ejo4Ehg4x16MeBKn3Y2f1NU31CoBjnby4kv75azUD8hU` |
+
+Trading one is trading any custom-hook token: `fetchCustomHookAccounts` resolves the hook's
+registry (its state, writable, and the launch), or without a read, `lotteryHook.accounts(mint)` and
+`studioGameHook.accounts(game.hook, mint)`. Every transfer of the coin write-locks the hook's state.
+
+**What to warn holders about.** Sending is part of the game:
+
+- **Jackpot:** the last buyer is paid only if they still hold what they bought and have **sent
+  nothing** since (selling even one token, or a transfer to another wallet, forfeits the round).
+- **Streak:** **any send**, to anyone (your own wallets too), forfeits the epoch's share and the
+  last epoch's unclaimed share. Claim before sending.
+- **Lottery:** tokens bought or received during a round count from the next round; selling cuts the
+  holding's tickets.
+
+**What a wallet can offer.** Every game step is permissionless (any fee payer may send it) and
+Bordrless's keeper sends them, prizes included; these are optional actions a holder may take
+themselves:
+
+```ts
+import { companion, lotteryHook, studioGameHook } from '@bordrless/sdk';
+
+lotteryHook.enter(mint, owner);                    // lottery: register this round's tickets now (no signer; the fee payer sends it)
+studioGameHook.enter(game.hook, mint, owner);      // streak: register for the epoch
+companion.claimShare(owner, mint, game.hook, game.round, owner); // streak: claim the open epoch's share, paid in SOL
+```
+
+A lottery holding that hasn't traded in a round has tickets in it only once someone enters it
+(the keeper enters holders late each round). A streak claim is open for the closed epoch (`game.round`
+while `game.status` is `'revealed'`): `streakWeight` and `shareOf` say what it pays, and the sender
+pays a receipt's rent (1,767,840 lamports), returned by `companion.closeReceipt` once the claims
+end. The protocol's keeper claims a share for a holder only when the sender's bounty covers its
+cost (a bounty of at least 50,000 lamports, or a share of at least 0.05 SOL); a smaller share is
+the holder's to claim. Rules, timings and every edge case: [docs/games.md](https://github.com/BordrlessDex/bordrless-programs/blob/main/docs/games.md).
 
 ## Transfers between wallets
 

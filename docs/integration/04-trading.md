@@ -34,11 +34,12 @@ const quote = quoteLaunchSwap(pool, 'buy', lamports, lpFeeBps, pool.protocolShar
 });
 const minOut = mulDivFloor(quote.delivered!, BPS - slippageBps, BPS);
 
-// 2. Build. A token with a custom hook (Half-Life, "Build your own") needs its hook's accounts.
+// 2. Build. A token with a custom hook (Half-Life, a game coin, "Build your own") needs its hook's
+//    accounts, resolved from the hook's registry for the mint.
 const customHook = launch.customHook ? await fetchCustomHookAccounts(connection, launch.customHook, mint) : null;
 const keys = launchKeysOf(launch, customHook);
 const ixs = [
-  setComputeUnitLimit(220_000), setComputeUnitPrice(priorityMicroLamports),
+  setComputeUnitLimit(400_000), setComputeUnitPrice(priorityMicroLamports), // or the simulated units + 15%
   token.createHolding(wallet, launch.quoteMint, wallet),     // its bridged-SOL holding (idempotent)
   bridge.wrapSol(wallet, lamports),                          // SOL -> bridged SOL
   token.createHolding(wallet, mint, wallet),                 // its holding of the token (idempotent)
@@ -56,9 +57,10 @@ const tx = buildV0Transaction(wallet, ixs, (await connection.getLatestBlockhash(
 Same shape, direction 0, the token amount in, and unwrap after:
 
 ```ts
-const bridgedBefore = /* the wallet's bridged-SOL holding amount now, or 0n */;
+const bridged = await connection.getAccountInfo(holdingAddress(launch.quoteMint, wallet));
+const bridgedBefore = bridged ? decodeHolding(bridged.data).amount : 0n; // the wallet's bridged SOL now
 const ixs = [
-  setComputeUnitLimit(220_000), setComputeUnitPrice(priorityMicroLamports),
+  setComputeUnitLimit(400_000), setComputeUnitPrice(priorityMicroLamports),
   token.createHolding(wallet, launch.quoteMint, wallet),
   launchIx.swap(keys, wallet, wallet, 0, tokenAmount, minSolOut),  // direction 0 = sell
   bridge.unwrapSolAbove(wallet, bridgedBefore),                    // what the sell delivered, back to SOL
@@ -73,13 +75,13 @@ the bridged SOL the wallet receives.
 
 `quoteLaunchSwap` runs the program's own arithmetic: the token hook's cuts and burn, the LP fee,
 Bordrless's share, the curve, and the creator and holder fees. Measured against a simulation of
-the same transaction on mainnet:
+the same transaction on mainnet (2026-10-09, `quote-buy.ts`):
 
 | Token | Rules | Quoted for 0.1 SOL | Simulated |
 | --- | --- | --- | --- |
-| hLife | Half-Life hook, creator 1% | 1,289,204.995768 | 1,289,204.995768 |
-| LIMITLESS | holder rewards 0.5%, creator 0.5% | 2,303,261.489051 | 2,303,261.489051 |
-| CTRL | none, creator 1% | 2,280,204.050848 | 2,280,204.050848 |
+| hLife | Half-Life hook, creator 1% | 1,630,280.020655 | 1,630,280.020655 |
+| LIMITLESS | holder rewards 0.5%, creator 0.5% | 2,269,499.301361 | 2,269,499.301361 |
+| CTRL | none, creator 1% | 2,287,625.252001 | 2,287,625.252001 |
 
 Three inputs change the quote:
 
@@ -91,11 +93,13 @@ Three inputs change the quote:
 - **Holder rewards** are only taken while `kit.eligible >= kit.minEligible`: a token with holder
   rewards takes none until enough of the supply is held outside the pool. `quoteLaunchSwap` handles
   this when you pass the kit's two figures.
-- **A custom hook's own cut** (Half-Life's exit fee on sells, or any "Build your own" hook) is
-  **not** in `quoteLaunchSwap`. For those tokens, **simulate the transaction** and read the
-  wallet's holding afterwards (the `accounts` option of `simulateTransaction`); that's how
-  `quote-buy.ts` measures. For Half-Life you can also compute the cut:
-  [Hooks](05-hooks-and-risk.md#half-life).
+- **A custom hook's own cut** (Half-Life's exit fee on sells, a Studio hook's, any "Build your
+  own" hook) is **not** in `quoteLaunchSwap`. For those tokens, **simulate the transaction** and
+  read the wallet's holding afterwards (the `accounts` option of `simulateTransaction`); that's
+  how `quote-buy.ts` measures. For Half-Life you can also compute the cut:
+  [Hooks](05-hooks-and-risk.md#half-life). Game coins' hooks (lottery, jackpot, streak) take no
+  cut: a companion launch accepts only their flags, 145, which have no cut bit. Simulate them
+  anyway, since a custom hook can refuse a transfer.
 
 Simulation never needs a signature (`sigVerify: false`, `replaceRecentBlockhash: true`), so you can
 quote for any wallet that holds the input.
@@ -129,8 +133,15 @@ still fill.
 
 ## Fees and compute
 
-- **Priority fees:** add `setComputeUnitPrice`. A buy with SOL used 136,000–152,000 compute units
-  in mainnet simulations (more with kit rules or a hook). Request the simulated figure plus 15%.
+- **Compute:** simulate and request the units used plus 15%. A buy with SOL used 136,760
+  (CTRL), 152,376 (hLife) and 166,537 (LIMITLESS, holder rewards) compute units in mainnet
+  simulations on 2026-10-09. A custom hook adds its callbacks, and graduation in the same
+  transaction adds much more. When you can't simulate, the Bordrless backend's fallbacks are a
+  guide: 400,000 for a trade, 700,000 for a trade that graduates, 300,000 for a wallet-to-wallet
+  send of a hooked token. A game coin's companion buy (the launcher's dev buy, a buyback) measured
+  260,000–390,000.
+- **Priority fees:** add `setComputeUnitPrice`. The fee is charged on the limit you request, so a
+  limit from the simulation costs less than a fixed high one.
 - **Rent:** a wallet's first trade of a token creates its holding (about 0.0023 SOL), and the
   first buy with SOL creates its bridged-SOL holding too.
 - **The protocol's take** is in the quote (`protocolFee`), never extra.
@@ -141,6 +152,8 @@ still fill.
 sentence:
 
 ```ts
+import { explainFailure } from '@bordrless/sdk';
+
 const sim = await connection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true });
 if (sim.value.err) console.log(explainFailure(sim.value.logs ?? [], sim.value.err)?.explanation);
 ```
@@ -156,6 +169,7 @@ The ones users meet:
 | `EarlyLocked` (kit) | Tokens bought in the first seconds stay until `launch.earlyUnlockAt` | Show the unlock time |
 | `FurnaceNotLit` (Half-Life) | The launch's last step hasn't landed yet; buys work | Retry in a few seconds |
 | `Paused` | The DEX or the launchpad is paused | Trading is paused |
+| An error whose `programId` is the token's custom hook (`launch.customHook`) | The hook refused the transfer | Name the hook. A sell that always fails while buys work is the honeypot pattern ([Hooks](05-hooks-and-risk.md#which-hook-a-token-runs)) |
 
 ## Ordinary pools
 
