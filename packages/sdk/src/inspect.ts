@@ -11,6 +11,7 @@
 import { Keypair, PublicKey, type AccountInfo, type Connection, type TransactionInstruction } from '@solana/web3.js';
 import { HOOK_AUTHORITY_PROBLEM, HOOK_UPGRADE_AUTHORITIES, PROGRAM_IDS, TOKEN_HOOK_FLAGS_ALL, checkLaunchRules, hookAuthorityAccepted, kitModules, type LaunchRulesInput } from '@bordrless/shared';
 import { HALF_LIFE_PROGRAM, LAUNCH_CONFIG, LAUNCH_PROGRAM, TAX_HOOK_PROGRAM, programDataAddress, registryAddress, BPF_LOADER_UPGRADEABLE, SYSTEM_PROGRAM } from './addresses.ts';
+import { timelockAddress } from './authority.ts';
 import { LAUNCH_CONFIG_LABEL_MAX, decodeLaunchConfig, decodeLaunchConfigAccount, launchRulesInputOf, type LaunchConfig, type LaunchConfigAccount, type LaunchRulesData } from './accounts.ts';
 import { MAX_CUSTOM_HOOK_EXTRAS, decodeHookAccountList, resolveCustomHookAccounts, type CustomHookAccounts, type HookAccountList } from './hooks.ts';
 import { halfLife as halfLifeIx, launch, type CreateConfigArgs } from './instructions.ts';
@@ -30,6 +31,8 @@ export interface ProgramUpgradeInfo {
   upgradeAuthority: PublicKey | null;
   /** Whether it can still be upgraded; null when it could not be told. */
   upgradeable: boolean | null;
+  /** Phase 3a: its upgrade authority is its own `hook_timelock` account (known only when the program's id was given). */
+  timelocked?: boolean;
 }
 
 const PROGRAM_TAG = 2;
@@ -45,14 +48,20 @@ export function upgradeAuthorityOf(data: Buffer): PublicKey | null | undefined {
   return new PublicKey(data.subarray(OPTION_AT + 1, OPTION_AT + 33));
 }
 
-/** A program's upgrade info from its account and its ProgramData account (null when either is not that). */
-export function programUpgradeInfoOf(program: AccountInfo<Buffer> | null, programData: AccountInfo<Buffer> | null): ProgramUpgradeInfo {
+/**
+ * A program's upgrade info from its account and its ProgramData account (null when either is not
+ * that). With the program's id, `timelocked` says whether its authority is its own `hook_timelock`
+ * account (phase 3a).
+ */
+export function programUpgradeInfoOf(program: AccountInfo<Buffer> | null, programData: AccountInfo<Buffer> | null, programId?: PublicKey): ProgramUpgradeInfo {
   if (!program || !program.executable) return { executable: false, upgradeAuthority: null, upgradeable: null };
   if (!program.owner.equals(BPF_LOADER_UPGRADEABLE)) return { executable: true, upgradeAuthority: null, upgradeable: false };
   if (program.data.length < 36 || program.data.readUInt32LE(0) !== PROGRAM_TAG || !programData || !programData.owner.equals(BPF_LOADER_UPGRADEABLE)) return { executable: true, upgradeAuthority: null, upgradeable: null };
   const authority = upgradeAuthorityOf(programData.data);
   if (authority === undefined) return { executable: true, upgradeAuthority: null, upgradeable: null };
-  return { executable: true, upgradeAuthority: authority, upgradeable: authority !== null };
+  const info: ProgramUpgradeInfo = { executable: true, upgradeAuthority: authority, upgradeable: authority !== null };
+  if (programId && authority) info.timelocked = authority.equals(timelockAddress(programId));
+  return info;
 }
 
 /**
@@ -63,13 +72,15 @@ export function programUpgradeInfoOf(program: AccountInfo<Buffer> | null, progra
 export function hookAuthorityProblem(info: ProgramUpgradeInfo): string | null {
   if (!info.executable || info.upgradeable !== true || !info.upgradeAuthority) return null;
   if (HOOK_UPGRADE_AUTHORITIES.includes(info.upgradeAuthority.toBase58())) return null;
+  // Phase 3a: behind its own timelock (the launch program checks the delay is at least 3 days).
+  if (info.timelocked === true) return null;
   return `Anyone holding ${info.upgradeAuthority.toBase58()} could change this hook after launch. Make it immutable first (solana program set-upgrade-authority <program> --final), or deploy it with Bordrless Studio.`;
 }
 
 /** Reads a program and its ProgramData account in one round trip. */
 export async function fetchProgramUpgradeInfo(connection: Connection, program: PublicKey): Promise<ProgramUpgradeInfo> {
   const [p, d] = await connection.getMultipleAccountsInfo([program, programDataAddress(program)], 'confirmed');
-  return programUpgradeInfoOf(p ?? null, d ?? null);
+  return programUpgradeInfoOf(p ?? null, d ?? null, program);
 }
 
 /**
@@ -78,7 +89,7 @@ export async function fetchProgramUpgradeInfo(connection: Connection, program: P
  * Studio's key or the protocol's can upgrade. Only a known outside authority is refused.
  */
 export function hookAcceptedBy(hook: PublicKey | null, info: ProgramUpgradeInfo | null): boolean {
-  return hookAuthorityAccepted(hook?.toBase58() ?? null, info ? { upgradeAuthority: info.upgradeAuthority?.toBase58() ?? null, upgradeable: info.upgradeable } : null);
+  return hookAuthorityAccepted(hook?.toBase58() ?? null, info ? { upgradeAuthority: info.upgradeAuthority?.toBase58() ?? null, upgradeable: info.upgradeable, timelocked: info.timelocked === true } : null);
 }
 
 // ---- checking a config as the programs do ------------------------------------------------------------------
@@ -174,7 +185,7 @@ export async function inspectConfig(connection: Connection, address: PublicKey, 
   if (config.customHook) {
     const keys = [config.customHook, programDataAddress(config.customHook), ...(mint ? [registryAddress(config.customHook, mint)] : [])];
     const [programInfo, programData, registryInfo] = await connection.getMultipleAccountsInfo(keys, 'confirmed');
-    hook = programUpgradeInfoOf(programInfo ?? null, programData ?? null);
+    hook = programUpgradeInfoOf(programInfo ?? null, programData ?? null, config.customHook);
     problems.push(...customHookProblems(config.customHook, config.customHookFlags, config.rules, programInfo ?? null));
     hookAccepted = hookAcceptedBy(config.customHook, hook);
     // One sentence: a hook that is not deployed already says so.
@@ -223,7 +234,7 @@ export interface TokenHookInspection {
  */
 export async function inspectTokenHook(connection: Connection, program: PublicKey, mint: PublicKey): Promise<TokenHookInspection> {
   const [programInfo, programData, registryInfo] = await connection.getMultipleAccountsInfo([program, programDataAddress(program), registryAddress(program, mint)], 'confirmed');
-  const info = programUpgradeInfoOf(programInfo ?? null, programData ?? null);
+  const info = programUpgradeInfoOf(programInfo ?? null, programData ?? null, program);
   const ownProgram = !PROTOCOL_PROGRAMS.some((p) => p.equals(program));
   const accepted = hookAcceptedBy(program, info);
   const problems: string[] = [];

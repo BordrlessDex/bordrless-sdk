@@ -18,6 +18,7 @@ import * as a from './addresses.ts';
 import { kitModulesOf, rulesBurn, type Launch, type LaunchRulesData } from './accounts.ts';
 import { CODERS, type ProgramName } from './coders.ts';
 import { customHookLaunchAccounts, customHookSlice, kitHookSlice, tokenHookSlice, type CustomHookAccounts, type TokenHook } from './hooks.ts';
+import { timelockAddress } from './authority.ts';
 
 const ro = (pubkey: PublicKey, isSigner = false): AccountMeta => ({ pubkey, isSigner, isWritable: false });
 const rw = (pubkey: PublicKey, isSigner = false): AccountMeta => ({ pubkey, isSigner, isWritable: true });
@@ -479,6 +480,12 @@ export interface CreateLaunchOptions {
   launchConfig?: PublicKey | null;
   /** The custom hook's accounts (`fetchCustomHookAccounts`), exactly when the config names one. */
   customHook?: CustomHookAccounts | null;
+  /**
+   * The config was made on a timelocked hook (`LaunchConfigAccount.hookTimelocked`): the hook's
+   * `Timelock` goes last, after the hook's extras. The launch is refused while that timelock holds a
+   * proposal (`HookTimelockPending`). Leave it unset for every other config (old clients' accounts).
+   */
+  hookTimelocked?: boolean;
 }
 
 /** What a client needs of a launch to build its swaps and its graduation (`bordrless_launch::client::LaunchKeys`). */
@@ -541,6 +548,15 @@ export const launch = {
     return ix(a.LAUNCH_PROGRAM, 'launch', 'createConfig', { args: { ...args, rules: { ...args.rules } } }, [...withEvents(a.LAUNCH_PROGRAM, keys), ...hookProgramData(args.customHook)]);
   },
   /**
+   * `createConfig` for a custom hook whose upgrade authority is its own `hook_timelock` (phase 3a):
+   * the hook's `Timelock` after its ProgramData, which the program reads for the delay.
+   */
+  createConfigTimelocked(creator: PublicKey, launchConfig: PublicKey, args: CreateConfigArgs): TransactionInstruction {
+    const out = launch.createConfig(creator, launchConfig, args);
+    if (args.customHook) out.keys.push(ro(timelockAddress(args.customHook)));
+    return out;
+  },
+  /**
    * `create_listed_config`: a config for the marketplace, as `createConfig`, plus the author's share
    * of the creator fee (1 to `MAX_AUTHOR_SHARE_BPS` bps of it) on every launch someone else makes
    * from it. Fixed for ever: a launch keeps the share it was made with.
@@ -592,6 +608,7 @@ export const launch = {
       opt(a.LAUNCH_PROGRAM, options.launchConfig ?? null),
     ];
     const remaining = hook ? customHookLaunchAccounts(hook, mint) : [];
+    if (hook && options.hookTimelocked) remaining.push(ro(timelockAddress(hook.program)));
     return ix(a.LAUNCH_PROGRAM, 'launch', 'createLaunch', { args: { ...args, virtualQuote: bn(args.virtualQuote), rules: { ...args.rules } } }, [...withEvents(a.LAUNCH_PROGRAM, keys), ...remaining]);
   },
   /**

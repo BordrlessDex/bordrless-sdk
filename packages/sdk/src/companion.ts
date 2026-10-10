@@ -39,6 +39,7 @@ import { customHookTokenHook, kitTokenHook, type HookAccountList, type TokenHook
 import { PROTOCOL_PROGRAMS } from './inspect.ts';
 import { bridge, kit, launch, token, type CreateLaunchArgs, type LaunchKeys } from './instructions.ts';
 import { drawSeed, oraoRequestV2, type SeedSlot } from './orao.ts';
+import { timelockAddress } from './authority.ts';
 
 /** What every creator fee claim pays for, in basis points summing to 10,000 (with a game's `potBps`). */
 export interface CompanionSplit {
@@ -160,9 +161,9 @@ const isZero = (seed: Uint8Array): boolean => seed.every((b) => b === 0);
 
 // ---- games: settings -------------------------------------------------------------------------------
 
-/** The kinds of game a companion runs (`GameKind`, Borsh-numbered in this order): the lottery (phase 1), the last-buyer jackpot and the holding streak (phase 2). */
-export type GameKind = 'lottery' | 'jackpot' | 'streak';
-export const GAME_KINDS: readonly GameKind[] = ['lottery', 'jackpot', 'streak'];
+/** The kinds of game a companion runs (`GameKind`, Borsh-numbered in this order): the lottery (phase 1), the last-buyer jackpot and the holding streak (phase 2), the strategy (phase 3a: a builder's program decides each period's budget and each holder's amount). */
+export type GameKind = 'lottery' | 'jackpot' | 'streak' | 'strategy';
+export const GAME_KINDS: readonly GameKind[] = ['lottery', 'jackpot', 'streak', 'strategy'];
 /** Where a game's draw is (`DrawStatus`). `committed` is never set: `draw` commits its seed and requests it in one instruction (the variant keeps its number). */
 export type DrawStatus = 'idle' | 'committed' | 'requested' | 'revealed';
 /** Why a round paid no prize (`RolloverReason`, the `RolledOver` event's `reason`). */
@@ -548,7 +549,277 @@ export const companion = {
   closeReceipt(mint: PublicKey, epoch: number, owner: PublicKey, payer: PublicKey): TransactionInstruction {
     return new Ix({ programId: a.COMPANION_PROGRAM, keys: [rw(receiptAddress(mint, epoch, owner)), rw(payer), ro(a.gameAddress(mint))], data: CODERS.companion.instruction.encode('closeReceipt', {}) });
   },
+
+  // ---- phase 3a: attestations, audits tied to code, strategies ----
+
+  /**
+   * Independent audit X4: a step of a game whose hook's status records an audit tied to its code
+   * (`needsHookCode(status)`: `set_hook_status_v2`) must carry the hook's ProgramData (read-only),
+   * else the program refuses it (`ProgramAccounts`): the audit then lifts the cap only while the
+   * hook runs that code and is immutable or Bordrless-managed. Every step that applies the hook's
+   * terms: `createGame*`, `draw`, `reveal`, `claimPrize`, `expire`, `retireGame`, `settle`,
+   * `closeEpoch`, `claimShare`, `planPeriod` and `claimFees` of a game (for which `game` also appends the
+   * game, read-only, whose memo spares a rehash). `payStrategy` needs none. Appending it to any
+   * other game's step is harmless; the phase 1/2 builders' own output is unchanged.
+   */
+  withHookCode(ix: TransactionInstruction, hook: PublicKey, game?: PublicKey | null): TransactionInstruction {
+    const pd = a.programDataAddress(hook);
+    if (!ix.keys.some((k) => k.pubkey.equals(pd))) ix.keys.push(ro(pd));
+    if (game && !ix.keys.some((k) => k.pubkey.equals(game))) ix.keys.push(ro(game));
+    return ix;
+  },
+  /**
+   * What the program needs to vet a game hook taken without a status (owner decision 7: Studio's
+   * key, the protocol's or a timelock's to upgrade, with a current Studio attestation): its
+   * ProgramData, its attestation and, when `timelocked`, its `Timelock`.
+   */
+  vettingAccounts(program: PublicKey, timelocked: boolean): AccountMeta[] {
+    return [ro(a.programDataAddress(program)), ro(attestationAddress(program)), ...(timelocked ? [ro(timelockAddress(program))] : [])];
+  },
+  /** `createGame` (a lottery) on a hook taken without a status: its vetting accounts appended. */
+  createGameAttested(payer: PublicKey, mint: PublicKey, args: GameArgs, timelocked: boolean): TransactionInstruction {
+    const ix = companion.createGame(payer, mint, args);
+    ix.keys.push(...companion.vettingAccounts(args.hook, timelocked));
+    return ix;
+  },
+  /** `createGameV2` with the hook's attestation (and its `Timelock` when `timelocked`) after its ProgramData: what a Studio hook needs now. */
+  createGameV2Attested(payer: PublicKey, mint: PublicKey, args: GameArgs, kind: GameKindArgs, timelocked: boolean): TransactionInstruction {
+    const ix = companion.createGameV2(payer, mint, args, kind);
+    ix.keys.push(ro(attestationAddress(args.hook)), ...(timelocked ? [ro(timelockAddress(args.hook))] : []));
+    return ix;
+  },
+  /** `attest(args)`, signed by Studio's attester (`STUDIO_ATTESTER`): `program`'s code attested; the program recomputes its hash from the ProgramData and refuses a mismatch. */
+  attest(attester: PublicKey, program: PublicKey, args: AttestArgs): TransactionInstruction {
+    const named = [rw(attester, true), ro(program), ro(a.programDataAddress(program)), rw(attestationAddress(program)), ro(a.SYSTEM_PROGRAM)];
+    const data = {
+      args: {
+        buildHash: Array.from(hex32(args.buildHash)),
+        sourceHash: Array.from(hex32(args.sourceHash)),
+        templateCommit: Array.from(Buffer.from(args.templateCommit, 'hex')),
+        simVersion: args.simVersion,
+        simPass: args.simPass,
+        cutMaxBps: args.cutMaxBps,
+        capBps: args.capBps,
+        review: args.review === 'pass' ? 0 : 1,
+        kind: ATTESTATION_KINDS.indexOf(args.kind),
+      },
+    };
+    return build('attest', data, named, []);
+  },
+  /** `revoke`, signed by the attester or the companion's upgrade authority. */
+  revoke(authority: PublicKey, program: PublicKey): TransactionInstruction {
+    return build('revoke', {}, [ro(authority, true), ro(a.COMPANION_PROGRAM_DATA), rw(attestationAddress(program))], []);
+  },
+  /** `set_hook_status_v2(hook, args, auditedHash)`: an audit tied to the code's executable hash (hex; zeros without an audit), with the hook's program, ProgramData and `Timelock` for the program to check. */
+  setHookStatusV2(authority: PublicKey, hook: PublicKey, args: HookStatusArgs, auditedHash: string): TransactionInstruction {
+    const named = [rw(authority, true), ro(a.COMPANION_PROGRAM_DATA), rw(a.hookStatusAddress(hook)), ro(a.SYSTEM_PROGRAM)];
+    return build('setHookStatusV2', { hook, args: { audited: args.audited, potCap: bn(args.potCap), blocked: args.blocked }, auditedHash: Array.from(hex32(auditedHash)) }, named, auditAccounts(hook));
+  },
+  /** `setHookStatus` (v1) with the hook's audit accounts: the program refuses an audit of a timelocked or author-upgradeable hook. What the SDK's admin tools send. */
+  setHookStatusChecked(authority: PublicKey, hook: PublicKey, args: HookStatusArgs): TransactionInstruction {
+    const ix = companion.setHookStatus(authority, hook, args);
+    ix.keys.push(...auditAccounts(hook));
+    return ix;
+  },
+  /**
+   * `create_strategy_game(args, s)` (phase 3a): a strategy game for `mint` (whose keypair signs),
+   * `args.kind` `'strategy'` on a lottery-format hook (Bordrless's `lottery_hook`), `s` the
+   * strategy's terms. `hookVetting`: the ticket hook's `vettingAccounts` when it has no status
+   * (none for `lottery_hook`); the strategy's ProgramData (and `Timelock` when
+   * `strategyTimelocked`) follow; `extras` are what its registry names (`strategyRegistryExtras`).
+   */
+  createStrategyGame(payer: PublicKey, mint: PublicKey, args: GameArgs, s: StrategyArgs, hookVetting: AccountMeta[], strategyTimelocked: boolean, extras: PublicKey[]): TransactionInstruction {
+    const named = [
+      rw(payer, true),
+      ro(mint, true),
+      rw(a.companionAddress(mint)),
+      rw(a.gameAddress(mint)),
+      rw(strategyTermsAddress(mint)),
+      ro(a.gameStateAddress(args.hook, mint)),
+      ro(a.registryAddress(args.hook, mint)),
+      ro(a.hookStatusAddress(args.hook)),
+      ro(s.strategy),
+      ro(a.hookStatusAddress(s.strategy)),
+      ro(strategyRegistryAddress(s.strategy, mint)),
+      ro(a.SYSTEM_PROGRAM),
+    ];
+    const data = {
+      args: { kind: { [args.kind]: {} }, hook: args.hook, split: args.split, potBps: args.potBps, roundSecs: args.roundSecs, minPot: bn(args.minPot), prizeBps: args.prizeBps, claimWindowSecs: args.claimWindowSecs, maxAttempts: args.maxAttempts },
+      s: { strategy: s.strategy, budgetBps: s.budgetBps, maxShareBps: s.maxShareBps, maxPerTx: s.maxPerTx, planCuMax: s.planCuMax, entitleCuMax: s.entitleCuMax, minWeight: bn(s.minWeight) },
+    };
+    const extra = [...hookVetting, ro(a.programDataAddress(s.strategy)), ...(strategyTimelocked ? [ro(timelockAddress(s.strategy))] : []), ...extras.map((k) => ro(k))];
+    return build('createStrategyGame', data, named, extra);
+  },
+  /** `plan_period(period)` (anyone, during the period after it): the strategy asked for the period's budget; a refused answer closes it with nothing (`PeriodRejected`), 0 skips it. */
+  planPeriod(cranker: PublicKey, mint: PublicKey, hook: PublicKey, strategy: PublicKey, pool: PublicKey, extras: PublicKey[], period: number): TransactionInstruction {
+    const named = [ro(cranker, true), rw(a.companionAddress(mint)), rw(a.gameAddress(mint)), rw(strategyTermsAddress(mint)), ro(a.hookStatusAddress(hook)), ro(a.hookStatusAddress(strategy)), ro(a.launchAddress(mint)), ro(pool), ro(a.gameStateAddress(hook, mint)), ro(strategy)];
+    return build('planPeriod', { period }, named, [...strategyClassAccounts(strategy), ...extras.map((k) => ro(k))]);
+  },
+  /** `pay_strategy(period, n)` (anyone, while the period is open): `owners` (1 to `maxPerTx`) each asked `entitle` and paid as SOL less the sender's bounty, once a period (a receipt each, rent from `cranker`, back by `closeReceipt`). */
+  payStrategy(cranker: PublicKey, mint: PublicKey, hook: PublicKey, strategy: PublicKey, extras: PublicKey[], period: number, owners: PublicKey[]): TransactionInstruction {
+    const creator = a.companionCreatorAddress(mint);
+    const named = [rw(cranker, true), rw(a.companionAddress(mint)), rw(creator), rw(a.gameAddress(mint)), rw(strategyTermsAddress(mint)), ro(a.hookStatusAddress(hook)), ro(a.hookStatusAddress(strategy)), ro(a.launchAddress(mint)), ro(a.gameStateAddress(hook, mint)), ro(strategy), ro(a.SYSTEM_PROGRAM)];
+    const candidates = owners.flatMap((o) => [ro(a.holdingAddress(mint, o)), rw(o), rw(receiptAddress(mint, period, o))]);
+    return build('payStrategy', { period, n: owners.length }, named, [...strategyClassAccounts(strategy), ...extras.map((k) => ro(k)), ...unwrapAccounts(creator), ...candidates]);
+  },
 };
+
+/** The audit accounts of `hook` (`set_hook_status_v2`, `setHookStatusChecked`): the program, its ProgramData and its `Timelock` (unused addresses when it has none). */
+/** What `plan_period` and `pay_strategy` read the strategy's class by (checked before every question): its ProgramData and its timelock's address (which need not exist). */
+export const strategyClassAccounts = (strategy: PublicKey): AccountMeta[] => [ro(a.programDataAddress(strategy)), ro(timelockAddress(strategy))];
+
+const auditAccounts = (hook: PublicKey): AccountMeta[] => [ro(hook), ro(a.programDataAddress(hook)), ro(timelockAddress(hook))];
+
+const hex32 = (h: string): Buffer => {
+  const b = Buffer.from(h, 'hex');
+  if (b.length !== 32) throw new Error('a hash is 32 bytes of hex');
+  return b;
+};
+
+// ---- phase 3a: attestations, strategies -------------------------------------------------------------
+
+/** What an attestation says a program is (informative): a token hook, a game hook, a strategy. */
+export const ATTESTATION_KINDS = ['tokenHook', 'gameHook', 'strategy'] as const;
+export type AttestationKind = (typeof ATTESTATION_KINDS)[number];
+
+/** `attest`'s arguments (hashes as hex). */
+export interface AttestArgs {
+  /** `solana-verify`'s executable hash of the code Studio built: must be the code on chain. */
+  buildHash: string;
+  /** sha256 of the frozen source. */
+  sourceHash: string;
+  /** The Studio template's commit (40 hex characters). */
+  templateCommit: string;
+  simVersion: number;
+  /** Must be true: a failing simulation gets no attestation. */
+  simPass: boolean;
+  cutMaxBps: number;
+  capBps: number;
+  review: 'pass' | 'warn';
+  kind: AttestationKind;
+}
+
+/** Studio's attestation of a program, `PDA(["attest", program])` (`HookAttestation`). */
+export interface HookAttestation {
+  program: PublicKey;
+  buildHash: string;
+  sourceHash: string;
+  templateCommit: string;
+  simVersion: number;
+  simPass: boolean;
+  cutMaxBps: number;
+  capBps: number;
+  review: 'pass' | 'warn';
+  kind: AttestationKind;
+  programdataSlot: bigint;
+  attestedAt: number;
+  attester: PublicKey;
+  revoked: boolean;
+  revokedAt: number;
+}
+
+/** Studio's attestation of `program`: `PDA(["attest", program])` under the companion. */
+export const attestationAddress = (program: PublicKey): PublicKey => PublicKey.findProgramAddressSync([Buffer.from('attest'), program.toBuffer()], a.COMPANION_PROGRAM)[0];
+/** A strategy game's terms: `PDA(["strategy", mint])` under the companion. */
+export const strategyTermsAddress = (mint: PublicKey): PublicKey => PublicKey.findProgramAddressSync([Buffer.from('strategy'), mint.toBuffer()], a.COMPANION_PROGRAM)[0];
+/** A strategy's registry for `mint`: `PDA(["bordrless-strategy-accounts", mint], strategy)`. */
+export const strategyRegistryAddress = (strategy: PublicKey, mint: PublicKey): PublicKey => PublicKey.findProgramAddressSync([Buffer.from('bordrless-strategy-accounts'), mint.toBuffer()], strategy)[0];
+
+/** A `HookAttestation` account. */
+export function decodeHookAttestation(data: Buffer): HookAttestation {
+  const r = CODERS.companion.accounts.decode('hookAttestation', data) as Record<string, unknown>;
+  const h = (v: unknown): string => Buffer.from(v as ArrayLike<number>).toString('hex');
+  return {
+    program: r.program as PublicKey,
+    buildHash: h(r.buildHash),
+    sourceHash: h(r.sourceHash),
+    templateCommit: h(r.templateCommit),
+    simVersion: num(r.simVersion),
+    simPass: Boolean(r.simPass),
+    cutMaxBps: num(r.cutMaxBps),
+    capBps: num(r.capBps),
+    review: num(r.review) === 0 ? 'pass' : 'warn',
+    kind: ATTESTATION_KINDS[num(r.kind)] ?? 'tokenHook',
+    programdataSlot: big(r.programdataSlot),
+    attestedAt: num(r.attestedAt),
+    attester: r.attester as PublicKey,
+    revoked: Boolean(r.revoked),
+    revokedAt: num(r.revokedAt),
+  };
+}
+
+/** `create_strategy_game`'s strategy settings (`StrategyArgs`). */
+export interface StrategyArgs {
+  strategy: PublicKey;
+  /** The most of the unlocked pot a period may pay: 1 to 5,000 bps. */
+  budgetBps: number;
+  /** The most one holder gets of a period's budget: 1 to 2,500 bps. */
+  maxShareBps: number;
+  /** The most candidates one payment takes: 1 to 4. */
+  maxPerTx: number;
+  /** What keepers budget for `plan` (to 150,000) and `entitle` (to 60,000): the companion can't meter a strategy on mainnet, Studio's simulator holds it to 70% of these. */
+  planCuMax: number;
+  entitleCuMax: number;
+  /** The least weight that may be paid (at least 1). */
+  minWeight: bigint;
+}
+
+/** The program's strategy bounds (`constants.rs`, owner decision 4). */
+export const STRATEGY_LIMITS = { maxBudgetBps: 5_000, maxShareBps: 2_500, maxPerTx: 4, maxPlanCu: 150_000, maxEntitleCu: 60_000, maxExtras: 2 } as const;
+
+/** A strategy game's terms (`StrategyTerms`). */
+export interface StrategyTerms extends Omit<StrategyArgs, 'minWeight'> {
+  game: PublicKey;
+  mint: PublicKey;
+  extras: PublicKey[];
+  periodsPlanned: number;
+  paidTotal: bigint;
+  lastPlanAt: number;
+  /** `paidTotal` when the game last counted as active: it counts again once 1% of the pot has been paid since. */
+  paidAtActive: bigint;
+  /** The strategy's audit as the last plan checked it against the code: whether it held, and for the code deployed at which slot. */
+  auditOk: boolean;
+  auditSlot: bigint;
+}
+
+/** A `StrategyTerms` account. */
+export function decodeStrategyTerms(data: Buffer): StrategyTerms {
+  const r = CODERS.companion.accounts.decode('strategyTerms', data) as Record<string, unknown>;
+  const n = num(r.nExtras);
+  return {
+    game: r.game as PublicKey,
+    mint: r.mint as PublicKey,
+    strategy: r.strategy as PublicKey,
+    extras: (r.extras as PublicKey[]).slice(0, Math.min(n, 2)),
+    budgetBps: num(r.budgetBps),
+    maxShareBps: num(r.maxShareBps),
+    maxPerTx: num(r.maxPerTx),
+    planCuMax: num(r.planCuMax),
+    entitleCuMax: num(r.entitleCuMax),
+    periodsPlanned: num(r.periodsPlanned),
+    paidTotal: big(r.paidTotal),
+    lastPlanAt: num(r.lastPlanAt),
+    paidAtActive: big(r.paidAtActive),
+    auditOk: r.auditOk === true,
+    auditSlot: big(r.auditSlot),
+  };
+}
+
+/** Why `create_strategy_game` would refuse these terms (the program's bounds), or null. */
+export function strategyArgsProblem(args: GameArgs, s: StrategyArgs): string | null {
+  const L = STRATEGY_LIMITS;
+  if (args.kind !== 'strategy') return 'A strategy game is of kind strategy.';
+  if (args.prizeBps !== 0 || args.maxAttempts !== 0) return 'A strategy decides the payouts: no prize share and no attempts.';
+  if (!validRoundSecs(args.roundSecs)) return 'A period is an hour to 30 days.';
+  if (args.claimWindowSecs < GAME_LIMITS.minClaimWindowSecs || args.claimWindowSecs > GAME_LIMITS.maxClaimWindowSecs || args.claimWindowSecs * GAME_LIMITS.claimsPerRound > args.roundSecs) return 'The payment window is 5 minutes to half a period.';
+  if (args.minPot < GAME_LIMITS.minMinPot || args.minPot > GAME_LIMITS.maxMinPot) return 'The minimum pot is 0.1 to 1,000 SOL.';
+  if (s.budgetBps < 1 || s.budgetBps > L.maxBudgetBps) return 'A period pays at most half the pot.';
+  if (s.maxShareBps < 1 || s.maxShareBps > L.maxShareBps) return 'One holder gets at most a quarter of a period’s budget.';
+  if (s.maxPerTx < 1 || s.maxPerTx > L.maxPerTx) return 'A payment takes 1 to 4 holders.';
+  if (s.planCuMax < 1 || s.planCuMax > L.maxPlanCu || s.entitleCuMax < 1 || s.entitleCuMax > L.maxEntitleCu) return 'The compute caps are at most 150,000 (plan) and 60,000 (entitle).';
+  if (s.minWeight < 1n) return 'The least weight paid is at least 1.';
+  return null;
+}
 
 /** The receipt of `owner`'s claim of streak epoch `epoch` of `mint`'s game: `PDA(["claimed", game, u32_le(epoch), owner])`. */
 export function receiptAddress(mint: PublicKey, epoch: number, owner: PublicKey): PublicKey {
@@ -657,6 +928,9 @@ export interface Game {
   minStreakSecs: number;
   minWeight: bigint;
   epochPaid: bigint;
+  /** Phase 3a (X4): the deploy slot of the hook's code when its hashed audit last held for it (`hookAuditOk`); 0 and false until a step checks one. */
+  hookAuditSlot: number;
+  hookAuditOk: boolean;
 }
 
 /** A `Game` account, by its IDL name `game`. */
@@ -706,6 +980,8 @@ export function decodeGame(data: Buffer): Game {
     minStreakSecs: num(r.minStreakSecs),
     minWeight: big(r.minWeight),
     epochPaid: big(r.epochPaid),
+    hookAuditSlot: num(r.hookAuditSlot),
+    hookAuditOk: Boolean(r.hookAuditOk),
   };
 }
 
@@ -767,6 +1043,17 @@ export interface HookStatus extends HookStatusArgs {
   hook: PublicKey;
   updatedAt: number;
   updatedBy: PublicKey;
+  /** Phase 3a: the executable hash (hex) of the code the audit was of (`set_hook_status_v2`); null when none is recorded (not audited, or audited by v1). */
+  auditedHash?: string | null;
+}
+
+/**
+ * Whether a game's steps must carry its hook's ProgramData (`companion.withHookCode`): the hook's
+ * status is audited with a recorded code hash (`set_hook_status_v2`). A v1 audit (no hash), no
+ * audit or no status: no.
+ */
+export function needsHookCode(status: Pick<HookStatus, 'audited' | 'auditedHash'> | null | undefined): boolean {
+  return Boolean(status?.audited && status.auditedHash);
 }
 
 /** A `HookStatus` account, by its IDL name `hookStatus`. */
@@ -781,6 +1068,7 @@ export function decodeHookStatus(data: Buffer): HookStatus {
     blocked: Boolean(r.blocked),
     updatedAt: num(r.updatedAt),
     updatedBy: r.updatedBy as PublicKey,
+    auditedHash: ((h: Buffer) => (h.every((b) => b === 0) ? null : h.toString('hex')))(Buffer.from(r.reserved as ArrayLike<number>)),
   };
 }
 

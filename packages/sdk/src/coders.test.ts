@@ -87,6 +87,10 @@ describe('v2 accounts (programs-summary §3 and §6)', () => {
     expect([c.creator.equals(creator), c.customHook?.equals(hook), c.customHookFlags, c.label, c.creatorFeeBps, c.rules.burnBuyBps, c.createdAt, c.authorShareBps]).toEqual([true, true, 65, 'taxed', 100, 50, 1_800_000_000, 2_500]);
     const kitOnly = decodeLaunchConfigAccount(await encodeAccount('launch', 'launchConfig', { ...value, rules: rulesRaw, customHook: null, customHookFlags: 0, label: '' }));
     expect([kitOnly.customHook, kitOnly.customHookFlags, kitOnly.label, kitOnly.rules]).toEqual([null, 0, '', rulesRaw]);
+    // Phase 3a (independent audit X1): reserved[0] = 1 marks a config made on a timelocked hook.
+    expect(c.hookTimelocked).toBe(false);
+    const flagged = decodeLaunchConfigAccount(await encodeAccount('launch', 'launchConfig', { ...value, reserved: [1, ...Array(29).fill(0)] }));
+    expect(flagged.hookTimelocked).toBe(true);
   });
 
   it('reads the launch Config with its rule bounds, and a Launch with its rules, kit fields, config and custom hook', async () => {
@@ -236,7 +240,7 @@ describe('errors are explained by the program that failed (codes overlap)', () =
     expect(explainProgramError('launch', 2006)).toMatchObject({ name: 'ConstraintSeeds' });
     expect(explainProgramError('kit', 6999).name).toBeNull();
     expect(explainProgramError('swap', 6037)).toMatchObject({ name: 'NotBridgedSol', message: "the pool's quote is not bridged SOL" });
-    expect([PROGRAM_ERRORS.kit.size, PROGRAM_ERRORS.launch.size, PROGRAM_ERRORS.swap.size, PROGRAM_ERRORS.token.size, PROGRAM_ERRORS.bridge.size, PROGRAM_ERRORS.taxHook.size]).toEqual([29, 44, 38, 27, 14, 6]);
+    expect([PROGRAM_ERRORS.kit.size, PROGRAM_ERRORS.launch.size, PROGRAM_ERRORS.swap.size, PROGRAM_ERRORS.token.size, PROGRAM_ERRORS.bridge.size, PROGRAM_ERRORS.taxHook.size]).toEqual([29, 46, 38, 27, 14, 6]);
   });
 
   it('explains the companion\'s game errors and the lottery hook\'s, read from the logs of a failed step', () => {
@@ -247,7 +251,7 @@ describe('errors are explained by the program that failed (codes overlap)', () =
     // v1's codes keep their numbers: v2 only appends.
     expect(explainProgramError('companion', 6011).name).toBe('CustomHookUnsupported');
     // Phase 2 appends three more (the jackpot's and the streak's steps).
-    expect([PROGRAM_ERRORS.companion.size, PROGRAM_ERRORS.lotteryHook.size]).toEqual([52, 6]);
+    expect([PROGRAM_ERRORS.companion.size, PROGRAM_ERRORS.lotteryHook.size]).toEqual([67, 6]);
     expect(explainProgramError('companion', 6049).name).toBe('WrongGameKind');
     expect(explainProgramError('companion', 6050)).toMatchObject({ name: 'NoShare', explanation: expect.stringMatching(/forfeits the share/) });
     expect(explainProgramError('lotteryHook', 6005)).toMatchObject({ program: 'lotteryHook', name: 'NotEligible' });

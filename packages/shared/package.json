@@ -1,6 +1,6 @@
 {
   "name": "@bordrless/shared",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "type": "module",
   "description": "Bordrless policy (the same math as crates/bordrless-core), program addresses and the API types shared by the server and the site. No Solana dependencies.",
   "license": "Apache-2.0",

@@ -245,6 +245,9 @@ export const hasCustomHook = (launch: Pick<Launch, 'customHook'>): boolean => la
  * historical reasons): made by anyone with `create_config` as a keypair account, fixed once made,
  * usable for any number of launches. 176 bytes.
  */
+/** `LaunchConfig.reserved[0]` of a config made on a timelocked custom hook. */
+export const LAUNCH_CONFIG_TIMELOCKED_HOOK = 1;
+
 export interface LaunchConfigAccount {
   version: number;
   /** Who made it. */
@@ -261,6 +264,13 @@ export interface LaunchConfigAccount {
   createdAt: number;
   /** A listed config's author share (`create_listed_config`): bps of the creator fee paid to `creator` on every launch someone else makes from it; 0 for a plain config. Fixed for ever. */
   authorShareBps: number;
+  /**
+   * The custom hook was behind its own `hook_timelock` when the config was made (`reserved[0]`,
+   * `LaunchConfig::TIMELOCKED_HOOK`): every launch from it passes the hook's `Timelock` last
+   * (`createLaunch(..., { hookTimelocked: true })`), and is refused while that timelock holds a
+   * proposal (`HookTimelockPending`).
+   */
+  hookTimelocked: boolean;
 }
 
 /** A `LaunchConfig` account is 176 bytes. */
@@ -537,6 +547,7 @@ export const decodeLaunchConfigAccount = (data: Buffer): LaunchConfigAccount => 
     label: String(r.label),
     createdAt: int(r.createdAt),
     authorShareBps: Number(r.authorShareBps),
+    hookTimelocked: r.customHook != null && Number((r.reserved as number[] | Uint8Array)[0]) === LAUNCH_CONFIG_TIMELOCKED_HOOK,
   };
 };
 

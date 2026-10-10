@@ -22,7 +22,26 @@ export const PROGRAM_IDS = {
    * (2026-10-08): companion v2 and this hook go live together, after their audit.
    */
   lotteryHook: 'HqFWsCBQ416DAfevJ9TspyT5yXGGoYTCpcreiGkCgWcr',
+  /**
+   * `hook_timelock` (phase 3a, bordrless-programs docs/phase3a.md §3): a hook's or a strategy's
+   * upgrade authority behind a public delay of at least 3 days; its only exit is "immutable". Not
+   * deployed yet (2026-10-09).
+   */
+  hookTimelock: 'BBUzaamchPWZpKENmn7bopiuQWvRGm2Vg8TqLLgzgGGZ',
+  /**
+   * `hook_vault` (phase 3a, §5): where a hook's cuts go, each slot with a policy fixed before the
+   * launch (burn, sell for SOL to a fixed wallet, sell and buy-and-burn another token), run by a
+   * permissionless crank under the companion's buyback guards. Not deployed yet (2026-10-09).
+   */
+  hookVault: '5cojoUStG7WFhHJiSncCUEwTqDuhDLKu4a9BqTbF8jzG',
 } as const;
+
+/**
+ * Bordrless Studio's attester (phase 3a, docs/phase3a.md §6): a hot key of Studio's build worker,
+ * the only signer of the companion's `HookAttestation` ("Bordrless rebuilt this source, its hash is
+ * the code on chain, the checks, the simulator and the review passed"). Not Studio's upgrade key.
+ */
+export const STUDIO_ATTESTER = '3uGLsTJNse7vE3pgRkAf6aKKBoKmCyPUcNNu1bw3KvP2';
 
 /**
  * The lottery hook's fixed facts (programs/lottery_hook/README.md): the flags a `LaunchConfig`

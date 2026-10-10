@@ -161,6 +161,21 @@ the protocol blocks has its pot bought back and burned, paying no one. The draw 
 "provably fair": ORAO's signers are trusted to answer. The design, the keeper's loop and every rule:
 [docs/games.md](https://github.com/BordrlessDex/bordrless-programs/blob/main/docs/games.md).
 
+## Risk labels, timelocks, strategies and vaults (0.8.0 and later)
+
+- `hookRiskLabel(connection, program, { mint })`: who can change a hook (immutable, timelocked N days,
+  Bordrless-managed, author-upgradeable), whether its code is audited or Studio-attested, and any other
+  programs it calls. Show it next to every custom-hook token.
+- `timelock`: put your own hook or strategy's upgrade authority behind a public delay (at least 3
+  days, only ever lengthened), propose code by hash, execute after the delay, or finalize to immutable.
+- `strategy`: a companion game whose payouts your program decides, within the companion's caps.
+- `vault`: route a hook's cut to slots that burn, sell for SOL to a fixed wallet, or buy and burn
+  another token, fixed before launch.
+- The `bordrless` CLI (`npx bordrless --help`): build, deploy (immutable or timelocked), register,
+  propose and execute.
+
+Design: [docs/phase3a.md](https://github.com/BordrlessDex/bordrless-programs/blob/main/docs/phase3a.md).
+
 ## Where to read more
 
 - The SDK page, with the hook interface and the examples: https://bordrless.app/sdk

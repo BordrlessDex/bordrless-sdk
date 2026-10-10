@@ -23,6 +23,8 @@ export const IDL = {
   halfLife: require('../idl/half_life.json') as Idl,
   companion: require('../idl/bordrless_companion.json') as Idl,
   lotteryHook: require('../idl/lottery_hook.json') as Idl,
+  hookTimelock: require('../idl/hook_timelock.json') as Idl,
+  hookVault: require('../idl/hook_vault.json') as Idl,
 };
 
 function coder(idl: Idl): Coder {
@@ -40,6 +42,8 @@ export const CODERS = {
   halfLife: coder(IDL.halfLife),
   companion: coder(IDL.companion),
   lotteryHook: coder(IDL.lotteryHook),
+  hookTimelock: coder(IDL.hookTimelock),
+  hookVault: coder(IDL.hookVault),
 };
 
 export type ProgramName = keyof typeof CODERS;

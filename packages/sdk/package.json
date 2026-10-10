@@ -1,6 +1,6 @@
 {
   "name": "@bordrless/sdk",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "type": "module",
   "description": "TypeScript client of the Bordrless programs: addresses, account and event decoding from the IDLs, instruction builders, and the resolution of a hook's extra accounts.",
   "license": "Apache-2.0",
@@ -31,6 +31,9 @@
   ],
   "publishConfig": {
     "access": "public",
+    "bin": {
+      "bordrless": "./dist/cli/bordrless.js"
+    },
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
     "exports": {
@@ -58,5 +61,8 @@
     "@types/node": "24.13.3",
     "typescript": "5.9.2",
     "vitest": "4.1.11"
+  },
+  "bin": {
+    "bordrless": "./src/cli/bordrless.ts"
   }
 }

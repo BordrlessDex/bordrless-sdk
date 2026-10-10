@@ -37,6 +37,8 @@ export const PROGRAM_ERRORS: Readonly<Record<ProgramName, ReadonlyMap<number, Pr
   halfLife: table(IDL.halfLife),
   companion: table(IDL.companion),
   lotteryHook: table(IDL.lotteryHook),
+  hookTimelock: table(IDL.hookTimelock),
+  hookVault: table(IDL.hookVault),
 };
 
 const ANCHOR_ERRORS: ReadonlyMap<number, ProgramErrorEntry> = new Map(
@@ -95,6 +97,8 @@ const EXPLANATIONS: Partial<Record<ProgramName, Readonly<Record<string, string>>
     ConfigMismatch: 'The rules and creator fee sent do not match the config’s. Refresh the config and try again.',
     WrongHookSigner: 'The token program’s signer for this hook is wrong. Refresh and try again.',
     InvalidLabel: 'A config’s label is at most 32 bytes.',
+    HookTimelockInvalid: 'This hook’s upgrade authority is its timelock: pass its Timelock account (a delay of at least 3 days).',
+    HookTimelockPending: 'This hook’s timelock holds a proposal of new code: no config or launch is made on it until its author cancels the proposal (or it lands), so buyers always get the full notice.',
   },
   companion: {
     PotTooSmall: 'The pot is below the game’s minimum: the draw waits for more fees.',
@@ -106,12 +110,39 @@ const EXPLANATIONS: Partial<Record<ProgramName, Readonly<Record<string, string>>
     NotEligible: 'This owner can’t win: only wallets hold tickets, never the launch, its pool or the companion’s creator address.',
     DrawLate: 'Too late: a draw’s claims end with the round after the drawn one.',
     OracleUnanswered: 'The oracle has not answered the pot’s last paid request: the pot pays for a new one only after a backoff.',
-    GameHookNotAccepted: 'A game’s hook must be Bordrless’s lottery hook, one the protocol has vetted, or one only Bordrless can upgrade (a Studio hook), and not blocked.',
     StaleSeed: 'The draw landed too long after the slot it was built from (or the oracle had already answered that slot’s seed). Build it again from the newest slot.',
     WrongGameKind: 'This step is for another kind of game.',
     NoShare: 'This holding has no share of the epoch: it registered no weight, holds less than the minimum, or sent tokens since (a send forfeits the share).',
     NotDue: 'Too early: nothing is due yet.',
     FeesUnclaimed: 'The launch holds creator fees that could fund this prize: claim the fees first, in the same transaction.',
+    GameHookNotAccepted: 'A game’s hook must be Bordrless’s lottery hook, one the protocol has vetted, or one only Bordrless or a timelock can upgrade with a Studio attestation, and not blocked.',
+    HookNotAttested: 'This hook is upgradeable only by Bordrless or a timelock, but Bordrless Studio has not attested its current code as a game hook (or other code is proposed in its timelock): verify it with Studio first.',
+    RevokedByProtocol: 'Bordrless revoked the attestation of this exact build: only new code can be attested.',
+    AuditNeedsFixedCode: 'Only immutable or Bordrless-managed code can be audited: finalize the timelock first.',
+    StrategyNotAccepted: 'The strategy must be immutable, timelocked or Bordrless-managed (checked again before every plan and payment), not blocked, and none of Bordrless’s own programs.',
+    StrategyRegistry: 'The strategy’s registry may name at most 2 accounts, each the strategy’s own.',
+    PeriodNotOpen: 'No strategy period is open for payments: plan the period first.',
+    TooManyCandidates: 'A strategy payment takes 1 to its max-per-transaction holders.',
+    TimelockPending: 'The strategy’s timelock holds a proposal of new code: a game is made on it only once the author cancels the proposal (or it lands).',
+    ProgramAccounts: 'The program’s accounts are missing or wrong. For a game whose hook carries an audit tied to its code, every step passes the hook’s program data: refresh and try again.',
+  },
+  hookTimelock: {
+    TooEarly: 'The timelock’s delay has not passed yet.',
+    Expired: 'The proposal’s 30-day execution window has passed: expire it and propose again.',
+    BufferAuthority: 'Hand the buffer to the timelock first (solana program set-buffer-authority <buffer> --new-buffer-authority <timelock>).',
+    BadLength: 'The length must be the code’s, without its trailing zero bytes.',
+    DelayShortened: 'A timelock’s delay can only be lengthened.',
+    ProposalPending: 'A proposal is pending: execute, cancel or expire it first.',
+  },
+  hookVault: {
+    MintExists: 'A vault is made before its coin is launched: this mint exists already, so its vault can no longer be made.',
+    BadWallet: 'The wallet paid must be able to take SOL: not a program, a reserved address or one of the vault’s own addresses.',
+    DuplicatePool: 'Two buy slots of one vault can’t buy the same token.',
+    BadHookCut: 'A declared hook cut is at most 50%, and only for a token bought that runs its own hook.',
+    NotDue: 'Too early: this slot traded less than an interval ago, or waited less than a minute ago, or the launch is less than a minute old.',
+    NotRetirable: 'A slot is retired only after 60 days in which it neither ran nor waited.',
+    NoRoom: 'The token bought caps wallets and leaves no room for a buy until it graduates.',
+    NotOpener: 'Only the vault’s creator (the wallet that paid for it), or a sender with the coin’s mint keypair signing, opens the vault.',
   },
   kit: {
     MaxWalletExceeded: 'This would take the receiving wallet above max wallet. Buy less, or wait for graduation, when max wallet lifts.',
@@ -147,7 +178,7 @@ const sentence = (text: string): string => {
   return /[.!?]$/.test(capital) ? capital : `${capital}.`;
 };
 
-const PROGRAM_IDS_BY_NAME: Readonly<Record<ProgramName, PublicKey>> = { token: a.TOKEN_PROGRAM, swap: a.SWAP_PROGRAM, bridge: a.BRIDGE_PROGRAM, launch: a.LAUNCH_PROGRAM, kit: a.KIT_PROGRAM, taxHook: a.TAX_HOOK_PROGRAM, halfLife: a.HALF_LIFE_PROGRAM, companion: a.COMPANION_PROGRAM, lotteryHook: a.LOTTERY_HOOK_PROGRAM };
+const PROGRAM_IDS_BY_NAME: Readonly<Record<ProgramName, PublicKey>> = { token: a.TOKEN_PROGRAM, swap: a.SWAP_PROGRAM, bridge: a.BRIDGE_PROGRAM, launch: a.LAUNCH_PROGRAM, kit: a.KIT_PROGRAM, taxHook: a.TAX_HOOK_PROGRAM, halfLife: a.HALF_LIFE_PROGRAM, companion: a.COMPANION_PROGRAM, lotteryHook: a.LOTTERY_HOOK_PROGRAM, hookTimelock: a.HOOK_TIMELOCK_PROGRAM, hookVault: a.HOOK_VAULT_PROGRAM };
 
 /** The error `code` of `program` (its SDK name or its id), explained. */
 export function explainProgramError(program: ProgramName | string | PublicKey, code: number): ProgramErrorInfo {

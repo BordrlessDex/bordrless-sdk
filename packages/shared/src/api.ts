@@ -206,6 +206,12 @@ export interface ConfigInspection {
   authorShareBps: number;
   /** The hook was built and deployed by Studio: the launch prepares it for the mint itself (its standard `prepare`). */
   studioHook?: boolean;
+  /**
+   * The hook is a game hook made in Studio (docs/games.md "Phase 2"): its kind and the constants
+   * its source fixes. The config then launches a jackpot or streak coin through the companion
+   * (`companion.game` of that kind); null or absent for any other hook.
+   */
+  game?: import('./studio.ts').StudioGameSettings | null;
 }
 
 /** Live figures of a launch's token rules; each null when the launch lacks the rule or it is not tracked. */
@@ -250,6 +256,8 @@ export interface ProgramInfo {
   upgradeAuthority: Address | null;
   /** Whether the program can still be upgraded; null when unknown. */
   upgradeable: boolean | null;
+  /** Phase 3a: present (true) when the upgrade authority is the program's own `hook_timelock` account. */
+  timelocked?: boolean;
 }
 
 export interface LaunchSummary {
@@ -586,7 +594,40 @@ export interface LaunchPrepareRequest {
  * preset splits by name; with `game`, a lottery coin (docs/games.md): the split's holders' share is
  * then 0 and the pot's part (`game.potBps`) makes the four add up to 10,000.
  */
-export type CompanionRequest = { split: CompanionSplitBps; vestDays?: number; game?: LotteryRequest } | { template: CompanionTemplate; vestDays?: number };
+export type CompanionRequest = { split: CompanionSplitBps; vestDays?: number; game?: GameRequest } | { template: CompanionTemplate; vestDays?: number };
+
+/** The kinds of game a companion runs (the companion's `GameKind`): the lottery (phase 1), the last-buyer jackpot and the holding streak (phase 2). */
+export type GameKindName = 'lottery' | 'jackpot' | 'streak' | 'strategy';
+
+/**
+ * A game coin's game as the launch request names it: a lottery on Bordrless's lottery hook, or a
+ * jackpot or a streak on a game hook made in Studio (docs/games.md "Phase 2"), whose config the
+ * request's `config` must name (the kind's settings are the hook's constants: the timer and the
+ * minimum buy, the epoch, the minimum streak and weight; `ConfigInspection.game` shows them).
+ */
+export type GameRequest = LotteryRequest | JackpotRequest | StreakRequest;
+
+/** A jackpot coin's game as the launch request names it (`create_game_v2`): the pot's part, the minimum pot and what a settle pays; the timer and the minimum buy are the hook's. */
+export interface JackpotRequest {
+  kind: 'jackpot';
+  potBps: number;
+  /** A round is paid only while the pot holds at least this, lamports: 0.1 to 1,000 SOL (a round settled below it pays nothing). */
+  minPotLamports: Amount;
+  /** The part of the pot a settle pays the last buyer, basis points: 10% to 100%. */
+  prizeBps: number;
+}
+
+/** A streak coin's game as the launch request names it (`create_game_v2`): the pot's part, the minimum pot, what an epoch shares and the least a close leaves for claims; the epoch, the minimum streak and weight are the hook's. */
+export interface StreakRequest {
+  kind: 'streak';
+  potBps: number;
+  /** An epoch is closed only while the pot holds at least this, lamports: 0.1 to 1,000 SOL. */
+  minPotLamports: Amount;
+  /** The part of the pot an epoch shares among its holders, basis points: 10% to 100%. */
+  prizeBps: number;
+  /** The least a close leaves for claims, seconds: 5 minutes to a day, at most half an epoch. */
+  claimWindowSecs: number;
+}
 
 /**
  * A lottery coin's game as the launch request names it (docs/games.md "The companion's game"):
@@ -608,19 +649,28 @@ export interface LotteryRequest {
   maxAttempts: number;
 }
 
-/** A lottery coin's settings as its token page shows them (`CompanionSummary.game`): fixed at the launch, and the hook's terms. */
+/** A game coin's settings as its token page shows them (`CompanionSummary.game`): fixed at the launch, and the hook's terms. A jackpot's and a streak's kind settings (phase 2) are the hook's. */
 export interface GameSummary {
-  kind: 'lottery';
+  kind: GameKindName;
   /** The game's account, `PDA(["game", mint])` under the companion program. */
   address: Address;
-  /** The coin's token hook, which keeps the tickets (the lottery hook). */
+  /** The coin's token hook, which keeps the tickets (the lottery hook, or a game hook made in Studio). */
   hook: Address;
+  /** A lottery's round, a streak's epoch; 0 for a jackpot. */
   roundSecs: number;
   potBps: number;
   minPot: Amount;
   prizeBps: number;
+  /** A lottery's claim attempt window, the least a streak's close leaves for claims; 0 for a jackpot. */
   claimWindowSecs: number;
+  /** A lottery's attempts per draw; 0 otherwise. */
   maxAttempts: number;
+  /** Jackpot: a round ends this long after its last qualifying buy, and the least a qualifying buy delivers (base units). Absent or 0 for the other kinds. */
+  timerSecs?: number;
+  minTokens?: Amount;
+  /** Streak: by an epoch's end a holding must have sent nothing for this long, and the least weight that shares (base units). Absent or 0 for the other kinds. */
+  minStreakSecs?: number;
+  minWeight?: Amount;
   /** The most the pot may hold while the hook is not audited (lamports); null for an audited hook. */
   potCap: Amount | null;
   audited: boolean;
@@ -669,9 +719,97 @@ export interface GameYou {
   odds: number | null;
   /** Its tickets in the round before (the one a draw may be for now). */
   previousTickets: Amount;
+  /** A jackpot (phase 2): the wallet's place in it. Absent for the other kinds. */
+  jackpot?: JackpotYou | null;
+  /** A streak (phase 2): the wallet's weight and share. Absent for the other kinds. */
+  streak?: StreakYou | null;
 }
 
-/** A lottery coin's live state (`CompanionStatus.game`, docs/games.md): the pot, the round, the draw, the caller's tickets and the draw history. */
+/** The caller's place in a jackpot (`GameYou.jackpot`). */
+export interface JackpotYou {
+  /** The number of the wallet's first qualifying buy since it last sent anything; '0' after any send (the mark). */
+  mark: Amount;
+  /** The wallet is the current round's last qualifying buyer. */
+  lastBuyer: boolean;
+  /** Among the rounds over and not settled, those this wallet would be paid for if settled now (it still holds what it bought). */
+  wins: number;
+}
+
+/** The caller's place in a streak (`GameYou.streak`). */
+export interface StreakYou {
+  /** The wallet's weight in the current epoch, base units ('0' until registered: `enter` registers it, a trade writes it). */
+  weight: Amount;
+  /** Whether a holding that sends nothing until the epoch's end will share (it has held long enough, at least the minimum weight). */
+  qualifies: boolean;
+  /** The claim epoch (the one open for claims): the wallet's weight in it and the share it can claim now, lamports; '0' after a claim or a send. */
+  claimWeight: Amount;
+  claimShare: Amount;
+  /** The wallet's receipt of the claim epoch exists: its share was paid. */
+  claimed: boolean;
+}
+
+/** A jackpot round as the status lists it (`JackpotStatus.open`, `JackpotStatus.rounds`): its number, buyer, the amount bought and when, and what became of it. */
+export interface JackpotRound {
+  /** The round's number: that of its last qualifying buy. */
+  number: number;
+  buyer: Address;
+  amount: Amount;
+  /** When its last qualifying buy landed (its timer ran out `timerSecs` later). */
+  boughtAt: number;
+  /** `open`: over, not settled yet; `paid`; `unfunded`: closed paying nothing (the pot below its minimum); `forfeited`: the buyer sold or sent, or can't be paid. */
+  status: 'open' | 'paid' | 'unfunded' | 'forfeited';
+  prize: Amount | null;
+  reason: 'notHeld' | 'unpayable' | 'stale' | null;
+  signature: string | null;
+  at: number | null;
+}
+
+/** A jackpot coin's live state (`GameStatus.jackpot`, docs/games.md "The jackpot"). */
+export interface JackpotStatus {
+  /** The current round's last qualifying buyer, what they bought and when; null before the first qualifying buy. */
+  lastBuyer: Address | null;
+  lastAmount: Amount;
+  lastBuyAt: number | null;
+  /** When the current round's timer runs out (the last buyer is paid if they still hold); null without a buy. */
+  timerEndsAt: number | null;
+  /** Qualifying buys so far (the current round's number), and the last round settled. */
+  buys: number;
+  paidBuys: number;
+  /** Buys count only while the coin is on its curve: once graduated, the jackpot ends (the round under way is still paid). */
+  onCurve: boolean;
+  /** Rounds over and not settled yet, oldest first (a keeper settles them within seconds). */
+  open: JackpotRound[];
+  /** Rounds settled, as the indexer saw them, newest first. */
+  rounds: JackpotRound[];
+}
+
+/** A streak epoch as the status lists it (`StreakStatus.epochs`): what the indexer saw of it. */
+export interface StreakEpoch {
+  epoch: number;
+  epochEndsAt: number;
+  /** `closed`: its pot fixed, claims open; `ended`: claims over; `rolledOver`: no pot (no weight, or closed too late). */
+  status: 'closed' | 'ended' | 'rolledOver';
+  /** Its weight total and its pot, lamports. */
+  total: Amount;
+  pot: Amount;
+  /** Paid out so far, lamports, and how many claims. */
+  paid: Amount;
+  claims: number;
+  signature: string | null;
+  at: number | null;
+}
+
+/** A streak coin's live state (`GameStatus.streak`, docs/games.md "The streak"). */
+export interface StreakStatus {
+  /** The claim epoch: the one whose claims are open, its pot, total, what it paid so far and when its claims end; null while none is open. */
+  claim: { epoch: number; pot: Amount; total: Amount; paid: Amount; claimsEndAt: number } | null;
+  /** The epoch before the current one: over, not closed yet (a keeper closes it); null once closed or rolled over. */
+  closing: { epoch: number; total: Amount; closeBy: number } | null;
+  /** Epochs closed, ended or rolled over, as the indexer saw them, newest first. */
+  epochs: StreakEpoch[];
+}
+
+/** A game coin's live state (`CompanionStatus.game`, docs/games.md): the pot, the round (a streak's epoch), the caller's place in it and the history. A lottery's draw and draws; a jackpot's and a streak's under their own names. */
 export interface GameStatus extends GameSummary {
   /** Bridged SOL the pot holds, lamports. */
   pot: Amount;
@@ -692,6 +830,23 @@ export interface GameStatus extends GameSummary {
   lastWinner: Address | null;
   you: GameYou | null;
   draws: GameDraw[];
+  /** A jackpot's live state (phase 2); absent or null for the other kinds. */
+  jackpot?: JackpotStatus | null;
+  /** A streak's live state (phase 2); absent or null for the other kinds. */
+  streak?: StreakStatus | null;
+}
+
+/** `POST /v1/game/claim/prepare`: a streak holder's own `claim_share` of the claim epoch (docs/games.md "The streak"): paid to the wallet, which pays its receipt's rent (back once the epoch's claims end, `close_receipt`). */
+export interface GameClaimRequest {
+  wallet: Address;
+  mint: Address;
+}
+
+export interface GameClaimResponse {
+  transactions: PreparedTx[];
+  /** The epoch claimed and the share it pays, lamports (before the sender's bounty, which is the wallet's own here). */
+  epoch: number;
+  share: Amount;
 }
 
 /** `POST /v1/game/enter/prepare`: a holder's own `enter` (docs/games.md): their whole balance registered as tickets for the current round, when the holding was not written this round yet. */
@@ -1270,3 +1425,94 @@ export interface HookInspection {
   problems: string[];
 }
 
+
+// ---- accounts and trading wallets --------------------------------------------------------------------
+//   POST /v1/account/session                 -> AccountSessionResponse        the signup wallet signs `accountSignInMessage`
+//   GET  /v1/account/wallets                  -> AccountWallets                the session's trading wallets (public keys only)
+//   POST /v1/account/wallets                  -> AccountWallets                register one; the trading wallet co-signs `tradingWalletMessage`
+//   POST /v1/account/wallets/:pubkey/revoke   -> AccountWallets
+//   POST /v1/account/withdraw/prepare         -> AccountWithdrawPrepareResponse a plain SOL transfer from a registered trading wallet
+//   POST /v1/account/withdraw/send            -> AccountWithdrawSendResponse    the signed transfer, sent and followed
+//
+// An account is a wallet: the one a visitor connected (their signup wallet), or, without one, a
+// trading wallet generated in their browser. Trading wallets are keypairs made and kept in the
+// browser; Bordrless stores their public keys and labels under the account, never a secret.
+
+/** Trading wallets an account may have registered at once. */
+export const MAX_TRADING_WALLETS = 5;
+
+/** The header the account session travels in, browser → site proxy → backend. The same token serves Studio (`STUDIO_SESSION_HEADER`). */
+export const ACCOUNT_SESSION_HEADER = 'x-studio-session';
+
+/** The message a wallet signs to sign in to Bordrless: no transaction, nothing moves. */
+export function accountSignInMessage(wallet: Address, nonce: string, issuedAt: string): string {
+  return ['Sign in to Bordrless', '', 'This signature proves you own this wallet. It does not move funds or approve any transaction.', '', `Wallet: ${wallet}`, `Nonce: ${nonce}`, `Issued: ${issuedAt}`].join('\n');
+}
+
+/** The message a trading wallet signs to be registered under an account: proof the key exists and is held by whoever holds the account. */
+export function tradingWalletMessage(account: Address, publicKey: Address): string {
+  return ['Bordrless trading wallet', '', 'This wallet was generated in your browser for trading on Bordrless and belongs to the account below.', '', `Account: ${account}`, `Wallet: ${publicKey}`].join('\n');
+}
+
+export interface AccountSessionRequest {
+  wallet: Address;
+  /** The exact message signed (`accountSignInMessage`). */
+  message: string;
+  /** Base58 ed25519 signature of the message's UTF-8 bytes. */
+  signature: string;
+}
+
+export interface AccountSessionResponse {
+  token: string;
+  wallet: Address;
+  /** Unix seconds. */
+  expiresAt: number;
+}
+
+export interface AccountWallet {
+  publicKey: Address;
+  label: string;
+  /** Unix seconds. */
+  createdAt: number;
+  revokedAt: number | null;
+}
+
+export interface AccountWallets {
+  account: Address;
+  /** Active registrations, oldest first. */
+  wallets: AccountWallet[];
+  max: number;
+}
+
+export interface AccountWalletRegisterRequest {
+  publicKey: Address;
+  /** At most 32 characters. */
+  label: string;
+  /** Base58 ed25519 signature by `publicKey` of `tradingWalletMessage(account, publicKey)`. */
+  signature: string;
+}
+
+/** A plain SOL transfer out of a registered trading wallet (to the signup wallet, usually). */
+export interface AccountWithdrawPrepareRequest {
+  /** The trading wallet that pays and signs. */
+  wallet: Address;
+  to: Address;
+  lamports: Amount;
+}
+
+export interface AccountWithdrawPrepareResponse {
+  transactions: PreparedTx[];
+  /** The network fee the transfer pays, lamports. */
+  feeLamports: Amount;
+}
+
+export interface AccountWithdrawSendRequest {
+  /** Base64 of the signed transaction from `AccountWithdrawPrepareResponse`. */
+  transaction: string;
+}
+
+export interface AccountWithdrawSendResponse {
+  signature: string;
+  state: 'confirmed' | 'failed' | 'expired' | 'pending';
+  error: string | null;
+}

@@ -12,3 +12,8 @@ export * from './game.ts';
 export * from './gameKinds.ts';
 export * from './lotteryHook.ts';
 export * from './orao.ts';
+export * from './authority.ts';
+export * from './timelock.ts';
+export * from './vault.ts';
+export * from './strategy.ts';
+export * from './risk.ts';

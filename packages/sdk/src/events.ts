@@ -28,8 +28,8 @@ const PROGRAM_OF: ReadonlyMap<string, ProgramName> = new Map([
   [a.HALF_LIFE_PROGRAM.toBase58(), 'halfLife'],
 ]);
 
-/** Every program the SDK has a coder for, by id: the indexed ones above, the companion and the lottery hook. */
-const ANY_PROGRAM_OF: ReadonlyMap<string, ProgramName> = new Map<string, ProgramName>([...PROGRAM_OF, [a.COMPANION_PROGRAM.toBase58(), 'companion'], [a.LOTTERY_HOOK_PROGRAM.toBase58(), 'lotteryHook']]);
+/** Every program the SDK has a coder for, by id: the indexed ones above, the companion, the lottery hook, `hook_timelock` and `hook_vault`. */
+const ANY_PROGRAM_OF: ReadonlyMap<string, ProgramName> = new Map<string, ProgramName>([...PROGRAM_OF, [a.COMPANION_PROGRAM.toBase58(), 'companion'], [a.LOTTERY_HOOK_PROGRAM.toBase58(), 'lotteryHook'], [a.HOOK_TIMELOCK_PROGRAM.toBase58(), 'hookTimelock'], [a.HOOK_VAULT_PROGRAM.toBase58(), 'hookVault']]);
 
 /** The SDK's name of a Bordrless program id whose events the indexer reads (`INDEXED_EVENT_PROGRAMS`); null for any other program. */
 export const programNameOf = (programId: string | PublicKey): ProgramName | null => PROGRAM_OF.get(typeof programId === 'string' ? programId : programId.toBase58()) ?? null;

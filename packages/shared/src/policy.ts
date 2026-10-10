@@ -6,7 +6,8 @@
  * `programs/tests/vectors/launch-fees.json`, which the Rust tests render from the reference the
  * programs are held to, and requires exact equality.
  */
-import type { CompanionSplitBps, CompanionTemplate, GameRolloverReason, LaunchRules, LaunchRulesInput, LotteryRequest, Side } from './api.ts';
+import type { CompanionSplitBps, CompanionTemplate, GameKindName, GameRequest, GameRolloverReason, JackpotRequest, LaunchRules, LaunchRulesInput, LotteryRequest, Side, StreakRequest } from './api.ts';
+import type { StudioGameSettings } from './studio.ts';
 import { HOOK_DATA_LEN, TOKEN_HOOK_FLAGS } from './programs.ts';
 
 export const BPS = 10_000n;
@@ -583,6 +584,96 @@ export const LOTTERY_COPY = {
   stop: 'Bordrless can stop this game: its pot would be bought back and burned. Nobody is paid.',
   cap: 'Pot capped at 10 SOL until the game’s hook is audited.',
   oracle: 'Randomness by ORAO VRF: ORAO’s three signers produce it. They could withhold or bias a draw; Bordrless can’t.',
+} as const;
+
+// ---- jackpot and streak coins (docs/games.md "Phase 2"), on game hooks made in Studio -----------------
+
+/** The jackpot's timer and the streak's minimum streak: the companion's bounds (`GAME_LIMITS` in the SDK). */
+export const GAME_KIND_LIMITS = { minTimerSecs: 300, maxTimerSecs: 30 * DAY_SECS, maxMinStreakSecs: 365 * DAY_SECS } as const;
+
+/** A jackpot as the launch form starts it (spec example 2, `JACKPOT_DEFAULTS` in the SDK): 70% of the fee to the pot, 30% bought back, half the pot to the last buyer from 0.5 SOL. */
+export const JACKPOT_REQUEST_DEFAULTS: Readonly<JackpotRequest> = { kind: 'jackpot', potBps: 7_000, minPotLamports: '500000000', prizeBps: 5_000 };
+/** A streak as the launch form starts it (spec example 3, `STREAK_DEFAULTS` in the SDK): 70% of the fee to the pot, 30% bought back, the whole pot shared each epoch from 0.1 SOL, an hour at least for claims. */
+export const STREAK_REQUEST_DEFAULTS: Readonly<StreakRequest> = { kind: 'streak', potBps: 7_000, minPotLamports: '100000000', prizeBps: 10_000, claimWindowSecs: 3_600 };
+/** The least a streak's close leaves for claims, as the form offers it (seconds); each must fit half the hook's epoch. */
+export const STREAK_CLAIM_WINDOW_CHOICES: readonly { secs: number; label: string }[] = [
+  { secs: 1_800, label: '30 min' },
+  { secs: 3_600, label: '1 hour' },
+  { secs: 21_600, label: '6 hours' },
+  { secs: DAY_SECS, label: '1 day' },
+];
+
+/** The game a launch request's `companion.game` names, of any kind, each field a whole number; null when malformed (bounds are `gameProblem`'s). */
+export function gameRequestOf(raw: unknown): GameRequest | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (r.kind === 'lottery') return lotteryRequestOf(raw);
+  if (r.kind !== 'jackpot' && r.kind !== 'streak') return null;
+  if (!isWhole(r.potBps, 0, 10_000) || !isWhole(r.prizeBps, 0, 10_000)) return null;
+  if (typeof r.minPotLamports !== 'string' || !/^\d{1,20}$/.test(r.minPotLamports)) return null;
+  if (r.kind === 'jackpot') return { kind: 'jackpot', potBps: r.potBps, minPotLamports: r.minPotLamports, prizeBps: r.prizeBps };
+  if (!isWhole(r.claimWindowSecs, 0, 2 ** 32 - 1)) return null;
+  return { kind: 'streak', potBps: r.potBps, minPotLamports: r.minPotLamports, prizeBps: r.prizeBps, claimWindowSecs: r.claimWindowSecs };
+}
+
+/**
+ * Why `create_game_v2` (or the launch) would refuse this game with this split on these rules at
+ * this fee, with `hook` the Studio game hook the config names (`ConfigInspection.game`; null: the
+ * config names none), in one sentence; null when it would not. A lottery is `lotteryProblem`'s.
+ * The program's own checks (`gameArgsProblem` in the SDK, the same sentences) and what a game
+ * coin's launch needs besides: a creator fee, no token rules, no holders' share, and a hook of the
+ * game's kind.
+ */
+export function gameProblem(game: GameRequest, split: CompanionSplitBps, rules: LaunchRulesInput, creatorFeeBps: number, hook: StudioGameSettings | null = null): string | null {
+  if (game.kind === 'lottery') return lotteryProblem(game, split, rules, creatorFeeBps);
+  const L = LOTTERY_LIMITS;
+  const word = GAME_KIND_NAMES[game.kind];
+  if (!hook) return `A ${word} coin launches from a game hook made in Studio: open your ${word} project there and press Launch with it.`;
+  if (hook.kind !== game.kind) return `This config’s hook keeps a ${GAME_KIND_NAMES[hook.kind]}’s score, not a ${word}’s.`;
+  if (creatorFeeBps === 0) return 'There is no creator fee to fill the pot with: set one.';
+  if ((Object.keys(NO_RULES) as (keyof LaunchRulesInput)[]).some((k) => rules[k] !== 0)) return `A ${word} coin has no other token rules: its hook keeps the score.`;
+  if (split.holdersBps !== 0) return 'A game coin runs its own hook, so it has no holder rewards: no holders’ part.';
+  if (!(game.potBps > 0) || split.buybackBps + split.holdersBps + split.beneficiaryBps + game.potBps !== 10_000) return 'The pot’s part and the split must add up to 10,000 basis points, with a pot.';
+  const minPot = BigInt(game.minPotLamports);
+  if (minPot < L.minMinPotLamports || minPot > L.maxMinPotLamports) return 'The minimum pot is 0.1 to 1,000 SOL.';
+  if (game.prizeBps < L.minPrizeBps || game.prizeBps > 10_000) return 'A game pays 10% to 100% of the pot at a time.';
+  if (game.kind === 'jackpot') {
+    if (hook.timerSecs < GAME_KIND_LIMITS.minTimerSecs || hook.timerSecs > GAME_KIND_LIMITS.maxTimerSecs) return 'A jackpot’s timer lasts 5 minutes to 30 days.';
+    if (BigInt(hook.minTokens) < 1n) return 'A qualifying buy is at least one base unit.';
+    return null;
+  }
+  if (hook.roundSecs < L.minRoundSecs || hook.roundSecs > L.maxRoundSecs) return 'An epoch lasts an hour to 30 days.';
+  if (game.claimWindowSecs < L.minClaimWindowSecs || game.claimWindowSecs > L.maxClaimWindowSecs || game.claimWindowSecs * L.claimsPerRound > hook.roundSecs) return 'A streak leaves claims 5 minutes to a day, at most half an epoch.';
+  if (hook.minStreakSecs > GAME_KIND_LIMITS.maxMinStreakSecs) return 'A streak asks at most a year without sending.';
+  if (BigInt(hook.minWeight) < 1n) return 'The least weight that shares is at least one base unit.';
+  return null;
+}
+
+/** Each game kind in a word: "jackpot". */
+export const GAME_KIND_NAMES: Readonly<Record<GameKindName, string>> = { lottery: 'lottery', jackpot: 'jackpot', streak: 'streak', strategy: 'strategy' };
+
+/**
+ * The copy rules of a jackpot and a streak coin (docs/games.md "Phase 2", "Site"): said on the
+ * launch form, the review step and the token page. The pot is held by the companion and paid by
+ * code (no randomness in either kind), the 10 SOL cap until the hook is audited, "Bordrless can
+ * stop this game"; never "provably fair", "guaranteed" or "audited".
+ */
+export const JACKPOT_COPY = {
+  held: 'The pot is held by the companion program and paid out by code. No randomness: the last buyer wins.',
+  rule: 'The last buyer wins if they keep every token they bought: any sale or transfer forfeits.',
+  unfunded: 'If the pot is below its minimum when a round is settled, the round pays nothing and the pot carries on.',
+  curve: 'Buys count while the coin is on its curve: the jackpot ends at graduation (the round under way is still paid).',
+  cap: LOTTERY_COPY.cap,
+  stop: LOTTERY_COPY.stop,
+} as const;
+
+export const STREAK_COPY = {
+  held: 'The pot is held by the companion program and paid out by code. No randomness: holders share in proportion to what they held.',
+  rule: 'Send anything, to anyone, and you lose this epoch’s and last epoch’s share. Claim before you sell.',
+  weight: 'Your weight is what you held since the epoch began: tokens that arrive during an epoch count from the next.',
+  claims: 'Shares are claimed during the next epoch; the keeper claims for everyone whose share covers the fee, the rest claim here. What is not claimed rolls over.',
+  cap: LOTTERY_COPY.cap,
+  stop: LOTTERY_COPY.stop,
 } as const;
 
 /** Why a round paid no prize, in a few words each (`GameRolloverReason`). */

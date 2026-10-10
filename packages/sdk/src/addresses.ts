@@ -17,6 +17,10 @@ export const HALF_LIFE_PROGRAM = new PublicKey(PROGRAM_IDS.halfLife);
 export const COMPANION_PROGRAM = new PublicKey(PROGRAM_IDS.companion);
 /** The lottery hook (`programs/lottery_hook`): a lottery coin's token hook under the game ticket standard. */
 export const LOTTERY_HOOK_PROGRAM = new PublicKey(PROGRAM_IDS.lotteryHook);
+/** `hook_timelock` (phase 3a): a program's upgrade authority behind a public delay of at least 3 days. */
+export const HOOK_TIMELOCK_PROGRAM = new PublicKey(PROGRAM_IDS.hookTimelock);
+/** `hook_vault` (phase 3a): where a hook's cuts go, each slot with a policy fixed before the launch. */
+export const HOOK_VAULT_PROGRAM = new PublicKey(PROGRAM_IDS.hookVault);
 export const SYSTEM_PROGRAM = new PublicKey(SYSTEM_PROGRAM_ID);
 export const SPL_TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 export const SPL_TOKEN_2022_PROGRAM = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');

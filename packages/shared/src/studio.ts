@@ -25,8 +25,74 @@ export interface StudioFile {
   content: string;
 }
 
-/** What a project becomes: a config of existing rules alone, or a config with its own hook program. */
+/**
+ * What a project becomes: a config of existing rules alone, or a config with its own hook program.
+ * A hook project whose state starts with the game ticket standard's header is a game hook
+ * (docs/games.md "Phase 2"): read from its source (`detectGameSettings`), never chosen, and its
+ * config launches a jackpot, streak or lottery coin through the companion.
+ */
 export type StudioKind = 'config' | 'hook';
+
+/** The kinds of game a game hook keeps the score of (the companion's `GameKind`). */
+export type StudioGameKind = 'lottery' | 'jackpot' | 'streak';
+export const STUDIO_GAME_KINDS: readonly StudioGameKind[] = ['lottery', 'jackpot', 'streak'];
+
+/**
+ * A game hook's companion draft (docs/games.md "The companion's game", phase 2): what the launch
+ * fixes with `create_game_v2` besides the hook's own constants. The split with the pot: the pot's
+ * part and the buyback's, the launcher's what is left (no holders' part: a game coin has no kit).
+ * The kind's settings (the timer, the minimum buy; the epoch, the minimum streak and weight; a
+ * lottery's rounds) are the hook's constants, read from its source (`detectGameSettings`), never
+ * typed: the companion checks them against the hook's kind header.
+ */
+export interface StudioGameDraft {
+  potBps: number;
+  buybackBps: number;
+  /** No settle, close or draw while the pot holds less: 0.1 to 1,000 SOL. */
+  minPotLamports: string;
+  /** The part of the pot a settle, an epoch or a draw pays: 10% to 100%. */
+  prizeBps: number;
+  /** Streak: the least a close leaves for claims (5 minutes to a day, at most half an epoch); lottery: each attempt's window; 0 for a jackpot. */
+  claimWindowSecs: number;
+  /** Lottery only: attempts per draw (1 to 16); 0 otherwise. */
+  maxAttempts: number;
+}
+
+/**
+ * A game hook's kind and settings as its source fixes them (p2-n: the starters' settings are their
+ * code's): the state struct's first field is the crate's `GameHeader`, its second the kind header
+ * (`JackpotHeader` / `StreakHeader`; neither: a lottery), and the settings are what the headers are
+ * made with (`JackpotHeader::new(timer, min_tokens)`, `StreakHeader::new(min_streak, min_weight)`,
+ * `GameHeader::new(mint, round_secs, now)`). Amounts are base units as strings.
+ */
+export interface StudioGameSettings {
+  kind: StudioGameKind;
+  /** Jackpot: a round ends this long after its last qualifying buy. 0 otherwise. */
+  timerSecs: number;
+  /** Jackpot: the least a qualifying buy delivers. '0' otherwise. */
+  minTokens: string;
+  /** Streak: the epoch; lottery: the round. 0 for a jackpot. */
+  roundSecs: number;
+  /** Streak: by an epoch's end a holding must have sent nothing for this long. 0 otherwise. */
+  minStreakSecs: number;
+  /** Streak: the least weight that shares. '0' otherwise. */
+  minWeight: string;
+}
+
+/** The hook flags every game hook runs on: `BEFORE_TRANSFER | BEFORE_BURN | WRITES_HOOK_DATA` (`GameKind::hook_flags`, 145), the only set the companion's launch accepts. */
+export const GAME_HOOK_FLAGS = 145;
+
+/**
+ * The companion draft a game hook starts with (the docs' examples: 70% of the fee to the pot, 30%
+ * bought back; a jackpot paying half the pot from 0.5 SOL; a streak sharing the whole pot from 0.1
+ * SOL with an hour at least for claims; a lottery paying the whole pot from 0.5 SOL, 8 attempts of
+ * 10 minutes).
+ */
+export function gameDraftDefaults(kind: StudioGameKind): StudioGameDraft {
+  if (kind === 'jackpot') return { potBps: 7_000, buybackBps: 3_000, minPotLamports: '500000000', prizeBps: 5_000, claimWindowSecs: 0, maxAttempts: 0 };
+  if (kind === 'streak') return { potBps: 7_000, buybackBps: 3_000, minPotLamports: '100000000', prizeBps: 10_000, claimWindowSecs: 3_600, maxAttempts: 0 };
+  return { potBps: 7_000, buybackBps: 3_000, minPotLamports: '500000000', prizeBps: 10_000, claimWindowSecs: 600, maxAttempts: 8 };
+}
 
 /** The launch config a project makes (the arguments of `create_config` / `create_listed_config`). */
 export interface StudioConfigDraft {
@@ -44,8 +110,10 @@ export interface StudioConfigDraft {
   earlyLockSecs: number;
   /** `TOKEN_HOOK_FLAGS` the hook runs on, for a `hook` project; 0 for a `config` project. */
   hookFlags: number;
-  /** List it on the marketplace (made with `create_listed_config`). */
+  /** List it on the marketplace (made with `create_listed_config`). Never for a game hook: the companion refuses a config that pays an author. */
   listed: boolean;
+  /** A game hook's companion draft (the split with the pot, the minimum pot, the prize, the claim window); null or absent otherwise. The backend fills it with the kind's defaults when the source becomes a game hook. */
+  game?: StudioGameDraft | null;
   /**
    * The author's share of the creator fee on others' launches, bps of it. Not the author's to choose:
    * the backend holds it at `AUTHOR_SHARE_BPS` when listed and 0 when not, whatever is sent.
@@ -74,6 +142,12 @@ export interface StudioProject extends StudioProjectSummary {
   description: string;
   files: StudioFile[];
   draft: StudioConfigDraft;
+  /**
+   * A hook project's game, as its source reads (`detectGameSettings`): its kind and the constants
+   * the companion will check against the hook's kind header. Null when the source is not a game
+   * hook (no `GameHeader` state, or settings that can't be read); absent for a config project.
+   */
+  game?: StudioGameSettings | null;
   /** The last review of the current source; null when the source changed since. */
   review: StudioReview | null;
   /** The last build of the current source; null when the source changed since. */
@@ -85,7 +159,7 @@ export interface StudioProject extends StudioProjectSummary {
 export interface StudioProjectCreateRequest {
   name: string;
   kind: StudioKind;
-  /** Start from a template (`STUDIO_STARTERS`), or blank. */
+  /** Start from a template (`STUDIO_STARTERS`), or blank; the game starters make a game hook. */
   starter?: string;
 }
 
@@ -237,6 +311,12 @@ export interface StudioBuild {
   at: number;
   /** Studio's trading test of what was built (the worker's simulator): a deploy needs `pass`. Absent on builds from before it. */
   sim?: StudioSim | null;
+  /**
+   * The Studio template's commit the worker built against (40 hex characters; the worker's
+   * `STUDIO_TEMPLATE_COMMIT`). Studio's attestation records it, so anyone can rebuild the hook.
+   * Absent on builds from before it, or from a worker that does not report it.
+   */
+  templateCommit?: string | null;
 }
 
 /** The simulator's verdict on a build: launched, bought, sold and sent by several wallets over a simulated year. */
@@ -249,8 +329,24 @@ export interface StudioSim {
   capBps: number | null;
   /** Operations the hook refused. */
   refusedTotal: number;
+  /** The simulator's version (recorded in Studio's attestation); absent from workers that don't report it. */
+  version?: number | null;
   /** What the test can't see (amount triggers, wallets it never used, after a year). */
   notes: string[];
+  /** A game hook's scenarios (the jackpot's or the streak's, docs/games-handover.md phase 2 item 4): absent on a hook that is not a game's, or on builds from before them. */
+  game?: StudioSimGame | null;
+}
+
+/** The simulator's game scenarios on a game hook: the header and the marks or weights checked against a plain model of the rules, and the fairness of the payouts the rules would make. */
+export interface StudioSimGame {
+  kind: StudioGameKind;
+  pass: boolean;
+  /** Each check that failed, in the simulator's words (the first few). */
+  failed: string[];
+  /** Rounds (a jackpot) or epochs (a streak) the scenario ran. */
+  periods: number;
+  /** The largest difference between a wallet's share of the payouts and its share of what it held, in bps, over the fairness run; null when it did not run. */
+  fairnessMaxBps: number | null;
 }
 
 // ---- deploy -----------------------------------------------------------------------------------------
@@ -411,15 +507,19 @@ export const hookFinalCommand = (program = '<PROGRAM_ID>'): string => `solana pr
 
 /**
  * The launch program's rule for a config's own hook (`create_config`, docs/hooks-v2.md §5.8), on its
- * upgrade info: accepted when nobody can upgrade it (`upgradeable: false`), or when its upgrade
- * authority is one of `HOOK_UPGRADE_AUTHORITIES` (Bordrless Studio's key or the protocol's). Only a
+ * upgrade info: accepted when nobody can upgrade it (`upgradeable: false`), when its upgrade
+ * authority is one of `HOOK_UPGRADE_AUTHORITIES` (Bordrless Studio's key or the protocol's), or when
+ * it is its own `hook_timelock` account (`timelocked`, phase 3a: the caller derives
+ * `PDA(["timelock", hook], hook_timelock)` and compares; the launch program also checks the delay). Only a
  * hook some other key is known to be able to upgrade is refused: one whose upgrade info could not be
  * read is not (the launch program checked it when the config was made; the SDK's
  * `hookAuthorityProblem` and the marketplace watch read it the same way). A config without a hook
  * (`customHook` null: the launchpad's and the kit's own programs) passes.
  */
-export function hookAuthorityAccepted(customHook: string | null, hook: { upgradeAuthority: string | null; upgradeable: boolean | null } | null): boolean {
+export function hookAuthorityAccepted(customHook: string | null, hook: { upgradeAuthority: string | null; upgradeable: boolean | null; timelocked?: boolean } | null): boolean {
   if (customHook === null || hook === null || hook.upgradeable !== true || hook.upgradeAuthority === null) return true;
+  // Phase 3a: a hook behind its own `hook_timelock` (a public delay of at least 3 days) is accepted too.
+  if (hook.timelocked === true) return true;
   return HOOK_UPGRADE_AUTHORITIES.includes(hook.upgradeAuthority);
 }
 
@@ -444,12 +544,22 @@ export const STUDIO_PREPARE = { instruction: 'prepare', stateSeed: 'state' } as 
 /** Limits of a project's source. */
 export const STUDIO_LIMITS = { files: 8, bytes: 120_000, messageChars: 8_000 } as const;
 
-/** Starters a new hook project can begin from (the template's `src/lib.rs` variants). */
-export const STUDIO_STARTERS: readonly { id: string; name: string; blurb: string }[] = [
+/**
+ * Starters a new hook project can begin from (the template's `src/lib.rs` variants). Those with
+ * `game` make a game hook (the reference game hooks of docs/games.md "Studio game hooks", written on
+ * the `bordrless-game` crate). A Studio lottery starter is not written yet (it would be
+ * `lottery_hook`'s rules with the standard `prepare` and `ROUND_SECS` as a constant).
+ */
+export const STUDIO_STARTERS: readonly { id: string; name: string; blurb: string; game?: StudioGameKind }[] = [
   { id: 'blank', name: 'Blank hook', blurb: 'The template: every callback stubbed, nothing taken, nothing refused.' },
   { id: 'sell-tax', name: 'Sell tax to a wallet', blurb: 'A cut of every sell sent to a wallet you choose; buys and transfers pass free.' },
   { id: 'cooldown', name: 'Transfer cooldown', blurb: 'A holding that received tokens cannot send them on for a while, stamped in its hook data.' },
+  { id: 'jackpot', game: 'jackpot', name: 'Last-buyer jackpot', blurb: 'Every buy of at least MIN_TOKENS restarts a TIMER_SECS countdown; when it runs out, the last buyer who still holds is paid a share of the pot.' },
+  { id: 'streak', game: 'streak', name: 'Diamond-hands streak', blurb: 'Each epoch, part of the pot is shared among the holders who held through it without sending a token, in proportion to what they held.' },
 ];
+
+/** What each game kind is called on the site: "Jackpot coin". */
+export const GAME_KIND_WORDS: Readonly<Record<StudioGameKind | 'strategy', string>> = { lottery: 'Lottery coin', jackpot: 'Jackpot coin', streak: 'Streak coin', strategy: 'Strategy coin' };
 
 // ---- the hook's flags, read from its source ---------------------------------------------------------
 
@@ -547,4 +657,154 @@ export function detectHookFlags(files: readonly { path: string; content: string 
   if (flags & HOOK_FLAG_BITS.BEFORE_TRANSFER && (/\bDelta\s*\{/.test(code) || /\bdeltas\s*:/.test(code) || /\.deltas\b/.test(code))) flags |= HOOK_FLAG_BITS.TRANSFER_RETURNS_DELTA;
   if (flags && /(?<!args\.)\b(source|destination)_hook_data\b/.test(code)) flags |= HOOK_FLAG_BITS.WRITES_HOOK_DATA;
   return flags;
+}
+
+// ---- a game hook's kind and settings, read from its source --------------------------------------------
+
+/** The index just past the bracket matching the one at `open`, or the end. */
+function closeOf(code: string, open: number): number {
+  let depth = 0;
+  for (let j = open; j < code.length; j += 1) {
+    const ch = code[j];
+    if (ch === '(' || ch === '[' || ch === '{') depth += 1;
+    else if (ch === ')' || ch === ']' || ch === '}') {
+      depth -= 1;
+      if (depth === 0) return j + 1;
+    }
+  }
+  return code.length;
+}
+
+/** The arguments of the call whose opening parenthesis is at `open`, as written (split on commas at depth 0). */
+function argsOf(code: string, open: number): string[] {
+  const inner = code.slice(open + 1, closeOf(code, open) - 1);
+  const out: string[] = [];
+  let depth = 0;
+  let from = 0;
+  for (let j = 0; j < inner.length; j += 1) {
+    const ch = inner[j];
+    if (ch === '(' || ch === '[' || ch === '{') depth += 1;
+    else if (ch === ')' || ch === ']' || ch === '}') depth -= 1;
+    else if (ch === ',' && depth === 0) {
+      out.push(inner.slice(from, j));
+      from = j + 1;
+    }
+  }
+  if (inner.slice(from).trim()) out.push(inner.slice(from));
+  return out.map((a) => a.trim());
+}
+
+/**
+ * A constant expression of the source, evaluated: integer literals (with `_` and a type suffix),
+ * `+ - * /` and parentheses, and the names of other `const`s (followed up to a depth of 8). Null
+ * for anything else (a call, a runtime value, an unknown name, a division by zero).
+ */
+function evalConst(code: string, expr: string, depth = 0): bigint | null {
+  const text = expr.replace(/\s+/g, '');
+  if (!text || depth > 8) return null;
+  let i = 0;
+  const peek = (): string => text[i] ?? '';
+  const primary = (): bigint | null => {
+    if (peek() === '(') {
+      i += 1;
+      const v = sum();
+      if (peek() !== ')') return null;
+      i += 1;
+      return v;
+    }
+    if (peek() === '-') {
+      i += 1;
+      const v = primary();
+      return v === null ? null : -v;
+    }
+    const lit = /^(0x[0-9a-fA-F_]+|\d[\d_]*)(u8|u16|u32|u64|u128|i8|i16|i32|i64|i128|usize|isize)?/.exec(text.slice(i));
+    if (lit) {
+      i += lit[0].length;
+      try {
+        return BigInt(lit[1]!.replace(/_/g, ''));
+      } catch {
+        return null;
+      }
+    }
+    const name = /^(?:(?:crate|self|super)::)*([A-Za-z_][A-Za-z0-9_]*)/.exec(text.slice(i));
+    if (!name) return null;
+    i += name[0].length;
+    const def = new RegExp(`\\bconst\\s+${name[1]}\\s*:\\s*[A-Za-z0-9_:<>]+\\s*=([^;]*);`).exec(code);
+    if (!def) return null;
+    return evalConst(code, def[1]!, depth + 1);
+  };
+  const product = (): bigint | null => {
+    let v = primary();
+    while (v !== null && (peek() === '*' || peek() === '/')) {
+      const op = peek();
+      i += 1;
+      const r = primary();
+      if (r === null) return null;
+      if (op === '/') {
+        if (r === 0n) return null;
+        v /= r;
+      } else v *= r;
+    }
+    return v;
+  };
+  const sum = (): bigint | null => {
+    let v = product();
+    while (v !== null && (peek() === '+' || peek() === '-')) {
+      const op = peek();
+      i += 1;
+      const r = product();
+      if (r === null) return null;
+      v = op === '+' ? v + r : v - r;
+    }
+    return v;
+  };
+  const v = sum();
+  return i === text.length ? v : null;
+}
+
+/** The arguments `Name::new(…)` is called with in `code` (the first call), evaluated; null when there is none or one can't be read. */
+function newArgs(code: string, name: string, count: number): (bigint | null)[] | null {
+  const m = new RegExp(`\\b${name}\\s*::\\s*new\\s*\\(`).exec(code);
+  if (!m) return null;
+  const args = argsOf(code, m.index + m[0].length - 1);
+  if (args.length !== count) return null;
+  return args.map((a) => evalConst(code, a));
+}
+
+const within = (v: bigint | null, max: bigint): v is bigint => v !== null && v >= 0n && v <= max;
+const U32 = 0xffff_ffffn;
+const U64 = 0xffff_ffff_ffff_ffffn;
+
+/**
+ * A game hook's kind and settings from its source (docs/games.md "Studio game hooks", p2-n):
+ * the state struct whose first field is the crate's `GameHeader` names the kind by its second
+ * field (`JackpotHeader`, `StreakHeader`; neither: a lottery), and the settings are the arguments
+ * the headers are made with in `prepare`: `JackpotHeader::new(timer_secs, min_tokens)`,
+ * `StreakHeader::new(min_streak_secs, min_weight)` and `GameHeader::new(mint, round_secs, now)`,
+ * each a constant expression (`const` names followed). Null when the source is not a game hook, or
+ * a setting can't be read from it (the backend then refuses the config: the companion would check
+ * the setting against the hook's header and refuse the setup).
+ */
+export function detectGameSettings(files: readonly { path: string; content: string }[]): StudioGameSettings | null {
+  const code = files.filter((f) => f.path.endsWith('.rs')).map((f) => codeOnly(f.content)).join('\n');
+  const state = /\bstruct\s+\w+\s*(?:<[^>{]*>)?\s*\{\s*(?:#\s*\[[^\]]*\]\s*)*(?:pub(?:\s*\([^)]*\))?\s+)?\w+\s*:\s*(?:(?:::)?bordrless_game\s*::\s*)?GameHeader\s*,\s*(?:#\s*\[[^\]]*\]\s*)*(?:(?:pub(?:\s*\([^)]*\))?\s+)?\w+\s*:\s*(?:(?:::)?bordrless_game\s*::\s*)?(JackpotHeader|StreakHeader)\b)?/.exec(code);
+  if (!state) return null;
+  const kind: StudioGameKind = state[1] === 'JackpotHeader' ? 'jackpot' : state[1] === 'StreakHeader' ? 'streak' : 'lottery';
+  const header = newArgs(code, 'GameHeader', 3);
+  if (!header) return null;
+  const roundSecs = header[1] ?? null;
+  if (!within(roundSecs, U32)) return null;
+  const out: StudioGameSettings = { kind, timerSecs: 0, minTokens: '0', roundSecs: Number(roundSecs), minStreakSecs: 0, minWeight: '0' };
+  if (kind === 'jackpot') {
+    const j = newArgs(code, 'JackpotHeader', 2);
+    if (!j || !within(j[0] ?? null, U32) || !within(j[1] ?? null, U64)) return null;
+    out.timerSecs = Number(j[0]);
+    out.minTokens = j[1]!.toString();
+  } else if (kind === 'streak') {
+    const s = newArgs(code, 'StreakHeader', 2);
+    if (!s || !within(s[0] ?? null, U32) || !within(s[1] ?? null, U64)) return null;
+    out.minStreakSecs = Number(s[0]);
+    out.minWeight = s[1]!.toString();
+  }
+  return out;
 }

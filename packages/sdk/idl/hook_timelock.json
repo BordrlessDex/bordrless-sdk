@@ -1,0 +1,1318 @@
+{
+  "address": "BBUzaamchPWZpKENmn7bopiuQWvRGm2Vg8TqLLgzgGGZ",
+  "metadata": {
+    "name": "hook_timelock",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Bordrless hook timelock: holds a hook's (or a strategy's) upgrade authority behind a public delay of at least 3 days. Proposals carry the new code's executable hash on chain; anyone executes them once the delay has passed; the author can cancel; the authority can only ever move to none (immutable)."
+  },
+  "instructions": [
+    {
+      "name": "accept_author",
+      "docs": [
+        "The named key takes the author role."
+      ],
+      "discriminator": [
+        221,
+        150,
+        152,
+        80,
+        80,
+        8,
+        128,
+        6
+      ],
+      "accounts": [
+        {
+          "name": "new_author",
+          "signer": true
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "timelock.program",
+                "account": "Timelock"
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "cancel",
+      "docs": [
+        "The author cancels the proposal: its buffer is closed to them."
+      ],
+      "discriminator": [
+        232,
+        219,
+        223,
+        41,
+        219,
+        236,
+        220,
+        190
+      ],
+      "accounts": [
+        {
+          "name": "sender",
+          "docs": [
+            "The author (`cancel`) or anyone (`expire`)."
+          ],
+          "signer": true
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "timelock.program",
+                "account": "Timelock"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buffer",
+          "writable": true
+        },
+        {
+          "name": "author",
+          "writable": true
+        },
+        {
+          "name": "loader",
+          "address": "BPFLoaderUpgradeab1e11111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "execute",
+      "docs": [
+        "Anyone, from the proposal's `eta` for `EXECUTE_WINDOW`: the program takes the proposed code."
+      ],
+      "discriminator": [
+        130,
+        221,
+        242,
+        154,
+        13,
+        193,
+        189,
+        29
+      ],
+      "accounts": [
+        {
+          "name": "sender",
+          "docs": [
+            "Anyone."
+          ],
+          "signer": true
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "timelock.program",
+                "account": "Timelock"
+              }
+            ]
+          }
+        },
+        {
+          "name": "target",
+          "writable": true
+        },
+        {
+          "name": "programdata",
+          "writable": true
+        },
+        {
+          "name": "buffer",
+          "writable": true
+        },
+        {
+          "name": "author",
+          "writable": true
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        },
+        {
+          "name": "clock",
+          "address": "SysvarC1ock11111111111111111111111111111111"
+        },
+        {
+          "name": "loader",
+          "address": "BPFLoaderUpgradeab1e11111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "expire",
+      "docs": [
+        "Anyone, once the window has passed: the proposal is dropped and its buffer closed to the",
+        "author."
+      ],
+      "discriminator": [
+        243,
+        83,
+        205,
+        58,
+        57,
+        201,
+        247,
+        146
+      ],
+      "accounts": [
+        {
+          "name": "sender",
+          "docs": [
+            "The author (`cancel`) or anyone (`expire`)."
+          ],
+          "signer": true
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "timelock.program",
+                "account": "Timelock"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buffer",
+          "writable": true
+        },
+        {
+          "name": "author",
+          "writable": true
+        },
+        {
+          "name": "loader",
+          "address": "BPFLoaderUpgradeab1e11111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "finalize",
+      "docs": [
+        "The author makes the program immutable, at once (no proposal may be pending)."
+      ],
+      "discriminator": [
+        171,
+        61,
+        218,
+        56,
+        127,
+        115,
+        12,
+        217
+      ],
+      "accounts": [
+        {
+          "name": "author",
+          "signer": true,
+          "relations": [
+            "timelock"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "timelock.program",
+                "account": "Timelock"
+              }
+            ]
+          }
+        },
+        {
+          "name": "programdata",
+          "writable": true
+        },
+        {
+          "name": "loader",
+          "address": "BPFLoaderUpgradeab1e11111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "lengthen",
+      "docs": [
+        "The author lengthens the delay (never shortens it); a pending `eta` moves with it."
+      ],
+      "discriminator": [
+        92,
+        4,
+        252,
+        10,
+        44,
+        104,
+        248,
+        50
+      ],
+      "accounts": [
+        {
+          "name": "author",
+          "signer": true,
+          "relations": [
+            "timelock"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "timelock.program",
+                "account": "Timelock"
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "delay_secs",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "propose",
+      "docs": [
+        "The author proposes the code in `buffer` (its authority already the `Timelock`), `len`",
+        "bytes long without its trailing zeros: its hash is computed here, live from `now + delay`."
+      ],
+      "discriminator": [
+        93,
+        253,
+        82,
+        168,
+        118,
+        33,
+        102,
+        90
+      ],
+      "accounts": [
+        {
+          "name": "author",
+          "signer": true,
+          "relations": [
+            "timelock"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "timelock.program",
+                "account": "Timelock"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buffer"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "len",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "propose_author",
+      "docs": [
+        "The author names who may take the role (the default key clears it)."
+      ],
+      "discriminator": [
+        219,
+        0,
+        233,
+        73,
+        66,
+        96,
+        219,
+        35
+      ],
+      "accounts": [
+        {
+          "name": "author",
+          "signer": true,
+          "relations": [
+            "timelock"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "timelock.program",
+                "account": "Timelock"
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "new_author",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "reclaim_buffer",
+      "docs": [
+        "The author closes a buffer whose authority is the `Timelock` but which is not the one",
+        "proposed (a mistake), to themselves."
+      ],
+      "discriminator": [
+        251,
+        54,
+        73,
+        101,
+        211,
+        41,
+        153,
+        14
+      ],
+      "accounts": [
+        {
+          "name": "author",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "timelock"
+          ]
+        },
+        {
+          "name": "timelock",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "timelock.program",
+                "account": "Timelock"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buffer",
+          "writable": true
+        },
+        {
+          "name": "loader",
+          "address": "BPFLoaderUpgradeab1e11111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "register",
+      "docs": [
+        "The program's current upgrade authority hands it to its new `Timelock` (delay `delay_secs`,",
+        "author `author`): `SetAuthorityChecked`, the `Timelock` signing."
+      ],
+      "discriminator": [
+        211,
+        124,
+        67,
+        15,
+        211,
+        194,
+        178,
+        240
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "authority",
+          "docs": [
+            "The program's current upgrade authority (a wallet, or a multisig signing by CPI)."
+          ],
+          "signer": true
+        },
+        {
+          "name": "target"
+        },
+        {
+          "name": "programdata",
+          "writable": true
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "target"
+              }
+            ]
+          }
+        },
+        {
+          "name": "loader",
+          "address": "BPFLoaderUpgradeab1e11111111111111111111111"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "delay_secs",
+          "type": "u32"
+        },
+        {
+          "name": "author",
+          "type": "pubkey"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Timelock",
+      "discriminator": [
+        189,
+        33,
+        78,
+        75,
+        205,
+        31,
+        4,
+        177
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "AuthorAccepted",
+      "discriminator": [
+        176,
+        50,
+        160,
+        129,
+        189,
+        2,
+        109,
+        198
+      ]
+    },
+    {
+      "name": "AuthorProposed",
+      "discriminator": [
+        163,
+        204,
+        103,
+        146,
+        164,
+        190,
+        221,
+        62
+      ]
+    },
+    {
+      "name": "BufferReclaimed",
+      "discriminator": [
+        42,
+        141,
+        35,
+        206,
+        90,
+        120,
+        140,
+        65
+      ]
+    },
+    {
+      "name": "DelayLengthened",
+      "discriminator": [
+        70,
+        210,
+        15,
+        254,
+        52,
+        178,
+        120,
+        32
+      ]
+    },
+    {
+      "name": "Finalized",
+      "discriminator": [
+        4,
+        77,
+        242,
+        80,
+        20,
+        152,
+        247,
+        252
+      ]
+    },
+    {
+      "name": "TimelockRegistered",
+      "discriminator": [
+        10,
+        152,
+        73,
+        237,
+        118,
+        109,
+        4,
+        155
+      ]
+    },
+    {
+      "name": "UpgradeCancelled",
+      "discriminator": [
+        89,
+        183,
+        130,
+        129,
+        170,
+        63,
+        1,
+        120
+      ]
+    },
+    {
+      "name": "UpgradeExpired",
+      "discriminator": [
+        87,
+        96,
+        17,
+        165,
+        234,
+        62,
+        121,
+        35
+      ]
+    },
+    {
+      "name": "UpgradeProposed",
+      "discriminator": [
+        254,
+        154,
+        236,
+        63,
+        109,
+        78,
+        234,
+        230
+      ]
+    },
+    {
+      "name": "Upgraded",
+      "discriminator": [
+        138,
+        25,
+        89,
+        37,
+        127,
+        140,
+        213,
+        146
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "DelayTooShort",
+      "msg": "the delay is at least 3 days"
+    },
+    {
+      "code": 6001,
+      "name": "DelayTooLong",
+      "msg": "the delay is at most 365 days"
+    },
+    {
+      "code": 6002,
+      "name": "NotAuthor",
+      "msg": "only the timelock's author may do this"
+    },
+    {
+      "code": 6003,
+      "name": "WrongBuffer",
+      "msg": "the buffer is not the one proposed"
+    },
+    {
+      "code": 6004,
+      "name": "BufferAuthority",
+      "msg": "the buffer's authority must be the timelock (set it with the loader's SetAuthority first)"
+    },
+    {
+      "code": 6005,
+      "name": "BufferTooLarge",
+      "msg": "a proposal's code is at most 2 MiB"
+    },
+    {
+      "code": 6006,
+      "name": "BadLength",
+      "msg": "the length must be the code's, without its trailing zero bytes"
+    },
+    {
+      "code": 6007,
+      "name": "ProposalPending",
+      "msg": "a proposal is pending"
+    },
+    {
+      "code": 6008,
+      "name": "NoProposal",
+      "msg": "no proposal is pending"
+    },
+    {
+      "code": 6009,
+      "name": "TooEarly",
+      "msg": "too early: the delay has not passed"
+    },
+    {
+      "code": 6010,
+      "name": "Expired",
+      "msg": "the proposal's execution window has passed: expire it"
+    },
+    {
+      "code": 6011,
+      "name": "DelayShortened",
+      "msg": "a delay can only be lengthened"
+    },
+    {
+      "code": 6012,
+      "name": "NotUpgradeable",
+      "msg": "the program is not upgradeable by this signer under the upgradeable loader"
+    },
+    {
+      "code": 6013,
+      "name": "WrongProgramData",
+      "msg": "the program data is not the program's"
+    },
+    {
+      "code": 6014,
+      "name": "Finalized",
+      "msg": "the program has been made immutable"
+    },
+    {
+      "code": 6015,
+      "name": "BadAuthor",
+      "msg": "the author can't be the default key"
+    },
+    {
+      "code": 6016,
+      "name": "NotExpired",
+      "msg": "the proposal's window has not passed yet"
+    },
+    {
+      "code": 6017,
+      "name": "NotPendingAuthor",
+      "msg": "the signer is not the author named to take the role"
+    }
+  ],
+  "types": [
+    {
+      "name": "AuthorAccepted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "program",
+            "type": "pubkey"
+          },
+          {
+            "name": "old_author",
+            "type": "pubkey"
+          },
+          {
+            "name": "author",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AuthorProposed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "program",
+            "type": "pubkey"
+          },
+          {
+            "name": "author",
+            "type": "pubkey"
+          },
+          {
+            "name": "pending_author",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BufferReclaimed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "program",
+            "type": "pubkey"
+          },
+          {
+            "name": "buffer",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DelayLengthened",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "program",
+            "type": "pubkey"
+          },
+          {
+            "name": "old_delay_secs",
+            "type": "u32"
+          },
+          {
+            "name": "delay_secs",
+            "type": "u32"
+          },
+          {
+            "name": "eta",
+            "docs": [
+              "The pending proposal's eta after it (0: none pending)."
+            ],
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Finalized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "program",
+            "type": "pubkey"
+          },
+          {
+            "name": "author",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Timelock",
+      "docs": [
+        "`PDA([\"timelock\", program])`: a program's timelock and upgrade authority. Its fields sit at the",
+        "offsets `bordrless_hook::authority::timelock_offsets` names (no `Option`: every field has a",
+        "fixed place)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "program",
+            "docs": [
+              "The program it holds, and its ProgramData."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "programdata",
+            "type": "pubkey"
+          },
+          {
+            "name": "author",
+            "docs": [
+              "Who may propose, cancel, lengthen, finalize and hand the role over."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "pending_author",
+            "docs": [
+              "Who may take the role (`accept_author`); the default key: nobody."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "delay_secs",
+            "docs": [
+              "The delay between a proposal and its execution: `MIN_DELAY` to `MAX_DELAY`, never shortened."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "finalized",
+            "docs": [
+              "The program was made immutable through this timelock."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "pending_buffer",
+            "docs": [
+              "The proposal waiting (the default buffer: none): its buffer, its code's executable hash",
+              "and length, when it was proposed and when anyone may execute it."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "pending_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "pending_len",
+            "type": "u32"
+          },
+          {
+            "name": "proposed_at",
+            "type": "i64"
+          },
+          {
+            "name": "eta",
+            "type": "i64"
+          },
+          {
+            "name": "upgrades",
+            "docs": [
+              "Upgrades executed."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "created_at",
+            "type": "i64"
+          },
+          {
+            "name": "last_upgraded_at",
+            "type": "i64"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "TimelockRegistered",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "program",
+            "type": "pubkey"
+          },
+          {
+            "name": "programdata",
+            "type": "pubkey"
+          },
+          {
+            "name": "timelock",
+            "type": "pubkey"
+          },
+          {
+            "name": "author",
+            "type": "pubkey"
+          },
+          {
+            "name": "delay_secs",
+            "type": "u32"
+          },
+          {
+            "name": "previous_authority",
+            "docs": [
+              "Who held the authority before."
+            ],
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "UpgradeCancelled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "program",
+            "type": "pubkey"
+          },
+          {
+            "name": "buffer",
+            "type": "pubkey"
+          },
+          {
+            "name": "hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "UpgradeExpired",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "program",
+            "type": "pubkey"
+          },
+          {
+            "name": "buffer",
+            "type": "pubkey"
+          },
+          {
+            "name": "hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "UpgradeProposed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "program",
+            "type": "pubkey"
+          },
+          {
+            "name": "buffer",
+            "type": "pubkey"
+          },
+          {
+            "name": "hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "len",
+            "type": "u32"
+          },
+          {
+            "name": "proposed_at",
+            "type": "i64"
+          },
+          {
+            "name": "eta",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Upgraded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "program",
+            "type": "pubkey"
+          },
+          {
+            "name": "buffer",
+            "type": "pubkey"
+          },
+          {
+            "name": "hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "slot",
+            "type": "u64"
+          },
+          {
+            "name": "upgrades",
+            "type": "u32"
+          },
+          {
+            "name": "sender",
+            "type": "pubkey"
+          }
+        ]
+      }
+    }
+  ]
+}

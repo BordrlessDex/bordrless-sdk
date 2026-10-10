@@ -36,7 +36,7 @@ interface IdlAccount {
 }
 type RawIdl = { address: string; instructions: { name: string; discriminator: number[]; accounts: IdlAccount[] }[] };
 
-const PROGRAM_ID: Record<ProgramName, PublicKey> = { token: a.TOKEN_PROGRAM, swap: a.SWAP_PROGRAM, bridge: a.BRIDGE_PROGRAM, launch: a.LAUNCH_PROGRAM, kit: a.KIT_PROGRAM, taxHook: a.TAX_HOOK_PROGRAM, halfLife: a.HALF_LIFE_PROGRAM, companion: a.COMPANION_PROGRAM, lotteryHook: a.LOTTERY_HOOK_PROGRAM };
+const PROGRAM_ID: Record<ProgramName, PublicKey> = { token: a.TOKEN_PROGRAM, swap: a.SWAP_PROGRAM, bridge: a.BRIDGE_PROGRAM, launch: a.LAUNCH_PROGRAM, kit: a.KIT_PROGRAM, taxHook: a.TAX_HOOK_PROGRAM, halfLife: a.HALF_LIFE_PROGRAM, companion: a.COMPANION_PROGRAM, lotteryHook: a.LOTTERY_HOOK_PROGRAM, hookTimelock: a.HOOK_TIMELOCK_PROGRAM, hookVault: a.HOOK_VAULT_PROGRAM };
 
 /**
  * The instruction against the IDL's: its fixed accounts in order with their flags and addresses, and
