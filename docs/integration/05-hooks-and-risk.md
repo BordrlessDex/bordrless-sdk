@@ -18,7 +18,7 @@ Read it from the mint (`hookProgram`, `hookFlags`, `hookAuthority`) and the laun
 | **Half-Life** (Bordrless's own hook) | `hookProgram` is `53Spmtk…NSF8` | An exit fee on transfers out, burned. No refusals | The holder's current exit fee |
 | **Lottery hook** (Bordrless's own game hook) | `hookProgram` is `HqFWsC…GWcr` | Keeps ticket ranges in hook data. Never refuses a transfer, takes no cut, never sees SOL | "Lottery coin" and the game ([below](#game-coins)) |
 | **A game coin's Studio hook** (jackpot, streak) | `launch.customHook` is `companion.gameHook` of a [companion launch](02-reading-tokens.md#creators-that-are-programs-companions) | Keeps game state in hook data. Takes no cut (flags 145). Per-coin code: treat a refusal as possible | "Jackpot coin" / "Streak coin" and the game |
-| **A custom hook** | any other `hookProgram` (a Studio hook, or anyone's) | Anything: refuse transfers (a honeypot), take cuts | **"Custom hook, unverified"**, the program, and [who can upgrade it](#who-can-upgrade-a-hook) |
+| **A custom hook** | any other `hookProgram` (a Studio hook, or anyone's) | Anything: refuse transfers (a honeypot), take cuts | Its [risk label](#risk-labels), the program, and [who can upgrade it](#who-can-upgrade-a-hook) |
 
 For any hooked token, also check `mint.hookAuthority`. **`null` means the mint can never be pointed
 at another hook program.** Otherwise someone can swap the hook later. Launchpad tokens always have
@@ -27,30 +27,66 @@ it `null`. Whether the hook program's own code can change is the next question.
 ## Who can upgrade a hook
 
 A hook program that someone can upgrade can be swapped for other code after launch, whatever the
-mint says. Since 2026-10-08 the launchpad refuses a `LaunchConfig` naming a custom hook
-(`HookUpgradeable`) unless the hook is **immutable** or upgradeable **only by Bordrless**: Bordrless
-Studio's key `CS1NRyXNCPxEUP4CRoa26cHQSeSJCxXh5SPijwFhDW6W` or the protocol's
-`5xsibKwtiN6ruxsYrEyWVpV3KcwuzSPbQd1n28a7spEd` (`HOOK_UPGRADE_AUTHORITIES` in `@bordrless/shared`).
-The check runs when the config is made, not at each launch, so read it yourself for any token:
+mint says. The launchpad and the companion take a custom hook (a `LaunchConfig` naming one fails
+with `HookUpgradeable` otherwise) only if it is one of:
 
-```ts
-import { STUDIO_UPGRADE_AUTHORITY } from '@bordrless/shared';
-import { decodeMint, fetchProgramUpgradeInfo, hookAuthorityProblem } from '@bordrless/sdk';
+- **immutable**;
+- upgradeable **only by Bordrless**: Bordrless Studio's key `CS1NRyXNCPxEUP4CRoa26cHQSeSJCxXh5SPijwFhDW6W`
+  or the protocol's `5xsibKwtiN6ruxsYrEyWVpV3KcwuzSPbQd1n28a7spEd` (`HOOK_UPGRADE_AUTHORITIES` in
+  `@bordrless/shared`);
+- **timelocked** (since 2026-10-10): its upgrade authority is its `Timelock` account in Bordrless's
+  `hook_timelock` program `BBUzaamchPWZpKENmn7bopiuQWvRGm2Vg8TqLLgzgGGZ`. Its author can only propose
+  new code by hash, public on chain, and execute it after the delay (at least 3 days; it can be
+  lengthened, never shortened), or finalize the hook to immutable. The launchpad also refuses a
+  timelocked hook while it has a proposal pending.
 
-const hookProgram = decodeMint((await connection.getAccountInfo(mint))!.data).hookProgram!; // a launch's: launch.customHook
-const info = await fetchProgramUpgradeInfo(connection, hookProgram);
-const problem = hookAuthorityProblem(info);  // a sentence when someone outside Bordrless can upgrade it, else null
-const immutable = info.upgradeable === false;
-const studio = info.upgradeAuthority?.toBase58() === STUDIO_UPGRADE_AUTHORITY;
-```
+The check runs when the config is made, not at each launch, and a proposal can be made after a
+launch. So read it yourself for every token, with the risk label below.
 
 | Upgrade authority | Show |
 | --- | --- |
 | none (`upgradeable === false`) | "Immutable hook" |
-| Studio's key | "Built with Bordrless Studio; Bordrless can upgrade it" |
+| its `Timelock` | "Timelocked: its author can change it with N days' notice", and any pending proposal **prominently** |
+| Studio's key | "Built with Bordrless Studio; Bordrless can upgrade it" (only when Studio attests it, below) |
 | the protocol's key | Bordrless's own hooks (the kit, Half-Life, the lottery hook, `tax_hook`): "Upgradeable by Bordrless" |
-| anyone else (`hookAuthorityProblem` returns a sentence) | A warning: whoever holds that key can change the hook at any time |
-| unknown (`upgradeable === null`) | Treat as upgradeable |
+| anyone else | A warning: whoever holds that key can change the hook at any time |
+| unknown | Treat as upgradeable |
+
+## Risk labels
+
+`hookRiskLabel` gives one label per hook, the same words Bordrless's own site shows. Use it rather
+than reading the upgrade authority alone:
+
+```ts
+import { decodeMint, hookRiskLabel } from '@bordrless/sdk';
+
+const hookProgram = decodeMint((await connection.getAccountInfo(mint))!.data).hookProgram!; // a launch's: launch.customHook
+const label = await hookRiskLabel(connection, hookProgram, { mint });
+// label.class:    'immutable' | 'timelocked' | 'managed' (Bordrless can change it) | 'author' (its owner can, any time) | 'missing'
+// label.severity: 'low' | 'medium' | 'high'
+// label.words:    one sentence to show, e.g. "Its author can change this code with 3 days of public notice. Checked automatically by Studio, not audited."
+// label.pending:  { hash, eta, buffer } when a timelocked hook has new code proposed
+```
+
+It costs two `getMultipleAccounts`, plus a download of the code only when an audit or attestation
+needs its hash compared (cached by deploy slot). Passing `mint` also classes every program the
+hook's registry lets it call; the label takes the weakest of them and names it.
+
+- **`severity: 'high'`** (show a warning): its owner can change the code at any time; a proposal is
+  pending (`words` says when it goes live); Bordrless blocked the game; or the hook is refused.
+- **`audited: 'current'`**: Bordrless recorded an audit **of this exact code** (by hash). An audit
+  goes `'stale'` the moment the code changes. No hook has had a third-party audit yet.
+- **`provenance: 'studio'`** and `studio.current`: Bordrless Studio built this exact code from
+  source and its automatic checks passed (a `HookAttestation` from Studio's attester
+  `3uGLsTJNse7vE3pgRkAf6aKKBoKmCyPUcNNu1bw3KvP2`). It is not an audit. A program merely upgradeable
+  by Studio's key, without an attestation, reads "not built by Studio": anyone can hand a program's
+  upgrade authority to that key.
+- **`potCap`**: for a game or strategy coin, the most its pot may hold (10 SOL until its hook has a
+  current audit; `null` means uncapped).
+
+Index the `hook_timelock` program's events (`anyProgramNameOf` names it `hookTimelock`) to alert
+holders when a proposal lands: `UpgradeProposed` (the new code's hash and when it can execute),
+`UpgradeCancelled`, `UpgradeExpired`, `Upgraded`, `DelayLengthened`, `Finalized`.
 
 `inspectTokenHook(connection, program, mint)` reads the same plus the hook's registry in one call.
 
@@ -164,6 +200,24 @@ pays a receipt's rent (1,767,840 lamports), returned by `companion.closeReceipt`
 end. The protocol's keeper claims a share for a holder only when the sender's bounty covers its
 cost (a bounty of at least 50,000 lamports, or a share of at least 0.05 SOL); a smaller share is
 the holder's to claim. Rules, timings and every edge case: [docs/games.md](https://github.com/BordrlessDex/bordrless-programs/blob/main/docs/games.md).
+
+## Strategy coins and the hook vault
+
+**Strategy coins** (since 2026-10-10) are companion game coins whose payouts an author's program
+decides (`GameKindSet` with the strategy kind; `StrategySet` names the program). Each period the
+companion asks the strategy program for a budget and each holder's entitlement, then pays them in
+SOL, capped by the companion (a budget share per period and a maximum share per holder) and by the
+pot cap. Label them "Strategy coin" and show the strategy program's [risk label](#risk-labels): its
+author decides who is paid, within those caps. Design:
+[strategies.md](https://github.com/BordrlessDex/bordrless-programs/blob/main/docs/strategies.md).
+
+**The hook vault** `5cojoUStG7WFhHJiSncCUEwTqDuhDLKu4a9BqTbF8jzG` holds a hook's cut of a token in up
+to three slots, each with a policy fixed before launch: burn, sell for SOL to a fixed wallet, or
+sell and buy and burn another token (`decodeVault`, `VAULT_POLICY`). Each slot holds tokens in a
+holding owned by `slotOwner(mint, i)`. **Label those holdings "Hook vault", not as holders**; they
+are tokens on their way to being burned or sold. A sale shows as a `Swapped` plus the vault's
+`SlotSold` (or `SlotBurned`, `SlotBought`) in the same transaction. Any cranker may send these
+steps, for a bounty of at most 1% of the step.
 
 ## Transfers between wallets
 

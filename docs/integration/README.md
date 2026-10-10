@@ -3,6 +3,12 @@
 For trading terminals, aggregators, indexers, wallets and portfolio trackers that want to show and
 trade Bordrless tokens.
 
+**Changed 2026-10-10 (SDK 0.8.0):** a custom hook may now also be **timelocked** by its author (new
+code only after at least 3 days of public notice). Show one risk label per hooked token, from
+`hookRiskLabel` ([Hooks](05-hooks-and-risk.md#risk-labels)). Strategy coins and the hook vault are
+live; vault slots hold tokens and should be labelled, not counted as holders
+([Hooks](05-hooks-and-risk.md#strategy-coins-and-the-hook-vault)).
+
 **Changed 2026-10-09 (SDK 0.6.0 and 0.7.0):** companion v2 and game coins are live on mainnet:
 lottery coins on Bordrless's lottery hook (three lottery launch configs), jackpot and streak coins
 on per-coin hooks written with Bordrless Studio. A coin's creator can be a companion program
@@ -17,7 +23,7 @@ here is public and permissionless: read the chain, build transactions with
 [`@bordrless/sdk`](../../packages/sdk), and send them yourself.
 
 ```sh
-npm install @bordrless/sdk@0.7.0 @bordrless/shared@0.7.0 @solana/web3.js
+npm install @bordrless/sdk@0.8.0 @bordrless/shared@0.8.0 @solana/web3.js
 ```
 
 ## Integration checklist
@@ -39,7 +45,7 @@ For a terminal that lists, prices and trades Bordrless tokens:
    a custom hook may refuse or tax transfers; show who can upgrade the hook
    ([Companions](02-reading-tokens.md#creators-that-are-programs-companions),
    [Which hook a token runs](05-hooks-and-risk.md#which-hook-a-token-runs),
-   [Who can upgrade a hook](05-hooks-and-risk.md#who-can-upgrade-a-hook)).
+   [Who can upgrade a hook](05-hooks-and-risk.md#who-can-upgrade-a-hook), [Risk labels](05-hooks-and-risk.md#risk-labels)).
 6. **Index** trades, fees and launches from event CPIs, not logs; skip failed transactions
    ([Indexing trades](03-indexing-trades.md)).
 7. **Handle bridged SOL**: show a wallet's bridged-SOL holding as SOL; unwrap sell proceeds
@@ -53,7 +59,7 @@ For a terminal that lists, prices and trades Bordrless tokens:
 | [2. Reading tokens](02-reading-tokens.md) | Finding every token, metadata, price, market cap, liquidity, curve progress, holders, a wallet's balances, companion creators and game coins |
 | [3. Indexing trades](03-indexing-trades.md) | Decoding `Swapped` and every other event, streaming new launches and trades, candles, companion and game events |
 | [4. Trading](04-trading.md) | Quoting exactly, building buys and sells, slippage, graduation, compute and priority fees, errors |
-| [5. Hooks and what to show users](05-hooks-and-risk.md) | Launch rules, custom hooks, Half-Life, game hooks, Studio hooks, who can upgrade a hook, which tokens can refuse or tax a transfer |
+| [5. Hooks and what to show users](05-hooks-and-risk.md) | Launch rules, custom hooks, Half-Life, game hooks, Studio hooks, who can upgrade a hook, risk labels, strategies and the vault, which tokens can refuse or tax a transfer |
 | [6. The bridge](06-bridge.md) | Bridged SOL (the quote of every launch) and wrapping SPL tokens one for one |
 | [7. Without TypeScript](07-other-languages.md) | Raw layouts, instruction data and the Rust client crates |
 

@@ -98,6 +98,7 @@ Some holders aren't people. Label or exclude them:
 | `launchAddress(mint)` | The launch's reserve, until graduation |
 | `halfLifeFurnaceOwner(mint)` | A Half-Life token's furnace (tokens waiting to be burned) |
 | `companionCreatorAddress(mint)` | A companion coin's creator: the launcher's dev buy, still vesting (below) |
+| `slotOwner(mint, i)`, `i` from 0 to 2 | A [hook vault](05-hooks-and-risk.md#strategy-coins-and-the-hook-vault) slot: a hook's cut, waiting to be burned or sold |
 
 ## Creators that are programs: companions
 
