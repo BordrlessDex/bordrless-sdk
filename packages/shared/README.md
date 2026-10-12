@@ -21,14 +21,19 @@ npm install @bordrless/shared
 ```ts
 import { PROGRAM_IDS, FIXED_ADDRESSES, TOKEN_HOOK_FLAGS, POOL_HOOK_FLAGS, RULE_BOUNDS } from '@bordrless/shared';
 
-PROGRAM_IDS.token; // the token program (devnet and localnet; mainnet gets its own keys at deploy time)
+PROGRAM_IDS.token; // the token program (one set of ids on every cluster)
 TOKEN_HOOK_FLAGS.BEFORE_TRANSFER | TOKEN_HOOK_FLAGS.TRANSFER_RETURNS_DELTA;
 ```
+
+A hook of your own launches from a config only when nobody outside Bordrless can upgrade it:
+immutable, or held by one of `HOOK_UPGRADE_AUTHORITIES` (Bordrless Studio's key or the protocol's),
+as the launch program checks. `hookFinalCommand(programId)` gives the `solana program
+set-upgrade-authority --final` command that makes it immutable after deploying, and
+`hookAuthorityAccepted` is the same check off chain.
 
 ## Where to read more
 
 - The SDK page: https://bordrless.app/sdk
 - The standard in full: https://bordrless.app/docs
 
-Status: the programs run on localnet and devnet until they are deployed to mainnet; they keep an
-upgrade authority until audited.
+Status: the programs are live on mainnet; they keep an upgrade authority until audited.

@@ -151,7 +151,7 @@ describe('risk labels are the Rust reference’s', () => {
         blocked: l.blocked,
         potCap: l.potCap === null ? null : l.potCap.toString(),
         provenance: l.provenance,
-        studio: l.studio,
+        studio: l.studio ? { buildHash: l.studio.buildHash, simPass: l.studio.simPass, cutMaxBps: l.studio.cutMaxBps, current: l.studio.current } : null,
         severity: l.severity,
         words: l.words,
       }).toEqual(want);

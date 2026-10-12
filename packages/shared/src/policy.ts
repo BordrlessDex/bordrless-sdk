@@ -6,7 +6,7 @@
  * `programs/tests/vectors/launch-fees.json`, which the Rust tests render from the reference the
  * programs are held to, and requires exact equality.
  */
-import type { CompanionSplitBps, CompanionTemplate, GameKindName, GameRequest, GameRolloverReason, JackpotRequest, LaunchRules, LaunchRulesInput, LotteryRequest, Side, StreakRequest } from './api.ts';
+import type { CompanionSplitBps, CompanionTemplate, GameKindName, GameRequest, GameRolloverReason, JackpotRequest, LaunchRules, LaunchRulesInput, LotteryRequest, ScriptRequest, Side, SnowballRequest, SnowballTerms, StreakRequest } from './api.ts';
 import type { StudioGameSettings } from './studio.ts';
 import { HOOK_DATA_LEN, TOKEN_HOOK_FLAGS } from './programs.ts';
 
@@ -28,6 +28,15 @@ export const LP_FEE_BPS = 30;
 /** Protocol fee of an ordinary DEX pool (anyone's pool), in basis points of the quote side: the flat model (§3.1). */
 export const PROTOCOL_FEE_BPS = 100;
 /**
+ * The LP fee tiers the create-pool form offers for an ordinary pool (docs/dex.md decision 2): 0.25%
+ * (the default, for bridged pairs), 1% and 2% (memecoins). The program takes any value from 0 to 90%;
+ * three tiers keep the number of duplicate pools per pair down (§3.5).
+ */
+export const POOL_FEE_TIERS_BPS = [25, 100, 200] as const;
+export const POOL_FEE_TIER_DEFAULT_BPS = 25;
+export type PoolFeeTierBps = (typeof POOL_FEE_TIERS_BPS)[number];
+export const isPoolFeeTier = (bps: unknown): bps is PoolFeeTierBps => (POOL_FEE_TIERS_BPS as readonly number[]).includes(bps as number);
+/**
  * Bordrless's take on a launch pool (its curve and the same pool after graduation), the share
  * model of §3.1 (2026-10-07: "we earn 25% of their total fees, not 0.25%"): a quarter of what the
  * launch's rules collect on each swap (the creator fee, holder rewards and any cut a creator's own
@@ -38,6 +47,8 @@ export const PROTOCOL_FEE_BPS = 100;
 export const LAUNCH_PROTOCOL_SHARE_BPS = 2_500;
 /** The largest share the DEX config may set (`MAX_PROTOCOL_SHARE_BPS`): all of the cuts. */
 export const MAX_PROTOCOL_SHARE_BPS = 10_000;
+/** The largest flat protocol fee the DEX config may set (`bordrless_swap::constants::MAX_PROTOCOL_FEE_BPS`): 10% of the quote side. */
+export const MAX_PROTOCOL_FEE_BPS = 1_000;
 /** Largest creator fee a launch may choose. */
 export const MAX_CREATOR_FEE_BPS = 200;
 /** The creator fee choices offered on the launch form. */
@@ -491,32 +502,39 @@ export const LAUNCHER_SPLIT: Readonly<CompanionSplitBps> = { buybackBps: 0, hold
 // ---- lottery coins (docs/games.md) -----------------------------------------------------------------
 
 /**
- * The companion program's game limits (`constants.rs`; `GAME_LIMITS` in the SDK, the same numbers):
- * a round's length, the minimum pot, the prize's least share, a claim window's bounds, the most
- * attempts, and the half of a round the attempts may take. The launch form holds its choices to
- * them and the backend refuses anything outside them (`lotteryProblem`).
+ * The Jackpot's limits as the site offers them: the round's length (the programs take rounds from 5
+ * minutes since the five-minute rounds upgrade of 2026-10-12; the owner set the site's floor at 15
+ * minutes, which is also its default), the minimum pot, the prize's least share, a claim window's
+ * bounds (`MIN_CLAIM_WINDOW` in the companion, a minute), the most attempts, and the half of a round
+ * the attempts may take. The launch form holds its choices to them and the backend refuses anything
+ * outside them (`lotteryProblem`). `GAME_LIMITS` in the SDK is the programs' own.
  */
 export const LOTTERY_LIMITS = {
-  minRoundSecs: 3_600,
+  minRoundSecs: 900,
   maxRoundSecs: 30 * DAY_SECS,
   minMinPotLamports: 100_000_000n,
   maxMinPotLamports: 1_000_000_000_000n,
   minPrizeBps: 1_000,
-  minClaimWindowSecs: 300,
+  minClaimWindowSecs: 60,
   maxClaimWindowSecs: DAY_SECS,
   maxAttempts: 16,
   claimsPerRound: 2,
+  /** A streak's epoch and its claim window keep the programs' older floors (`MIN_EPOCH_SECS`, `MIN_EPOCH_CLAIM_WINDOW`). */
+  minEpochSecs: 3_600,
+  minEpochClaimWindowSecs: 300,
   /** The most a pot holds while its hook is not audited: 10 SOL, the rest of the pot's share bought back. */
   potCapLamports: 10_000_000_000n,
   /** Lamports the setup pays for the hook's state and registry and the game's account (mainnet rent, 2026-10-08). */
   rentLamports: 3_515_360n + 3_119_120n,
 } as const;
 
-/** The lottery the launch form starts with (docs/games.md, spec example 1): 6-hour rounds, 70% of the fee to the pot, 30% bought back, draws from 0.5 SOL paying the whole pot, 8 claim attempts of 10 minutes. */
-export const LOTTERY_DEFAULTS: Readonly<LotteryRequest> = { kind: 'lottery', roundSecs: 21_600, potBps: 7_000, minPotLamports: '500000000', prizeBps: 10_000, claimWindowSecs: 600, maxAttempts: 8 };
+/** The lottery the launch form starts with (the owner, 2026-10-12): 15-minute rounds, 70% of the fee to the pot, 30% bought back, draws from 0.5 SOL paying the whole pot, 3 claim attempts of 2 minutes (`lotteryClaimsFor`). */
+export const LOTTERY_DEFAULTS: Readonly<LotteryRequest> = { kind: 'lottery', roundSecs: 900, potBps: 7_000, minPotLamports: '500000000', prizeBps: 10_000, claimWindowSecs: 120, maxAttempts: 3 };
 
 /** The round lengths the form offers (seconds), each with its label. */
 export const LOTTERY_ROUND_CHOICES: readonly { secs: number; label: string }[] = [
+  { secs: 900, label: '15 min' },
+  { secs: 1_800, label: '30 min' },
   { secs: 3_600, label: '1 hour' },
   { secs: 21_600, label: '6 hours' },
   { secs: DAY_SECS, label: '1 day' },
@@ -535,11 +553,16 @@ export const LOTTERY_PRIZE_CHOICES_BPS = [10_000, 5_000, 2_500] as const;
 export const LOTTERY_POT_STEP_BPS = 1_000;
 
 /**
- * The claim windows and attempts the form fixes for a round length: 8 attempts of 10 minutes for a
- * round of 6 hours or more, 6 of 5 minutes for an hour (the attempts must fit in half a round).
+ * The claim windows and attempts the form fixes for a round length (the attempts must fit in half a
+ * round, `claimsPerRound`): 8 attempts of 10 minutes from 6 hours, 6 of 5 minutes from an hour, 3 of
+ * 2 minutes from 15 minutes, and 2 of a minute under that (the programs' 5-minute rounds, which the
+ * site does not offer).
  */
 export function lotteryClaimsFor(roundSecs: number): { claimWindowSecs: number; maxAttempts: number } {
-  return roundSecs >= 21_600 ? { claimWindowSecs: 600, maxAttempts: 8 } : { claimWindowSecs: 300, maxAttempts: 6 };
+  if (roundSecs >= 21_600) return { claimWindowSecs: 600, maxAttempts: 8 };
+  if (roundSecs >= 3_600) return { claimWindowSecs: 300, maxAttempts: 6 };
+  if (roundSecs >= 900) return { claimWindowSecs: 120, maxAttempts: 3 };
+  return { claimWindowSecs: 60, maxAttempts: 2 };
 }
 
 const isWhole = (v: unknown, min: number, max: number): v is number => typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
@@ -567,11 +590,11 @@ export function lotteryProblem(game: LotteryRequest, split: CompanionSplitBps, r
   if ((Object.keys(NO_RULES) as (keyof LaunchRulesInput)[]).some((k) => rules[k] !== 0)) return 'A lottery coin has no other token rules: its hook keeps the tickets.';
   if (split.holdersBps !== 0) return 'A game coin runs its own hook, so it has no holder rewards: no holders’ part.';
   if (!(game.potBps > 0) || split.buybackBps + split.holdersBps + split.beneficiaryBps + game.potBps !== 10_000) return 'The pot’s part and the split must add up to 10,000 basis points, with a pot.';
-  if (game.roundSecs < L.minRoundSecs || game.roundSecs > L.maxRoundSecs) return 'A round lasts an hour to 30 days.';
+  if (game.roundSecs < L.minRoundSecs || game.roundSecs > L.maxRoundSecs) return 'A round lasts 15 minutes to 30 days.';
   const minPot = BigInt(game.minPotLamports);
   if (minPot < L.minMinPotLamports || minPot > L.maxMinPotLamports) return 'The minimum pot is 0.1 to 1,000 SOL.';
   if (game.prizeBps < L.minPrizeBps || game.prizeBps > 10_000) return 'A draw pays 10% to 100% of the pot.';
-  if (game.claimWindowSecs < L.minClaimWindowSecs || game.claimWindowSecs > L.maxClaimWindowSecs) return 'A claim window lasts 5 minutes to a day.';
+  if (game.claimWindowSecs < L.minClaimWindowSecs || game.claimWindowSecs > L.maxClaimWindowSecs) return 'A claim window lasts a minute to a day.';
   if (!(game.maxAttempts >= 1 && game.maxAttempts <= L.maxAttempts)) return 'A draw makes 1 to 16 attempts.';
   if (game.claimWindowSecs * game.maxAttempts * L.claimsPerRound > game.roundSecs) return 'A draw’s attempts must fit in half a round.';
   return null;
@@ -579,11 +602,11 @@ export function lotteryProblem(game: LotteryRequest, split: CompanionSplitBps, r
 
 /** The copy rules of a lottery coin (docs/games.md): said on the launch form, the review step and the token page, never "provably fair", "guaranteed" or "audited". */
 export const LOTTERY_COPY = {
-  held: 'The pot is held by the companion program and paid out by code. Randomness by ORAO VRF.',
-  odds: 'Your odds = your tokens in the round. Sell before the payout and you forfeit.',
-  stop: 'Bordrless can stop this game: its pot would be bought back and burned. Nobody is paid.',
-  cap: 'Pot capped at 10 SOL until the game’s hook is audited.',
-  oracle: 'Randomness by ORAO VRF: ORAO’s three signers produce it. They could withhold or bias a draw; Bordrless can’t.',
+  held: 'The pot is held by code, not by a person. Each round, one holder is picked at random and paid in SOL.',
+  odds: 'Your odds are your share of the tokens held through the round. Tokens you buy count from the next round, and selling during a round takes you out of it.',
+  stop: 'Bordrless can stop the game. If it does, the pot buys back and burns the token and no one is paid.',
+  cap: 'The pot holds at most 10 SOL for now. Anything above that buys back and burns the token.',
+  oracle: 'The random numbers come from ORAO, an outside service. Neither Bordrless nor the launcher can pick the winner.',
 } as const;
 
 // ---- jackpot and streak coins (docs/games.md "Phase 2"), on game hooks made in Studio -----------------
@@ -642,8 +665,8 @@ export function gameProblem(game: GameRequest, split: CompanionSplitBps, rules: 
     if (BigInt(hook.minTokens) < 1n) return 'A qualifying buy is at least one base unit.';
     return null;
   }
-  if (hook.roundSecs < L.minRoundSecs || hook.roundSecs > L.maxRoundSecs) return 'An epoch lasts an hour to 30 days.';
-  if (game.claimWindowSecs < L.minClaimWindowSecs || game.claimWindowSecs > L.maxClaimWindowSecs || game.claimWindowSecs * L.claimsPerRound > hook.roundSecs) return 'A streak leaves claims 5 minutes to a day, at most half an epoch.';
+  if (hook.roundSecs < L.minEpochSecs || hook.roundSecs > L.maxRoundSecs) return 'An epoch lasts an hour to 30 days.';
+  if (game.claimWindowSecs < L.minEpochClaimWindowSecs || game.claimWindowSecs > L.maxClaimWindowSecs || game.claimWindowSecs * L.claimsPerRound > hook.roundSecs) return 'A streak leaves claims 5 minutes to a day, at most half an epoch.';
   if (hook.minStreakSecs > GAME_KIND_LIMITS.maxMinStreakSecs) return 'A streak asks at most a year without sending.';
   if (BigInt(hook.minWeight) < 1n) return 'The least weight that shares is at least one base unit.';
   return null;
@@ -659,33 +682,33 @@ export const GAME_KIND_NAMES: Readonly<Record<GameKindName, string>> = { lottery
  * stop this game"; never "provably fair", "guaranteed" or "audited".
  */
 export const JACKPOT_COPY = {
-  held: 'The pot is held by the companion program and paid out by code. No randomness: the last buyer wins.',
-  rule: 'The last buyer wins if they keep every token they bought: any sale or transfer forfeits.',
-  unfunded: 'If the pot is below its minimum when a round is settled, the round pays nothing and the pot carries on.',
-  curve: 'Buys count while the coin is on its curve: the jackpot ends at graduation (the round under way is still paid).',
+  held: 'The pot is held by code, not by a person. No luck involved: the last buyer wins.',
+  rule: 'The last buyer wins when the timer runs out, as long as they still hold what they bought. Selling or sending any of it forfeits.',
+  unfunded: 'If the pot is under its minimum when the timer runs out, no prize is paid and the pot keeps growing.',
+  curve: 'The game runs while the coin is on its curve and ends at graduation. A round under way is still paid.',
   cap: LOTTERY_COPY.cap,
   stop: LOTTERY_COPY.stop,
 } as const;
 
 export const STREAK_COPY = {
-  held: 'The pot is held by the companion program and paid out by code. No randomness: holders share in proportion to what they held.',
-  rule: 'Send anything, to anyone, and you lose this epoch’s and last epoch’s share. Claim before you sell.',
-  weight: 'Your weight is what you held since the epoch began: tokens that arrive during an epoch count from the next.',
-  claims: 'Shares are claimed during the next epoch; the keeper claims for everyone whose share covers the fee, the rest claim here. What is not claimed rolls over.',
+  held: 'The pot is held by code, not by a person. No luck involved: holders share it in proportion to what they held.',
+  rule: 'Hold through the epoch without sending anything. Any sale or transfer drops you out of this epoch and the last one.',
+  weight: 'Your share is based on what you held when the epoch began. Tokens you buy during an epoch count from the next one.',
+  claims: 'Shares are paid out during the next epoch. Most are paid automatically; small ones are claimed here. Unclaimed shares stay in the pot.',
   cap: LOTTERY_COPY.cap,
   stop: LOTTERY_COPY.stop,
 } as const;
 
 /** Why a round paid no prize, in a few words each (`GameRolloverReason`). */
 export const ROLLOVER_WORDS: Readonly<Record<GameRolloverReason, string>> = {
-  noTickets: 'Nobody held tickets',
-  roundForgotten: 'The round was forgotten',
-  noClaim: 'No winner claimed in time',
-  oracleSilent: 'ORAO never answered',
+  noTickets: 'No tickets yet: tokens count from the round after they are bought',
+  roundForgotten: 'The round was skipped',
+  noClaim: 'The winner did not claim in time',
+  oracleSilent: 'The random number never arrived',
   blocked: 'Stopped by Bordrless',
   late: 'Drawn too late',
-  oracleUnreadable: 'ORAO’s answer unreadable',
-  oracleUnpaid: 'The pot could not pay ORAO',
+  oracleUnreadable: 'The random number could not be read',
+  oracleUnpaid: 'The pot could not pay for the random number',
 };
 
 /** Whether a split is the whole fee to the launcher (no companion needed). */
@@ -733,6 +756,115 @@ export function companionSplitProblem(split: CompanionSplitBps, rules: Pick<Laun
   if (split.buybackBps + split.holdersBps + split.beneficiaryBps !== 10_000) return 'The creator fee’s shares must add up to 100% (10,000 basis points).';
   if (rules.creatorLockDays > 0) return 'A creator fee run by a program can’t come with the creator wallet lock: the program vests your first buy instead.';
   if (creatorFeeBps === 0) return 'There is no creator fee for a program to run: set one.';
+  if (splitPaysHolders(split) && !rewardsOn(rules)) return 'A share of the creator fee for holders needs holder rewards on.';
+  return null;
+}
+
+// ---- Snowball (2026-10-12): a companion whose pot makes volume in the token ---------------------------
+
+/** The presets the launch form offers. Every one spends the pot on volume and trades even when the price is flat; they differ in how fast and how big. */
+export type SnowballPreset = 'conservative' | 'normal' | 'aggressive';
+export const SNOWBALL_PRESETS: Readonly<Record<SnowballPreset, Readonly<SnowballTerms>>> = {
+  conservative: { buyStepBps: 300, sellStepBps: 300, buyBps: 1_000, sellBps: 1_000, poolBps: 100, interval: 60, flatTrades: true },
+  normal: { buyStepBps: 200, sellStepBps: 200, buyBps: 2_500, sellBps: 2_500, poolBps: 200, interval: 30, flatTrades: true },
+  aggressive: { buyStepBps: 100, sellStepBps: 100, buyBps: 5_000, sellBps: 5_000, poolBps: 500, interval: 10, flatTrades: true },
+};
+export const SNOWBALL_PRESET_LIST: readonly SnowballPreset[] = ['conservative', 'normal', 'aggressive'];
+export const SNOWBALL_DEFAULT_PRESET: SnowballPreset = 'normal';
+/** The custom controls' choices. The program takes anything within `SNOWBALL_BOUNDS`. */
+export const SNOWBALL_STEP_CHOICES_BPS = [50, 100, 200, 300, 500, 1_000] as const;
+export const SNOWBALL_SIZE_CHOICES_BPS = [1_000, 2_500, 5_000, 7_500, 10_000] as const;
+export const SNOWBALL_POOL_CHOICES_BPS = [100, 200, 500, 1_000] as const;
+export const SNOWBALL_INTERVAL_CHOICES_SECS = [10, 30, 60, 300] as const;
+/** The program's bounds (`create_snowball`). */
+export const SNOWBALL_BOUNDS = { minStepBps: 50, maxStepBps: 2_000, minSizeBps: 100, maxSizeBps: 10_000, minPoolBps: 25, maxPoolBps: 1_000, minInterval: 10, maxInterval: 86_400 } as const;
+
+/** The Snowball a launch request's `companion` names; null without one; `'malformed'` when it is there and not whole numbers and a flag. */
+export function snowballRequestOf(companion: unknown): SnowballRequest | null | 'malformed' {
+  if (typeof companion !== 'object' || companion === null) return null;
+  const raw = (companion as Record<string, unknown>).snowball;
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'object') return 'malformed';
+  const r = raw as Record<string, unknown>;
+  if (![r.potBps, r.buyStepBps, r.sellStepBps, r.buyBps, r.sellBps, r.poolBps].every(isShare)) return 'malformed';
+  if (typeof r.interval !== 'number' || !Number.isInteger(r.interval) || typeof r.flatTrades !== 'boolean') return 'malformed';
+  return { potBps: r.potBps as number, buyStepBps: r.buyStepBps as number, sellStepBps: r.sellStepBps as number, buyBps: r.buyBps as number, sellBps: r.sellBps as number, poolBps: r.poolBps as number, interval: r.interval, flatTrades: r.flatTrades };
+}
+
+/**
+ * Why a Snowball with this split can't run these rules at this fee, in the words the launch form and
+ * the backend use (`companion_rules`); null when it can: the market maker's part with the split adds up
+ * to 10,000, its terms are within the program's bounds, and what any companion needs
+ * (`companionSplitProblem`'s rules).
+ */
+export function snowballProblem(s: SnowballRequest, split: CompanionSplitBps, rules: Pick<LaunchRulesInput, 'holderFeeBuyBps' | 'holderFeeSellBps' | 'creatorLockDays'>, creatorFeeBps: number): string | null {
+  const B = SNOWBALL_BOUNDS;
+  const within = (v: number, lo: number, hi: number): boolean => Number.isInteger(v) && v >= lo && v <= hi;
+  if (!(s.potBps > 0) || split.buybackBps + split.holdersBps + split.beneficiaryBps + s.potBps !== 10_000) return 'The market maker’s part and the rest of the creator fee must add up to 100%.';
+  if (!within(s.buyStepBps, B.minStepBps, B.maxStepBps) || !within(s.sellStepBps, B.minStepBps, B.maxStepBps)) return 'A buy or a sell triggers on a move of 0.5% to 20%.';
+  if (!within(s.buyBps, B.minSizeBps, B.maxSizeBps) || !within(s.sellBps, B.minSizeBps, B.maxSizeBps)) return 'Each trade uses 1% to 100% of its SOL or its tokens.';
+  if (!within(s.poolBps, B.minPoolBps, B.maxPoolBps)) return 'A trade can be up to 0.25% to 10% of the pool.';
+  if (!within(s.interval, B.minInterval, B.maxInterval)) return 'Trades are 10 seconds to a day apart.';
+  if (rules.creatorLockDays > 0) return 'A creator fee run by a program can’t come with the creator wallet lock: the program vests your first buy instead.';
+  if (creatorFeeBps === 0) return 'There is no creator fee to fill the market maker with: set one.';
+  if (splitPaysHolders(split) && !rewardsOn(rules)) return 'A share of the creator fee for holders needs holder rewards on.';
+  return null;
+}
+
+// ---- Custom companions (2026-10-12): a Workshop script spends the pot (docs/scripts.md) --------------
+
+/** The companion program's script bounds (`create_script`): steps 10 seconds to a day apart, at most 512 bytes of init data, at most 10,240 bytes of state. */
+export const SCRIPT_BOUNDS = { minInterval: 10, maxInterval: 86_400, maxInitLen: 512, maxStateLen: 10_240 } as const;
+/** The interval choices the launch form offers (seconds): a minute, five, fifteen, an hour, a day. */
+export const SCRIPT_INTERVAL_CHOICES_SECS = [60, 300, 900, 3_600, 86_400] as const;
+
+const BASE58_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const HEX_BYTES = /^(?:0x)?(?:[0-9a-fA-F]{2})*$/;
+const BASE64_TEXT = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+/**
+ * How many bytes a script's init data holds, as the request writes it: hex (an even number of hex
+ * digits, `0x` or not) or base64; the empty string is no data. Null when it is neither. Hex is tried
+ * first: a text that reads as both (`abcd`) is read as hex.
+ */
+export function scriptInitDataLength(raw: string): number | null {
+  if (raw === '') return 0;
+  if (HEX_BYTES.test(raw)) return (raw.startsWith('0x') ? raw.length - 2 : raw.length) / 2;
+  if (BASE64_TEXT.test(raw)) return (raw.length / 4) * 3 - (raw.endsWith('==') ? 2 : raw.endsWith('=') ? 1 : 0);
+  return null;
+}
+
+/** The custom companion's script a launch request's `companion` names; null without one; `'malformed'` when it is there and not the fields `ScriptRequest` takes. */
+export function scriptRequestOf(companion: unknown): ScriptRequest | null | 'malformed' {
+  if (typeof companion !== 'object' || companion === null) return null;
+  const raw = (companion as Record<string, unknown>).script;
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'object') return 'malformed';
+  const r = raw as Record<string, unknown>;
+  if (!isShare(r.potBps) || typeof r.program !== 'string' || !BASE58_ADDRESS.test(r.program)) return 'malformed';
+  if (typeof r.interval !== 'number' || !Number.isInteger(r.interval) || typeof r.stateLen !== 'number' || !Number.isInteger(r.stateLen)) return 'malformed';
+  const initData = r.initData === undefined || r.initData === null ? '' : r.initData;
+  if (typeof initData !== 'string' || scriptInitDataLength(initData) === null) return 'malformed';
+  return { potBps: r.potBps as number, program: r.program, interval: r.interval, initData, stateLen: r.stateLen };
+}
+
+/**
+ * Why a custom companion with this split can't run these rules at this fee, in the words the launch
+ * form and the backend use (`companion_rules`); null when it can: the pot's part with the split adds
+ * up to 10,000, the interval, the init data and the state are within the program's bounds, and what
+ * any companion needs (`companionSplitProblem`'s rules). Whether the script is approved is the
+ * backend's to check (`script_not_approved`).
+ */
+export function scriptProblem(s: ScriptRequest, split: CompanionSplitBps, rules: Pick<LaunchRulesInput, 'holderFeeBuyBps' | 'holderFeeSellBps' | 'creatorLockDays'>, creatorFeeBps: number): string | null {
+  const B = SCRIPT_BOUNDS;
+  if (!(s.potBps > 0) || split.buybackBps + split.holdersBps + split.beneficiaryBps + s.potBps !== 10_000) return 'The script’s part and the rest of the creator fee must add up to 100%.';
+  if (!Number.isInteger(s.interval) || s.interval < B.minInterval || s.interval > B.maxInterval) return 'Steps are 10 seconds to a day apart.';
+  const initLen = scriptInitDataLength(s.initData);
+  if (initLen === null) return 'The script’s init data is hex or base64.';
+  if (initLen > B.maxInitLen) return `The script’s init data is at most ${B.maxInitLen} bytes.`;
+  if (!Number.isInteger(s.stateLen) || s.stateLen < 0 || s.stateLen > B.maxStateLen) return `The script’s state is 0 to ${B.maxStateLen.toLocaleString('en-US')} bytes.`;
+  if (rules.creatorLockDays > 0) return 'A creator fee run by a program can’t come with the creator wallet lock: the program vests your first buy instead.';
+  if (creatorFeeBps === 0) return 'There is no creator fee for the script to spend: set one.';
   if (splitPaysHolders(split) && !rewardsOn(rules)) return 'A share of the creator fee for holders needs holder rewards on.';
   return null;
 }

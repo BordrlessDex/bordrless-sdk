@@ -30,6 +30,7 @@ import {
   gameDormantSecs,
   gameIdleSince,
   gameLastDraw,
+  gameRevealSecs,
   gameMinPotAt,
   gameOracleBackoffOver,
   gameOracleBackoffRounds,
@@ -330,6 +331,10 @@ describe('the game’s clocks (state.rs), as a keeper reads them', () => {
 
   it('ends a draw’s claims with the round after it, and cuts the attempts there', () => {
     expect([gameClaimsEnd(g.round, g.roundSecs), gameLastDraw(g, g.round)]).toEqual([Number(cl.claimsEnd), Number(cl.lastDraw)]);
+    // Five-minute rounds: the reveal wait is a quarter of a short round, and the last draw follows it (`reveal_secs`, `Game::last_draw`).
+    for (const [secs, reveal] of cl.revealFor) expect(gameRevealSecs(secs as number), `${secs}`).toBe(Number(reveal));
+    for (const [secs, window, round, last] of cl.lastDraws) expect(gameLastDraw({ roundSecs: secs as number, claimWindowSecs: window as number }, round as number), `${secs}/${window}`).toBe(Number(last));
+    expect([GAME_LIMITS.minEpochSecs, GAME_LIMITS.minEpochClaimWindowSecs]).toEqual([vectors.constants.minEpochSecs, vectors.constants.minEpochClaimWindow]);
     for (const [attempt, opens, closes] of cl.attempts) expect([gameAttemptOpens(g, attempt as number), gameAttemptCloses(g, attempt as number)]).toEqual([Number(opens), Number(closes)]);
     const late = { ...g, revealedAt: Number(cl.lateRevealedAt) };
     for (const [attempt, opens, closes] of cl.lateAttempts) expect([gameAttemptOpens(late, attempt as number), gameAttemptCloses(late, attempt as number)]).toEqual([Number(opens), Number(closes)]);
@@ -525,10 +530,10 @@ describe('create_game’s bounds (gameArgsProblem)', () => {
       [{ potBps: 0, split: { buybackBps: 10_000, holdersBps: 0, beneficiaryBps: 0 } }, /add up/],
       [{ potBps: 6_000 }, /add up/],
       [{ potBps: 6_000, split: { buybackBps: 3_000, holdersBps: 1_000, beneficiaryBps: 0 } }, /holder rewards/],
-      [{ roundSecs: 3_599 }, /hour to 30 days/],
+      [{ roundSecs: 299 }, /5 minutes to 30 days/],
       [{ minPot: 99_999_999n }, /0\.1 to 1,000 SOL/],
       [{ prizeBps: 999 }, /10% to 100%/],
-      [{ claimWindowSecs: 299 }, /5 minutes to a day/],
+      [{ claimWindowSecs: 59 }, /a minute to a day/],
       [{ maxAttempts: 17 }, /1 to 16/],
       [{ maxAttempts: 0 }, /1 to 16/],
       // 8 windows of 1,800 s take 4 h: more than half a 6-hour round.

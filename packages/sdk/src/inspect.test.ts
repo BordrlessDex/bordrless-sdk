@@ -1,6 +1,7 @@
 /**
  * The launch program’s rule on a config’s own hook (§5.8), as `inspectConfig` and `inspectTokenHook`
- * read it: immutable, or upgradeable only by Bordrless Studio’s key or the protocol’s.
+ * read it: immutable, timelocked, or upgradeable only by Bordrless’s keys (the Workshop’s upgrade
+ * key, `STUDIO_UPGRADE_AUTHORITY`, or the protocol’s); and the one-call config builders.
  */
 import { describe, expect, it } from 'vitest';
 import BN from 'bn.js';
@@ -9,8 +10,8 @@ import { HOOK_AUTHORITY_PROBLEM, PROTOCOL_UPGRADE_AUTHORITY, RULE_BOUNDS, STUDIO
 import { BPF_LOADER_UPGRADEABLE, BRIDGED_SOL_MINT, LAUNCH_CONFIG, LAUNCH_PROGRAM, TAX_HOOK_PROGRAM, programDataAddress } from './addresses.ts';
 import { NO_LAUNCH_RULES } from './accounts.ts';
 import { CODERS } from './coders.ts';
-import { hookAcceptedBy, inspectConfig, inspectTokenHook } from './inspect.ts';
-import { TAX_HOOK_FLAGS } from './instructions.ts';
+import { buildCreateConfig, buildCreateListedConfig, hookAcceptedBy, inspectConfig, inspectTokenHook } from './inspect.ts';
+import { TAX_HOOK_FLAGS, launch } from './instructions.ts';
 
 const k = (): PublicKey => Keypair.generate().publicKey;
 const bn = (v: bigint | number): BN => new BN(v.toString());
@@ -88,5 +89,27 @@ describe('who may upgrade a config’s own hook', () => {
     expect(hookAcceptedBy(hook, { executable: true, upgradeAuthority: k(), upgradeable: true })).toBe(false);
     expect(hookAcceptedBy(hook, { executable: false, upgradeAuthority: null, upgradeable: null })).toBe(true);
     expect(hookAcceptedBy(hook, null)).toBe(true);
+  });
+});
+
+describe('the one-call config builders', () => {
+  const args = { rules: { ...NO_LAUNCH_RULES, burnBuyBps: 25, burnSellBps: 25 }, creatorFeeBps: 100, customHook: TAX_HOOK_PROGRAM, customHookFlags: TAX_HOOK_FLAGS, label: 'taxed' };
+
+  it('make a plain config: a fresh keypair that signs once, and create_config', () => {
+    const me = k();
+    const made = buildCreateConfig(me, args);
+    expect(made.address.equals(made.keypair.publicKey)).toBe(true);
+    expect(made.instruction).toEqual(launch.createConfig(me, made.address, args));
+    expect(made.instruction.keys.filter((m) => m.isSigner).map((m) => m.pubkey.toBase58())).toEqual([me.toBase58(), made.address.toBase58()]);
+  });
+
+  it('make a listed config with the author’s share: create_listed_config, the same keypair rule', () => {
+    const me = k();
+    const keypair = Keypair.generate();
+    const made = buildCreateListedConfig(me, args, 5_000, keypair);
+    expect(made.keypair).toBe(keypair);
+    expect(made.address.equals(keypair.publicKey)).toBe(true);
+    expect(made.instruction).toEqual(launch.createListedConfig(me, keypair.publicKey, args, 5_000));
+    expect(made.instruction.data.equals(buildCreateConfig(me, args, keypair).instruction.data)).toBe(false);
   });
 });

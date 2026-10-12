@@ -3,6 +3,11 @@
 For trading terminals, aggregators, indexers, wallets and portfolio trackers that want to show and
 trade Bordrless tokens.
 
+**Changed 2026-10-12 (SDK 0.9.0):** Snowball (a companion that trades its pot on the token's own
+pool), script companions and their approvals, a custom hook beside any companion, five-minute
+lottery rounds, and `tokenBalanceChanges` / `holdingBalanceChanges` for pre/post balances of
+Bordrless holdings. Full list: [CHANGELOG](../../packages/sdk/CHANGELOG.md).
+
 **Changed 2026-10-10 (SDK 0.8.0):** a custom hook may now also be **timelocked** by its author (new
 code only after at least 3 days of public notice). Show one risk label per hooked token, from
 `hookRiskLabel` ([Hooks](05-hooks-and-risk.md#risk-labels)). Strategy coins and the hook vault are
@@ -23,7 +28,7 @@ here is public and permissionless: read the chain, build transactions with
 [`@bordrless/sdk`](../../packages/sdk), and send them yourself.
 
 ```sh
-npm install @bordrless/sdk@0.8.0 @bordrless/shared@0.8.0 @solana/web3.js
+npm install @bordrless/sdk@0.9.0 @bordrless/shared@0.9.0 @solana/web3.js
 ```
 
 ## Integration checklist

@@ -27,6 +27,7 @@ import { BPF_LOADER_UPGRADEABLE, COMPANION_PROGRAM, HOOK_TIMELOCK_PROGRAM, HALF_
 import { BPF_LOADER_2, LOADER_V4, classifyProgram, codeOf, decodeTimelock, executableHash, parseProgramData, timelockAddress, type AuthorityClass } from './authority.ts';
 import { attestationAddress } from './companion.ts';
 import { decodeHookAccountList } from './hooks.ts';
+import type { Mint } from './accounts.ts';
 
 /** An account as read (null: it does not exist). */
 export interface RawAccount {
@@ -67,7 +68,7 @@ export interface HookRiskLabel {
   potCap: bigint | null;
   provenance: 'protocol' | 'studio' | 'unattested' | 'none';
   /** Studio's attestation, when there is one. */
-  studio: { buildHash: string; simPass: boolean; cutMaxBps: number; current: boolean } | null;
+  studio: { buildHash: string; simPass: boolean; cutMaxBps: number; current: boolean; revoked?: boolean } | null;
   severity: 'low' | 'medium' | 'high';
   /** One sentence. */
   words: string;
@@ -210,9 +211,9 @@ export function riskLabelOf(a: RiskAccounts, now: number, executableHashHex?: st
     const revoked = at[ATTEST.revoked] !== 0;
     // As the companion reads it: other code proposed in its timelock makes it not current.
     const otherCodePending = label.pending !== null && label.pending.hash !== build;
-    const current = !revoked && simPass && !otherCodePending && (pdSlot === slot || hash === build);
+    const current = !revoked && simPass && !otherCodePending && (hash !== null ? hash === build : pdSlot === slot);
     attested = current;
-    label.studio = { buildHash: build, simPass, cutMaxBps: cut, current };
+    label.studio = { buildHash: build, simPass, cutMaxBps: cut, current, ...(revoked ? { revoked: true } : {}) };
   }
   label.provenance = attested ? 'studio' : BORDRLESS_HOOKS.some((p) => p.equals(a.programId)) ? 'protocol' : cls.kind === 'managed' ? 'unattested' : 'none';
   const [severity, words] = ((): [HookRiskLabel['severity'], string] => {
@@ -328,7 +329,7 @@ export async function hookRiskLabel(connection: Connection, program: PublicKey, 
     return null;
   })();
   const needs = (() => {
-    if (mode === 'never' || !codeHeader) return false;
+    if (mode === 'never' || !codeHeader || !accounts.program?.executable) return false;
     if (mode === 'always') return true;
     const st = accounts.status?.data;
     if (st && st.length >= STATUS.len && st[STATUS.audited] !== 0) return true;
@@ -339,17 +340,83 @@ export async function hookRiskLabel(connection: Connection, program: PublicKey, 
   })();
   if (needs && codeHeader) {
     const cacheKey = deploySlot === null ? null : `${program.toBase58()}:${deploySlot}`;
-    const cached = cacheKey ? HASHES.get(cacheKey) : undefined;
+    const cached = mode !== 'always' && cacheKey ? HASHES.get(cacheKey) : undefined;
     if (cached) hash = cached;
     else {
       const info = await connection.getAccountInfo(codeKey, 'confirmed');
       const code = info ? codeOf(info.owner, Buffer.from(info.data)) : null;
+      if (!code && mode === 'always') throw new Error('The hook executable could not be read for verification.');
       if (code) {
         hash = executableHash(code);
-        if (cacheKey) HASHES.set(cacheKey, hash);
+        if (cacheKey && mode !== 'always') {
+          HASHES.set(cacheKey, hash);
+          if (HASHES.size > 512) HASHES.delete(HASHES.keys().next().value!);
+        }
       }
     }
   }
   const callees = opts.mint ? await hookCallees(connection, program, opts.mint) : [];
   return riskLabelOf(accounts, opts.now ?? Math.floor(Date.now() / 1000), hash, callees);
+}
+
+// ---- a mint's own authorities (docs/dex.md §6.2) ----------------------------------------------------
+
+/** Which of a mint's four authorities. */
+export type MintAuthorityKind = 'mint' | 'freeze' | 'hook' | 'metadata';
+
+export interface MintRiskReason {
+  kind: 'hook_missing' | 'hook_authority' | 'freeze_authority' | 'mint_authority' | 'hook' | 'metadata_authority' | 'fixed';
+  severity: 'low' | 'medium' | 'high';
+  words: string;
+}
+
+/** A mint's risk label: its highest severity, the first sentence at that severity, every reason, and the authorities still set. */
+export interface MintRiskLabel {
+  severity: 'low' | 'medium' | 'high';
+  words: string;
+  reasons: MintRiskReason[];
+  held: { kind: MintAuthorityKind; authority: PublicKey }[];
+}
+
+/** What of a `Mint` the label reads. */
+export type MintRiskInput = Pick<Mint, 'decimals' | 'supply' | 'maxSupply' | 'mintAuthority' | 'freezeAuthority' | 'hookAuthority' | 'metadataAuthority' | 'hookProgram'>;
+
+/** Whole tokens of `amount`, with separators (the fraction dropped). */
+const wholeTokens = (amount: bigint, decimals: number): string => (amount / 10n ** BigInt(decimals)).toLocaleString('en-US');
+
+/**
+ * The label of a mint from its own authorities and its hook's label (`hookRiskLabel`, null without a
+ * hook), the words of docs/dex.md §6.2 in its order: a gone hook program, the hook authority, the
+ * freeze authority, the mint authority (unlimited, or capped: high above 5% of the supply, else
+ * medium), the hook's own label, the metadata authority; "Fixed" when none of the four is held and
+ * there is no hook. Pure: what the chain holds is passed in. Impersonation (§9.2) needs the
+ * launches and the bridge's wrappers, which the backend adds.
+ */
+export function mintRiskOf(mint: MintRiskInput, hook: HookRiskLabel | null): MintRiskLabel {
+  const reasons: MintRiskReason[] = [];
+  const held: MintRiskLabel['held'] = [];
+  if (mint.mintAuthority) held.push({ kind: 'mint', authority: mint.mintAuthority });
+  if (mint.freezeAuthority) held.push({ kind: 'freeze', authority: mint.freezeAuthority });
+  if (mint.hookAuthority) held.push({ kind: 'hook', authority: mint.hookAuthority });
+  if (mint.metadataAuthority) held.push({ kind: 'metadata', authority: mint.metadataAuthority });
+  if (mint.hookProgram && hook && hook.class === 'missing') reasons.push({ kind: 'hook_missing', severity: 'high', words: hook.words });
+  if (mint.hookAuthority) reasons.push({ kind: 'hook_authority', severity: 'high', words: 'Its creator can swap its hook for other code at any time.' });
+  if (mint.freezeAuthority) reasons.push({ kind: 'freeze_authority', severity: 'high', words: "Its creator can freeze any wallet's tokens, the pool's included." });
+  if (mint.mintAuthority) {
+    if (mint.maxSupply === 0n) reasons.push({ kind: 'mint_authority', severity: 'high', words: 'Its creator can mint more, without limit.' });
+    else if (mint.maxSupply > mint.supply) {
+      const more = mint.maxSupply - mint.supply;
+      // Of the supply that exists; a supply of nothing yet makes every cap "more than 5%".
+      const pct = mint.supply > 0n ? Number((more * 10_000n) / mint.supply) / 100 : Infinity;
+      const shown = Number.isFinite(pct) ? `${pct.toLocaleString('en-US', { maximumFractionDigits: pct < 1 ? 2 : 0 })}%` : 'all';
+      reasons.push({ kind: 'mint_authority', severity: pct > 5 ? 'high' : 'medium', words: `Its creator can mint up to ${wholeTokens(more, mint.decimals)} more (${shown} of supply).` });
+        } else reasons.push({ kind: 'mint_authority', severity: 'low', words: 'Its creator still holds the mint authority, but the supply is at its cap: nothing more can be minted.' });
+  }
+  if (mint.hookProgram && hook && hook.class !== 'missing') reasons.push({ kind: 'hook', severity: hook.severity, words: hook.words });
+  if (mint.metadataAuthority) reasons.push({ kind: 'metadata_authority', severity: 'medium', words: 'Its name, ticker and picture can change.' });
+  if (held.length === 0 && !mint.hookProgram) reasons.push({ kind: 'fixed', severity: 'low', words: 'Fixed: nobody can mint, freeze, or change its code or name.' });
+  // A hooked mint with every authority revoked and no hook label read: nothing is known of the hook, so nothing is claimed.
+  const worst = Math.max(-1, ...reasons.map((r) => SEVERITY_RANK[r.severity]));
+  const top = reasons.find((r) => SEVERITY_RANK[r.severity] === worst) ?? null;
+  return { severity: top?.severity ?? 'medium', words: top?.words ?? 'Its hook could not be read.', reasons, held };
 }

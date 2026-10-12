@@ -30,8 +30,13 @@ export interface StudioFile {
  * A hook project whose state starts with the game ticket standard's header is a game hook
  * (docs/games.md "Phase 2"): read from its source (`detectGameSettings`), never chosen, and its
  * config launches a jackpot, streak or lottery coin through the companion.
+ *
+ * `script` (2026-10-12, docs/scripts.md): a Workshop companion's script, the program a companion
+ * calls to spend its pot. Only the Workshop makes one (`POST /v1/workshop/submit` with kind
+ * companion); it goes through the same pipeline with a script's own checks, review and build (no
+ * trading test), is deployed the same way, and is approved on chain instead of listed as a config.
  */
-export type StudioKind = 'config' | 'hook';
+export type StudioKind = 'config' | 'hook' | 'script';
 
 /** The kinds of game a game hook keeps the score of (the companion's `GameKind`). */
 export type StudioGameKind = 'lottery' | 'jackpot' | 'streak';
@@ -200,7 +205,7 @@ export interface StudioQuota {
 
 /** The message a wallet signs to use Studio: no transaction, nothing moves. */
 export function studioSignInMessage(wallet: Address, nonce: string, issuedAt: string): string {
-  return ['Sign in to Bordrless Studio', '', 'This signature proves you own this wallet. It does not move funds or approve any transaction.', '', `Wallet: ${wallet}`, `Nonce: ${nonce}`, `Issued: ${issuedAt}`].join('\n');
+  return ['Sign in to the Bordrless Workshop', '', 'This signature proves you own this wallet. It does not move funds or approve any transaction.', '', `Wallet: ${wallet}`, `Nonce: ${nonce}`, `Issued: ${issuedAt}`].join('\n');
 }
 
 /** The header the session token travels in, browser → site proxy → backend. */
@@ -347,6 +352,51 @@ export interface StudioSimGame {
   periods: number;
   /** The largest difference between a wallet's share of the payouts and its share of what it held, in bps, over the fairness run; null when it did not run. */
   fairnessMaxBps: number | null;
+}
+
+// ---- verification (the CLI's `bordrless hook verify`) ---------------------------------------------------
+
+/**
+ * `POST /v1/studio/verify` (docs/phase3a-handover.md item 6; the open CLI sends it without the
+ * site's key): a program checked against Studio's build record of it and the code on chain. `files`
+ * is the caller's copy of the source (`src/**.rs`, as a Studio project keeps them), hashed and
+ * compared with the source Studio built; `commit` the template commit the caller built against.
+ * `source` is the CLI's directory name, kept for the log only.
+ */
+export interface StudioVerifyRequest {
+  kind?: 'hook' | 'strategy';
+  program: Address;
+  commit?: string;
+  source?: string;
+  files?: StudioFile[];
+}
+
+/**
+ * The verdict: `verified` when the code on chain is Studio's build of the source Studio holds (and,
+ * when sent, the caller's source and commit are that build's); `mismatch` when something Studio
+ * holds differs from the chain or from what the caller sent; `unverifiable` when nothing can be
+ * said: no Studio build record for this program, or no code on chain. `rebuilt` is false: this route
+ * compares records, it does not yet rebuild the source at the commit (the handover's full
+ * semantics), so a program Studio never built is never `verified` here.
+ */
+export interface StudioVerifyResponse {
+  program: Address;
+  verdict: 'verified' | 'mismatch' | 'unverifiable';
+  /** Why, in sentences the CLI prints. */
+  reasons: string[];
+  /** `solana-verify`'s executable hash of the code on chain; null when the program is not deployed through the upgradeable loader. */
+  onChainHash: string | null;
+  /** Studio's build record of this program id, when there is one. */
+  build: { hash: string; sourceHash: string; templateCommit: string | null; at: number; project: string; stage: string } | null;
+  /** sha256 of the `files` sent (null without files). */
+  sourceHash: string | null;
+  /** Whether the source sent is the source Studio built (null without files or without a build). */
+  sourceMatchesBuild: boolean | null;
+  /** Whether the commit sent is the template commit the build recorded (null without a commit, a build, or a recorded commit). */
+  commitMatchesBuild: boolean | null;
+  /** Studio's on-chain `HookAttestation` of the program, when there is one. */
+  attestation: { buildHash: string; sourceHash: string; templateCommit: string; kind: string; review: 'pass' | 'warn'; revoked: boolean; attestedAt: number; matchesChain: boolean } | null;
+  rebuilt: false;
 }
 
 // ---- deploy -----------------------------------------------------------------------------------------

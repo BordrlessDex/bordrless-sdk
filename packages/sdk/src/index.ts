@@ -1,4 +1,5 @@
 export * from './accounts.ts';
+export * from './balances.ts';
 export * from './addresses.ts';
 export * from './coders.ts';
 export * from './errors.ts';
@@ -8,6 +9,9 @@ export * from './inspect.ts';
 export * from './instructions.ts';
 export * from './transactions.ts';
 export * from './companion.ts';
+export * from './snowball.ts';
+export * from './scripts.ts';
+export * from './template.ts';
 export * from './game.ts';
 export * from './gameKinds.ts';
 export * from './lotteryHook.ts';

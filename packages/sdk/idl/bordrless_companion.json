@@ -8,6 +8,105 @@
   },
   "instructions": [
     {
+      "name": "approve",
+      "docs": [
+        "The protocol's upgrade authority: approves `program`'s code (its hash recomputed here) as a",
+        "token hook (kind 0) or a companion script (kind 1), `author` its author (a script's earns",
+        "half the creator fees of the companions made with it). Only a program nobody but Bordrless",
+        "can change (immutable, Bordrless's keys, or a hook timelock); an upgrade voids it."
+      ],
+      "discriminator": [
+        69,
+        74,
+        217,
+        36,
+        115,
+        117,
+        97,
+        76
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "The companion program's upgrade authority (the protocol's); pays the rent the first time."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "program_data"
+        },
+        {
+          "name": "target",
+          "docs": [
+            "being an upgradeable-loader program naming `target_programdata`)."
+          ]
+        },
+        {
+          "name": "target_programdata"
+        },
+        {
+          "name": "approval",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  112,
+                  112,
+                  114,
+                  111,
+                  118,
+                  97,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "target"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "program",
+          "type": "pubkey"
+        },
+        {
+          "name": "kind",
+          "type": "u8"
+        },
+        {
+          "name": "code_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "author",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
       "name": "attest",
       "docs": [
         "Studio's attester: attests a program's code (rebuilt from its source, the hash matched with",
@@ -1379,6 +1478,282 @@
           "type": {
             "defined": {
               "name": "GameKindArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "create_script",
+      "docs": [
+        "Before the launch, the mint signing: the companion becomes a script companion, its pot's part",
+        "of every fee claim spent by an approved builder's program (the script), whose",
+        "`companion_init` runs here. The remaining accounts are forwarded to it."
+      ],
+      "discriminator": [
+        161,
+        210,
+        131,
+        101,
+        215,
+        107,
+        219,
+        115
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "docs": [
+            "Pays the rent of the script account and of the script's state; never passed to the script."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "mint",
+          "docs": [
+            "The launch's mint, not created yet: it signs, so only whoever made the companion makes its",
+            "script."
+          ],
+          "signer": true
+        },
+        {
+          "name": "companion",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  97,
+                  110,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "script",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  99,
+                  114,
+                  105,
+                  112,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "script_state",
+          "docs": [
+            "the script, when `state_len` is above 0; unused otherwise."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  99,
+                  114,
+                  105,
+                  112,
+                  116,
+                  45,
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  97,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator_quote"
+        },
+        {
+          "name": "approval"
+        },
+        {
+          "name": "script_program"
+        },
+        {
+          "name": "script_programdata"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "CreateScriptArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "create_snowball",
+      "docs": [
+        "Snowball (2026-10-12): before the launch, the mint signing, the companion becomes a market",
+        "maker: the pot's part of every fee claim, the step, the trade sizes, the interval and the cap."
+      ],
+      "discriminator": [
+        49,
+        198,
+        9,
+        128,
+        48,
+        81,
+        228,
+        124
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "mint",
+          "docs": [
+            "The launch's mint, not created yet: it signs, so only whoever made the companion makes its",
+            "Snowball."
+          ],
+          "signer": true
+        },
+        {
+          "name": "companion",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  97,
+                  110,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "snowball",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  110,
+                  111,
+                  119,
+                  98,
+                  97,
+                  108,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "CreateSnowballArgs"
             }
           }
         }
@@ -2985,6 +3360,241 @@
       "args": []
     },
     {
+      "name": "revoke_approval",
+      "docs": [
+        "The protocol's upgrade authority: revokes `program`'s approval."
+      ],
+      "discriminator": [
+        44,
+        51,
+        184,
+        108,
+        182,
+        202,
+        20,
+        53
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "The companion program's upgrade authority."
+          ],
+          "signer": true
+        },
+        {
+          "name": "program_data"
+        },
+        {
+          "name": "approval",
+          "docs": [
+            "The approval of the instruction's `program` (checked in the handler)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  112,
+                  112,
+                  114,
+                  111,
+                  118,
+                  97,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "approval.program",
+                "account": "Approval"
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "program",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "script_step",
+      "docs": [
+        "Anyone, once an interval: the script's `companion_step`, the creator address signing, then",
+        "the companion's checks (the pot spent and nothing else, the dev bag and the lamports kept,",
+        "custody unchanged); pays a bounty from the pot. The remaining accounts are forwarded to it."
+      ],
+      "discriminator": [
+        8,
+        178,
+        42,
+        51,
+        245,
+        179,
+        103,
+        17
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "docs": [
+            "Whoever sends it; paid the bounty. Its signature is never forwarded to the script."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "companion",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  97,
+                  110,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "companion.mint",
+                "account": "Companion"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  97,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "companion.mint",
+                "account": "Companion"
+              }
+            ]
+          }
+        },
+        {
+          "name": "launch"
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "pool"
+        },
+        {
+          "name": "script",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  99,
+                  114,
+                  105,
+                  112,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "companion.mint",
+                "account": "Companion"
+              }
+            ]
+          }
+        },
+        {
+          "name": "script_state",
+          "docs": [
+            "when it has one (`Script.state_len` above 0)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  99,
+                  114,
+                  105,
+                  112,
+                  116,
+                  45,
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "companion.mint",
+                "account": "Companion"
+              }
+            ]
+          }
+        },
+        {
+          "name": "approval"
+        },
+        {
+          "name": "script_program"
+        },
+        {
+          "name": "script_programdata"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "set_hook_status",
       "docs": [
         "The protocol's upgrade authority: whether a game hook is audited, its pots' cap while not,",
@@ -3405,6 +4015,125 @@
       "args": []
     },
     {
+      "name": "snowball_step",
+      "docs": [
+        "Anyone: a Snowball's trade on its pool, a buy on a dip or a sell on a rise of its step from",
+        "the reference (or a follow of the price when that side has nothing to trade); pays a bounty."
+      ],
+      "discriminator": [
+        107,
+        108,
+        139,
+        36,
+        101,
+        60,
+        224,
+        117
+      ],
+      "accounts": [
+        {
+          "name": "cranker",
+          "docs": [
+            "Whoever sends it; paid the bounty on a trade."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "companion",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  97,
+                  110,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "companion.mint",
+                "account": "Companion"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  97,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "companion.mint",
+                "account": "Companion"
+              }
+            ]
+          }
+        },
+        {
+          "name": "launch"
+        },
+        {
+          "name": "snowball",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  110,
+                  111,
+                  119,
+                  98,
+                  97,
+                  108,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "companion.mint",
+                "account": "Companion"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "withdraw",
       "docs": [
         "Anyone: pays the beneficiary their part as SOL."
@@ -3496,6 +4225,19 @@
   ],
   "accounts": [
     {
+      "name": "Approval",
+      "discriminator": [
+        233,
+        9,
+        153,
+        49,
+        11,
+        222,
+        59,
+        130
+      ]
+    },
+    {
       "name": "Companion",
       "discriminator": [
         189,
@@ -3548,6 +4290,19 @@
       ]
     },
     {
+      "name": "Script",
+      "discriminator": [
+        152,
+        19,
+        115,
+        143,
+        1,
+        19,
+        225,
+        121
+      ]
+    },
+    {
       "name": "ShareReceipt",
       "discriminator": [
         82,
@@ -3558,6 +4313,19 @@
         167,
         83,
         113
+      ]
+    },
+    {
+      "name": "Snowball",
+      "discriminator": [
+        34,
+        188,
+        83,
+        61,
+        87,
+        169,
+        84,
+        139
       ]
     },
     {
@@ -3576,6 +4344,19 @@
   ],
   "events": [
     {
+      "name": "ApprovalRevoked",
+      "discriminator": [
+        0,
+        143,
+        189,
+        167,
+        179,
+        12,
+        235,
+        123
+      ]
+    },
+    {
       "name": "AttestationRevoked",
       "discriminator": [
         47,
@@ -3586,6 +4367,19 @@
         127,
         163,
         50
+      ]
+    },
+    {
+      "name": "AuthorPaid",
+      "discriminator": [
+        41,
+        149,
+        221,
+        32,
+        77,
+        240,
+        249,
+        8
       ]
     },
     {
@@ -3966,6 +4760,19 @@
       ]
     },
     {
+      "name": "ProgramApproved",
+      "discriminator": [
+        243,
+        40,
+        115,
+        32,
+        163,
+        97,
+        110,
+        22
+      ]
+    },
+    {
       "name": "RolledOver",
       "discriminator": [
         46,
@@ -3976,6 +4783,32 @@
         119,
         39,
         117
+      ]
+    },
+    {
+      "name": "ScriptCreated",
+      "discriminator": [
+        94,
+        124,
+        99,
+        130,
+        208,
+        56,
+        49,
+        122
+      ]
+    },
+    {
+      "name": "ScriptStepped",
+      "discriminator": [
+        70,
+        213,
+        224,
+        21,
+        30,
+        216,
+        104,
+        25
       ]
     },
     {
@@ -4002,6 +4835,45 @@
         26,
         242,
         171
+      ]
+    },
+    {
+      "name": "SnowballCreated",
+      "discriminator": [
+        236,
+        150,
+        24,
+        113,
+        167,
+        133,
+        146,
+        246
+      ]
+    },
+    {
+      "name": "SnowballFollowed",
+      "discriminator": [
+        252,
+        44,
+        141,
+        116,
+        143,
+        123,
+        77,
+        44
+      ]
+    },
+    {
+      "name": "SnowballTraded",
+      "discriminator": [
+        239,
+        98,
+        81,
+        179,
+        194,
+        29,
+        227,
+        254
       ]
     },
     {
@@ -4379,6 +5251,71 @@
       "code": 6066,
       "name": "TimelockPending",
       "msg": "the program's timelock holds a proposal of new code: a game is made on a timelocked program only while nothing is pending (its author cancels it, or it lands first)"
+    },
+    {
+      "code": 6067,
+      "name": "BadSnowball",
+      "msg": "a Snowball's terms are out of bounds, or its companion is launched, a game, a script or already a Snowball"
+    },
+    {
+      "code": 6068,
+      "name": "NotASnowball",
+      "msg": "not a Snowball companion"
+    },
+    {
+      "code": 6069,
+      "name": "SnowballNotDue",
+      "msg": "no Snowball step is due: too soon, or the price is within its step of the reference"
+    },
+    {
+      "code": 6070,
+      "name": "NotApproved",
+      "msg": "the program has no current approval of this kind from Bordrless: none, revoked, of another kind, or its code changed since it was approved"
+    },
+    {
+      "code": 6071,
+      "name": "BadScript",
+      "msg": "a script's terms are out of bounds (interval, init data, split), its program is one of the protocol's, or its companion is launched, a game, a Snowball or a script already"
+    },
+    {
+      "code": 6072,
+      "name": "ScriptNotDue",
+      "msg": "no script step is due: too soon after the launch or the last step"
+    },
+    {
+      "code": 6073,
+      "name": "ScriptOverspent",
+      "msg": "the script spent more bridged SOL than the pot holds"
+    },
+    {
+      "code": 6074,
+      "name": "ScriptTookDevBag",
+      "msg": "the script moved tokens of the dev bag"
+    },
+    {
+      "code": 6075,
+      "name": "ScriptTookLamports",
+      "msg": "the script took lamports from the creator address"
+    },
+    {
+      "code": 6076,
+      "name": "BadApproval",
+      "msg": "an approval is of a token hook (0) or a script (1), a script is none of the protocol's programs, and the hash must be the program's code on chain"
+    },
+    {
+      "code": 6077,
+      "name": "NotAScript",
+      "msg": "not a script companion"
+    },
+    {
+      "code": 6078,
+      "name": "ScriptBrokeCustody",
+      "msg": "the script delegated or closed one of the creator's holdings, changed the creator address's owner or data, or claimed the creator fees"
+    },
+    {
+      "code": 6079,
+      "name": "ProgramNotBounded",
+      "msg": "an approved program must be one only Bordrless can change: immutable, upgradeable only by Bordrless's keys, or behind a hook timelock (passed)"
     }
   ],
   "types": [
@@ -4404,6 +5341,128 @@
           },
           {
             "name": "Accounts"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Approval",
+      "docs": [
+        "Bordrless's approval of a program's code (2026-10-12), `PDA([\"approval\", program])`, written only",
+        "by the companion program's upgrade authority (`approve`, `revoke_approval`). It is bound to the",
+        "code: `approve` hashes the program's code on chain and refuses any other hash, and an approval",
+        "counts only while the program still runs that code (`approval::approved`: the ProgramData's slot",
+        "unchanged since, or the code hashed again). Upgrading an approved program voids its approval",
+        "until it is approved again. Only a program nobody but Bordrless can change is approved:",
+        "immutable, upgradeable only by Bordrless's keys, or behind a hook timelock."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "program",
+            "type": "pubkey"
+          },
+          {
+            "name": "kind",
+            "docs": [
+              "`APPROVAL_KIND_TOKEN_HOOK` (0) or `APPROVAL_KIND_SCRIPT` (1)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "code_hash",
+            "docs": [
+              "`solana-verify`'s executable hash of the approved code."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "approved_at",
+            "type": "i64"
+          },
+          {
+            "name": "revoked",
+            "type": "bool"
+          },
+          {
+            "name": "updated_by",
+            "docs": [
+              "Who last wrote it (the upgrade authority that approved or revoked it)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "programdata_slot",
+            "docs": [
+              "The program's ProgramData slot when approved: while it is unchanged the code is the approved",
+              "code (the loader refuses a second deploy, upgrade or extension in one slot), so a check needs",
+              "no hash; once it moved (an upgrade, or anyone's `ExtendProgram`) the code is hashed again."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "author",
+            "docs": [
+              "Who wrote the program: a script's author earns `AUTHOR_SHARE_BPS` of the creator fees of",
+              "every script companion made with it afterwards (`create_script` copies it into the `Script`).",
+              "The default key: no author. (From what was `reserved`.)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                24
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ApprovalRevoked",
+      "docs": [
+        "Bordrless revoked a program's approval (`revoke_approval`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "program",
+            "type": "pubkey"
+          },
+          {
+            "name": "kind",
+            "type": "u8"
+          },
+          {
+            "name": "code_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
           }
         ]
       }
@@ -4506,6 +5565,30 @@
           {
             "name": "by",
             "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AuthorPaid",
+      "docs": [
+        "A script companion's fee claim paid the script's author their share (`AUTHOR_SHARE_BPS` of what",
+        "the claim took from the launch), as SOL, before the split."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "companion",
+            "type": "pubkey"
+          },
+          {
+            "name": "author",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
           }
         ]
       }
@@ -4862,13 +5945,12 @@
             "type": "u64"
           },
           {
-            "name": "reserved",
-            "type": {
-              "array": [
-                "u8",
-                1
-              ]
-            }
+            "name": "mode",
+            "docs": [
+              "`MODE_CLASSIC`, `MODE_SNOWBALL` or `MODE_SCRIPT` (2026-10-12), the last byte of what was",
+              "`reserved`: zero, classic, in every companion made before."
+            ],
+            "type": "u8"
           }
         ]
       }
@@ -5129,6 +6211,144 @@
                 "name": "LaunchRules"
               }
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "CreateScriptArgs",
+      "docs": [
+        "Arguments of `create_script`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "split",
+            "docs": [
+              "Every fee claim's split besides the pot: the four parts (with `pot_bps`) sum to 10,000."
+            ],
+            "type": {
+              "defined": {
+                "name": "Split"
+              }
+            }
+          },
+          {
+            "name": "pot_bps",
+            "docs": [
+              "The pot's part of every fee claim: what the script spends."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "program",
+            "docs": [
+              "The script: a program with a current approval of kind `APPROVAL_KIND_SCRIPT`."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "interval",
+            "docs": [
+              "The least time between steps (10 seconds to a day)."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "state_len",
+            "docs": [
+              "The size of the script's state the companion makes (0: none; at most",
+              "`MAX_SCRIPT_STATE_LEN`)."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "init_data",
+            "docs": [
+              "Handed to the script's `companion_init` (at most `MAX_SCRIPT_INIT_LEN` bytes)."
+            ],
+            "type": "bytes"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CreateSnowballArgs",
+      "docs": [
+        "Arguments of `create_snowball`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "split",
+            "docs": [
+              "Every fee claim's split besides the pot: the four parts (with `pot_bps`) sum to 10,000."
+            ],
+            "type": {
+              "defined": {
+                "name": "Split"
+              }
+            }
+          },
+          {
+            "name": "pot_bps",
+            "docs": [
+              "The pot's part of every fee claim: what the market maker trades with."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "buy_step_bps",
+            "docs": [
+              "The drop from the reference that triggers a buy, and the rise that triggers a sell (0.5% to",
+              "20% each)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "sell_step_bps",
+            "type": "u16"
+          },
+          {
+            "name": "buy_bps",
+            "docs": [
+              "The share of the pot a buy spends, and of its tokens a sell sells (1% to 100% each)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "sell_bps",
+            "type": "u16"
+          },
+          {
+            "name": "interval",
+            "docs": [
+              "The least time between trades (10 seconds to a day)."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "max_trade",
+            "docs": [
+              "The most one trade moves, lamports (at least 0.01 SOL)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "pool_bps",
+            "docs": [
+              "The most one trade moves as a share of the pool's SOL side (0.25% to 10%)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "flat_trades",
+            "docs": [
+              "Trade every interval even when the price is within its steps (on the side that rebalances)."
+            ],
+            "type": "bool"
           }
         ]
       }
@@ -7227,6 +8447,55 @@
       }
     },
     {
+      "name": "ProgramApproved",
+      "docs": [
+        "Bordrless approved a program's code (`approve`): a new approval, or one rewritten."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "program",
+            "type": "pubkey"
+          },
+          {
+            "name": "kind",
+            "docs": [
+              "`APPROVAL_KIND_TOKEN_HOOK` (0) or `APPROVAL_KIND_SCRIPT` (1)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "code_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "programdata_slot",
+            "docs": [
+              "The program's ProgramData slot at the approval."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "author",
+            "docs": [
+              "The program's author (the default key: none)."
+            ],
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
       "name": "RolledOver",
       "docs": [
         "A round rolled over: the pot stays for the next draw (or, blocked, went to the buyback)."
@@ -7292,6 +8561,205 @@
           },
           {
             "name": "OracleUnpaid"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Script",
+      "docs": [
+        "A script companion's script (2026-10-12), `PDA([\"script\", mint])`, fixed at `create_script`: the",
+        "program that decides what the pot does, and how often a step may run. The pot itself is",
+        "`Companion.pending_pot` (bridged SOL in the creator's holding); what the script buys stays in the",
+        "creator's token holding beside any dev bag."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "program",
+            "docs": [
+              "The script: a program Bordrless approved (`APPROVAL_KIND_SCRIPT`), called with the creator",
+              "address signing."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "interval",
+            "docs": [
+              "The least time between two steps (10 seconds to a day)."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "last_at",
+            "docs": [
+              "When it last stepped (0: never)."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "steps",
+            "docs": [
+              "Steps run so far."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "created_at",
+            "type": "i64"
+          },
+          {
+            "name": "author",
+            "docs": [
+              "The script's author, copied from its approval at `create_script`: paid `AUTHOR_SHARE_BPS` of",
+              "what every fee claim takes from the launch, unless they are the launch's beneficiary. The",
+              "default key: no author. (From what was `reserved`.)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "author_paid",
+            "docs": [
+              "What the author has been paid so far (lamports)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "state_len",
+            "docs": [
+              "The size of the script's state, `PDA([\"script-state\", mint])`, which `create_script` made",
+              "(zeroed, owned by the script) and every call hands the script; 0: no state, the system",
+              "program's id in its place. (From what was `reserved`.)"
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ScriptCreated",
+      "docs": [
+        "A script made for a companion (`create_script`, before the launch), its `companion_init` called."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "companion",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "program",
+            "type": "pubkey"
+          },
+          {
+            "name": "split",
+            "type": {
+              "defined": {
+                "name": "Split"
+              }
+            }
+          },
+          {
+            "name": "pot_bps",
+            "type": "u16"
+          },
+          {
+            "name": "interval",
+            "type": "i64"
+          },
+          {
+            "name": "author",
+            "docs": [
+              "The script's author, from its approval (the default key: none)."
+            ],
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ScriptStepped",
+      "docs": [
+        "A script step (`script_step`): what the creator's holdings held before and after the script ran",
+        "(bridged SOL and the token), the bounty paid from the pot, and the pot after."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "companion",
+            "type": "pubkey"
+          },
+          {
+            "name": "program",
+            "type": "pubkey"
+          },
+          {
+            "name": "sol_before",
+            "docs": [
+              "The creator's bridged SOL, lamports, before and after the script (before the bounty)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "sol_after",
+            "type": "u64"
+          },
+          {
+            "name": "tokens_before",
+            "docs": [
+              "The creator's tokens, before and after the script."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "tokens_after",
+            "type": "u64"
+          },
+          {
+            "name": "bounty",
+            "docs": [
+              "Paid to the sender from the pot (`SCRIPT_BOUNTY`, or nothing when the pot holds less)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "pot_after",
+            "docs": [
+              "The pot after the step, the bounty paid."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "cranker",
+            "type": "pubkey"
           }
         ]
       }
@@ -7430,6 +8898,303 @@
           },
           {
             "name": "bounty",
+            "type": "u64"
+          },
+          {
+            "name": "cranker",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Snowball",
+      "docs": [
+        "A Snowball's market maker at `PDA([\"snowball\", mint])` (2026-10-12): its terms, fixed at",
+        "`create_snowball`, its reference price and the tokens it holds. Its SOL is the companion's pot",
+        "(`Companion.pending_pot`, `pot_bps` of every fee claim), in the creator's bridged-SOL holding;",
+        "its tokens are in the creator's token holding beside any dev bag, counted here so a sell never",
+        "touches the dev bag."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "buy_step_bps",
+            "docs": [
+              "A drop of this much from the reference price triggers a buy."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "sell_step_bps",
+            "docs": [
+              "A rise of this much from the reference price triggers a sell."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "buy_bps",
+            "docs": [
+              "The share of the pot a buy spends."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "sell_bps",
+            "docs": [
+              "The share of the tokens it holds a sell sells."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "interval",
+            "docs": [
+              "The least time between two steps that trade or follow (10 seconds to a day)."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "max_trade",
+            "docs": [
+              "The most one trade moves, lamports (a sell: the SOL value of what it sells)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "pool_bps",
+            "docs": [
+              "The most one trade moves as a share of the pool's SOL side, real and virtual (0.25% to 10%)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "flat_trades",
+            "docs": [
+              "Trade every interval even when the price is within its steps, on the side that rebalances what",
+              "it holds (the pot keeps cycling); without it, it waits for a step."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "reference_price",
+            "docs": [
+              "The price the next trade is measured from (quote per base unit times `PRICE_SCALE`): the",
+              "opening price until the first step, then the price each trade left, or the price a follow",
+              "found. Zero until the first step."
+            ],
+            "type": "u128"
+          },
+          {
+            "name": "last_at",
+            "docs": [
+              "When it last traded or followed."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "tokens_held",
+            "docs": [
+              "Tokens it holds (bought and not sold yet)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "buys",
+            "docs": [
+              "Running totals."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "sells",
+            "type": "u64"
+          },
+          {
+            "name": "sol_spent",
+            "type": "u64"
+          },
+          {
+            "name": "sol_received",
+            "type": "u64"
+          },
+          {
+            "name": "tokens_bought",
+            "type": "u64"
+          },
+          {
+            "name": "tokens_sold",
+            "type": "u64"
+          },
+          {
+            "name": "bounties_total",
+            "type": "u64"
+          },
+          {
+            "name": "created_at",
+            "type": "i64"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "SnowballCreated",
+      "docs": [
+        "A Snowball made for a companion (`create_snowball`, before the launch)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "companion",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "pot_bps",
+            "type": "u16"
+          },
+          {
+            "name": "buy_step_bps",
+            "type": "u16"
+          },
+          {
+            "name": "sell_step_bps",
+            "type": "u16"
+          },
+          {
+            "name": "buy_bps",
+            "type": "u16"
+          },
+          {
+            "name": "sell_bps",
+            "type": "u16"
+          },
+          {
+            "name": "interval",
+            "type": "i64"
+          },
+          {
+            "name": "max_trade",
+            "type": "u64"
+          },
+          {
+            "name": "pool_bps",
+            "type": "u16"
+          },
+          {
+            "name": "flat_trades",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SnowballFollowed",
+      "docs": [
+        "A Snowball that could not trade on the side the price called for (nothing left to spend or to",
+        "sell): its reference follows the price, so it stays centred on the market."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "companion",
+            "type": "pubkey"
+          },
+          {
+            "name": "reference_before",
+            "type": "u128"
+          },
+          {
+            "name": "price",
+            "type": "u128"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SnowballTraded",
+      "docs": [
+        "A Snowball trade on the token's pool: `side` 1 a buy (on a dip), 0 a sell (on a rise)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "companion",
+            "type": "pubkey"
+          },
+          {
+            "name": "side",
+            "type": "u8"
+          },
+          {
+            "name": "on_step",
+            "docs": [
+              "A step triggered it (a drop or a rise); false for a flat trade."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "sol",
+            "docs": [
+              "SOL spent (a buy) or received (a sell), lamports, the bounty not counted."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "tokens",
+            "docs": [
+              "Tokens bought or sold."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bounty",
+            "type": "u64"
+          },
+          {
+            "name": "price_before",
+            "docs": [
+              "The pool's price before and after (the new reference)."
+            ],
+            "type": "u128"
+          },
+          {
+            "name": "price_after",
+            "type": "u128"
+          },
+          {
+            "name": "pot_after",
+            "type": "u64"
+          },
+          {
+            "name": "tokens_after",
             "type": "u64"
           },
           {

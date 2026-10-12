@@ -27,19 +27,30 @@
  * `closeReceipt`. A Studio game hook (upgradeable only by Studio's key or the protocol's) is taken
  * without a status when its ProgramData is passed (`createGameV2` always passes it,
  * `createGameWithProgramData` for a lottery); it is not audited, so its pot is capped at 10 SOL.
+ *
+ * 2026-10-12: a Snowball (`createSnowball`, `snowballStep`: `snowball.ts`, held to
+ * `vectors/snowball.json`), and Bordrless's approvals of programs' code and script companions
+ * (`approve`, `revokeApproval`, `createScript`, `scriptStep`, `claimFeesScript`: `scripts.ts`, held to
+ * `vectors/scripts.json` with a Snowball step of a custom-hook token). Since that upgrade a
+ * companion of any kind may launch a token with a custom hook (`LaunchKeys.customHook`: every step
+ * that moves the token carries the hook's slice and its registry), from a plain config (no author
+ * share: `AuthorShareUnsupported`) and with no holders' share (one token hook per mint, and the
+ * holders' share goes through the kit). `CustomHookUnsupported` is no longer thrown.
  */
 import { PublicKey, type AccountMeta, type Connection, type TransactionInstruction, TransactionInstruction as Ix } from '@solana/web3.js';
 import BN from 'bn.js';
 import { COMPANION_SPLITS, type CompanionTemplate } from '@bordrless/shared';
 import * as a from './addresses.ts';
 import { CODERS } from './coders.ts';
-import { roundEnd, validRoundSecs } from './game.ts';
+import { MAX_ROUND_SECS, roundEnd, validRoundSecs } from './game.ts';
 import { MAX_MIN_STREAK_SECS, MAX_TIMER_SECS, MIN_TIMER_SECS } from './gameKinds.ts';
-import { customHookTokenHook, kitTokenHook, type HookAccountList, type TokenHook } from './hooks.ts';
+import { customHookTokenHook, kitTokenHook, type CustomHookAccounts, type HookAccountList, type TokenHook } from './hooks.ts';
 import { PROTOCOL_PROGRAMS } from './inspect.ts';
 import { bridge, kit, launch, token, type CreateLaunchArgs, type LaunchKeys } from './instructions.ts';
 import { drawSeed, oraoRequestV2, type SeedSlot } from './orao.ts';
 import { timelockAddress } from './authority.ts';
+import type { SnowballArgs } from './snowball.ts';
+import { MODE_SCRIPT, type ScriptArgs } from './scripts.ts';
 
 /** What every creator fee claim pays for, in basis points summing to 10,000 (with a game's `potBps`). */
 export interface CompanionSplit {
@@ -102,6 +113,10 @@ export interface Companion {
   gameKind: GameKind;
   /** v2.1: the part of `pendingPot` a closed streak epoch still owes its holders (a lowered cap never trims it); 0 for every other kind. */
   potLocked: bigint;
+  /** Snowball (2026-10-12, `mode`): its pot (`pendingPot`, `potBps` of every fee claim) makes a market in the token (`snowball.ts`). False for every companion made before. */
+  snowball: boolean;
+  /** Script companion (2026-10-12, `mode` `MODE_SCRIPT`): an approved builder's program, its `Script`, decides what its pot does (`scripts.ts`). False for every companion made before; `decodeCompanion` always sets it (optional only so a companion written out by hand need not name it). */
+  script?: boolean;
 }
 
 /**
@@ -112,7 +127,7 @@ export interface Companion {
  */
 export const COMPANION_TEMPLATES: Readonly<Record<CompanionTemplate, Readonly<CompanionSplit>>> = COMPANION_SPLITS;
 
-/** The defaults Studio offers with a template: a 0.5% bounty, buybacks of at most 1 SOL a minute apart, a 30-day vest. */
+/** The defaults the launch page (and its API) sends with a split: a 0.5% bounty, buybacks of at most 1 SOL a minute apart, a 30-day vest. */
 export const COMPANION_DEFAULTS = { bountyBps: 50, maxBuyback: 1_000_000_000n, buybackInterval: 60, vestSecs: 30 * 86_400 } as const;
 
 const ro = (pubkey: PublicKey, isSigner = false): AccountMeta => ({ pubkey, isSigner, isWritable: false });
@@ -132,8 +147,9 @@ function build(name: string, args: Record<string, unknown>, named: AccountMeta[]
 }
 
 /**
- * The launch's mint as token instructions take it: a game coin's custom hook (`keys.customHook`)
- * with its extras; else the kit with its extras with kit rules; else none (`steps.rs` `token_hook`).
+ * The launch's mint as token instructions take it: its custom hook (`keys.customHook`: a game's, or
+ * any custom hook since the 2026-10-12 upgrade) with its extras; else the kit with its extras with
+ * kit rules; else none (`steps.rs` `token_hook`).
  */
 const mintHook = (keys: LaunchKeys, rewards: boolean): TokenHook | null => {
   if (keys.customHook) return customHookTokenHook(keys.customHook);
@@ -178,13 +194,13 @@ export interface GameArgs {
   /** Every fee claim's split with the pot's part: the four sum to 10,000; no holders' part (a game coin has no kit). Replaces `create`'s. */
   split: CompanionSplit;
   potBps: number;
-  /** An hour to 30 days, as the hook's header says. */
+  /** 5 minutes to 30 days for a lottery (an hour at least for a streak's epochs), as the hook's header says. */
   roundSecs: number;
   /** No draw while the pot holds less: 0.1 to 1,000 SOL. */
   minPot: bigint;
   /** The part of the pot one draw pays: 10% to 100%. */
   prizeBps: number;
-  /** How long each claim attempt is open: 5 minutes to a day. */
+  /** How long each claim attempt is open: a minute to a day for a lottery (5 minutes at least for a streak). */
   claimWindowSecs: number;
   /** Attempts per draw, 1 to 16, all within half a round. */
   maxAttempts: number;
@@ -219,8 +235,12 @@ export const GAME_LIMITS = {
   minMinPot: 100_000_000n,
   maxMinPot: 1_000_000_000_000n,
   minPrizeBps: 1_000,
-  minClaimWindowSecs: 300,
+  /** A lottery's claim window: a minute to a day (`MIN_CLAIM_WINDOW`, since the five-minute rounds upgrade); a streak's and a strategy's keep their own floors below. */
+  minClaimWindowSecs: 60,
   maxClaimWindowSecs: 86_400,
+  /** A streak's epoch and a strategy's period: an hour at least, their claim window 5 minutes at least (`MIN_EPOCH_SECS`, `MIN_EPOCH_CLAIM_WINDOW`). */
+  minEpochSecs: 3_600,
+  minEpochClaimWindowSecs: 300,
   maxAttempts: 16,
   claimsPerRound: 2,
   revealSecs: 600,
@@ -275,8 +295,8 @@ export function gameArgsProblem(args: GameArgs, c: Pick<CompanionArgs, 'maxBuyba
   switch (args.kind) {
     case 'lottery':
       if (k.timerSecs !== 0 || k.minTokens !== 0n || k.minStreakSecs !== 0 || k.minWeight !== 0n) return 'A lottery takes no jackpot or streak settings.';
-      if (!validRoundSecs(args.roundSecs)) return 'A round lasts an hour to 30 days.';
-      if (args.claimWindowSecs < GAME_LIMITS.minClaimWindowSecs || args.claimWindowSecs > GAME_LIMITS.maxClaimWindowSecs) return 'A claim window lasts 5 minutes to a day.';
+      if (!validRoundSecs(args.roundSecs)) return 'A round lasts 5 minutes to 30 days.';
+      if (args.claimWindowSecs < GAME_LIMITS.minClaimWindowSecs || args.claimWindowSecs > GAME_LIMITS.maxClaimWindowSecs) return 'A claim window lasts a minute to a day.';
       if (!(args.maxAttempts >= 1 && args.maxAttempts <= GAME_LIMITS.maxAttempts)) return 'A draw makes 1 to 16 attempts.';
       if (args.claimWindowSecs * args.maxAttempts * GAME_LIMITS.claimsPerRound > args.roundSecs) return 'A draw’s attempts must fit in half a round.';
       break;
@@ -287,8 +307,8 @@ export function gameArgsProblem(args: GameArgs, c: Pick<CompanionArgs, 'maxBuyba
       if (k.minStreakSecs !== 0 || k.minWeight !== 0n) return 'A jackpot takes no streak settings.';
       break;
     case 'streak':
-      if (!validRoundSecs(args.roundSecs)) return 'An epoch lasts an hour to 30 days.';
-      if (args.claimWindowSecs < GAME_LIMITS.minClaimWindowSecs || args.claimWindowSecs > GAME_LIMITS.maxClaimWindowSecs || args.claimWindowSecs * GAME_LIMITS.claimsPerRound > args.roundSecs) return 'A streak leaves claims 5 minutes to a day, at most half an epoch.';
+      if (args.roundSecs < GAME_LIMITS.minEpochSecs || args.roundSecs > MAX_ROUND_SECS) return 'An epoch lasts an hour to 30 days.';
+      if (args.claimWindowSecs < GAME_LIMITS.minEpochClaimWindowSecs || args.claimWindowSecs > GAME_LIMITS.maxClaimWindowSecs || args.claimWindowSecs * GAME_LIMITS.claimsPerRound > args.roundSecs) return 'A streak leaves claims 5 minutes to a day, at most half an epoch.';
       if (args.maxAttempts !== 0) return 'A streak has no attempts (0).';
       if (k.timerSecs !== 0 || k.minTokens !== 0n) return 'A streak takes no jackpot settings.';
       if (k.minStreakSecs > GAME_LIMITS.maxMinStreakSecs) return 'A streak asks at most a year without sending.';
@@ -339,7 +359,9 @@ export const companion = {
    * `createLaunch` with `companionCreatorAddress(mint)` as the creator; the mint signs. A game
    * companion's launch comes from a `LaunchConfig` naming the game's hook with the lottery flags,
    * its custom hook passed to `createLaunch` (`lotteryHook.accounts(mint)`); its state is among
-   * those accounts, so the companion checks it with no account of its own.
+   * those accounts, so the companion checks it with no account of its own. Any other companion
+   * (classic, Snowball, script) may launch from a plain config naming a custom hook too, with no
+   * author share and no holders' share (a pair's launch, docs/workshop.md "Pairs").
    */
   launch(launcher: PublicKey, mint: PublicKey, createLaunch: TransactionInstruction, args: CreateLaunchArgs): TransactionInstruction {
     const named = [ro(launcher, true), rw(a.companionAddress(mint)), rw(a.companionCreatorAddress(mint)), ro(a.LAUNCH_PROGRAM)];
@@ -388,6 +410,139 @@ export const companion = {
       ...hookRegistry(keys),
     ];
     return build('buyback', {}, step(cranker, keys.mint), extra);
+  },
+  /**
+   * `create_snowball` (2026-10-12): after `create`, before `launch`, the companion of `mint` (whose
+   * keypair signs) becomes a Snowball: `args.split` with the pot's part replaces `create's`, and the
+   * market maker's terms are fixed (`snowball.ts`).
+   */
+  createSnowball(payer: PublicKey, mint: PublicKey, args: SnowballArgs): TransactionInstruction {
+    const named = [rw(payer, true), ro(mint, true), rw(a.companionAddress(mint)), rw(a.snowballAddress(mint)), ro(a.SYSTEM_PROGRAM)];
+    const data = { args: { split: args.split, potBps: args.potBps, buyStepBps: args.buyStepBps, sellStepBps: args.sellStepBps, buyBps: args.buyBps, sellBps: args.sellBps, interval: new BN(args.interval), maxTrade: bn(args.maxTrade), poolBps: args.poolBps, flatTrades: args.flatTrades } };
+    return build('createSnowball', data, named, []);
+  },
+  /**
+   * `snowball_step` (anyone): a Snowball's trade on its pool, a buy when the price is its step below
+   * the reference, a sell when its step above (`snowballMove` says which, off chain), or a follow when
+   * that side has nothing to trade. The swap's accounts are a buy's (a sell takes the same ones).
+   *
+   * A token with a custom hook (2026-10-12; `client::snowball_step_with`): the swap carries the
+   * hook's slice with `keys.customHook`'s extras, resolved for a buy (the pool vault's transfer to
+   * the creator address); `sell`'s extras, resolved for a sell (the creator address's transfer to
+   * the vault), follow it, `keys.customHook`'s when not given (a hook whose extras do not depend on
+   * the direction, as `resolveCustomHookAccounts` resolves them), and the hook's registry comes
+   * last: the program resolves the side it trades itself. Without a hook, exactly the plain step.
+   */
+  snowballStep(cranker: PublicKey, keys: LaunchKeys, sell: CustomHookAccounts | null = null): TransactionInstruction {
+    const creator = a.companionCreatorAddress(keys.mint);
+    const buyHook = keys.customHook ?? sell;
+    const sellHook = sell ?? keys.customHook ?? null;
+    if (buyHook && sellHook && !buyHook.program.equals(sellHook.program)) throw new Error('the sell’s hook accounts are another program’s');
+    const buyKeys: LaunchKeys = { ...keys, customHook: buyHook ?? null };
+    const extra = [
+      ...remaining(launch.swap(buyKeys, creator, creator, 1, 0n, 0n)),
+      ...(sellHook ? sellHook.extras.map((m) => ({ ...m })) : []),
+      ro(a.poolAddress(keys.mint, keys.quoteMint, keys.lpFeeBps, a.LAUNCH_PROGRAM)),
+      ...remaining(token.createHolding(cranker, keys.mint, creator)),
+      ...unwrapAccounts(creator),
+      ...hookRegistry(buyKeys),
+    ];
+    const named = [rw(cranker, true), rw(a.companionAddress(keys.mint)), rw(creator), ro(a.launchAddress(keys.mint)), rw(a.snowballAddress(keys.mint)), ro(a.SYSTEM_PROGRAM)];
+    return build('snowballStep', {}, named, extra);
+  },
+
+  // ---- approvals and script companions (2026-10-12, `scripts.ts`) ----
+
+  /**
+   * `approve(program, kind, codeHash, author)`, signed (and paid the first time) by the companion
+   * program's upgrade authority: `program`'s code approved as `kind` (`APPROVAL_KINDS`: a token hook
+   * the site offers, or a companion script). Its program account and ProgramData are passed, its
+   * code hashed on chain and held to `codeHash` (`solana-verify`'s executable hash, hex), and its
+   * `Timelock`'s address after them (read only when the program is timelocked; an unused address
+   * otherwise), so its upgrade authority can be classed: only a program nobody but Bordrless can
+   * change is approved. `author` (the default key: none) earns a script's author share.
+   */
+  approve(authority: PublicKey, program: PublicKey, kind: number, codeHash: string, author: PublicKey): TransactionInstruction {
+    const named = [rw(authority, true), ro(a.COMPANION_PROGRAM_DATA), ro(program), ro(a.programDataAddress(program)), rw(a.approvalAddress(program)), ro(a.SYSTEM_PROGRAM)];
+    return build('approve', { program, kind, codeHash: Array.from(hex32(codeHash)), author }, named, [ro(timelockAddress(program))]);
+  },
+  /** `revoke_approval(program)`, signed by the companion program's upgrade authority: `program`'s approval revoked, until `approve` writes it again. */
+  revokeApproval(authority: PublicKey, program: PublicKey): TransactionInstruction {
+    return build('revokeApproval', { program }, [ro(authority, true), ro(a.COMPANION_PROGRAM_DATA), rw(a.approvalAddress(program))], []);
+  },
+  /**
+   * `create_script(args)`: after `create`, before `launch`, the companion of `mint` (whose keypair
+   * signs) becomes a script companion running `args.program` (a current approval of kind
+   * `APPROVAL_KINDS.script`, or an immutable program, which needs none once the companion upgrade of
+   * 2026-10-12 evening is live: `inspectScriptProgram` says which); `args.split` with the pot's
+   * part replaces `create`'s. `payer` pays the
+   * rent of the script account and of the script's state, which the companion makes when
+   * `args.stateLen` is above 0 (`scriptStateAddress(mint)`, always passed, writable: that many bytes,
+   * zeroed, owned by the script). `scriptExtra`: the accounts the script's `companion_init` takes
+   * after its four (`[creator, mint, state (or the system program's id), system program]`), as the
+   * script documents them; the program forwards them with their writability, never as signers (the
+   * payer is never passed to the script).
+   */
+  createScript(payer: PublicKey, mint: PublicKey, args: ScriptArgs, scriptExtra: AccountMeta[] = []): TransactionInstruction {
+    const creator = a.companionCreatorAddress(mint);
+    const named = [
+      rw(payer, true),
+      ro(mint, true),
+      rw(a.companionAddress(mint)),
+      rw(a.scriptAddress(mint)),
+      rw(a.scriptStateAddress(mint)),
+      rw(creator),
+      ro(a.holdingAddress(a.BRIDGED_SOL_MINT, creator)),
+      ro(a.approvalAddress(args.program)),
+      ro(args.program),
+      ro(a.programDataAddress(args.program)),
+      ro(a.SYSTEM_PROGRAM),
+    ];
+    const data = { args: { split: args.split, potBps: args.potBps, program: args.program, interval: new BN(args.interval), stateLen: args.stateLen, initData: Buffer.from(args.initData) } };
+    return build('createScript', data, named, scriptExtra.map((m) => ({ ...m })));
+  },
+  /**
+   * `script_step` (anyone; from a minute after the launch, once `Script.interval` (`scriptDue`),
+   * while the script's approval holds for the code it runs, or the script is immutable) of the
+   * script companion of `keys.mint`, whose
+   * script is `scriptProgram` (`Script.program`); the script's state (`scriptStateAddress(mint)`) is
+   * always passed, writable. `extra` are the accounts the script's `companion_step` takes after its
+   * six (`[creator, mint, launch, companion, pool, state (or the system program's id)]`), as the
+   * script documents them; then the creator's token holding's `create_holding` accounts (the sender
+   * pays its rent the first time) and the bridge's `unwrap_sol` accounts (the bounty). The program
+   * forwards every remaining account to the script with its writability, never as a signer (the
+   * sender is never passed). The sender is paid `SCRIPT_LIMITS.bounty` from the pot when it holds
+   * that much.
+   */
+  scriptStep(cranker: PublicKey, keys: LaunchKeys, scriptProgram: PublicKey, extra: AccountMeta[] = []): TransactionInstruction {
+    const mint = keys.mint;
+    const creator = a.companionCreatorAddress(mint);
+    const named = [
+      rw(cranker, true),
+      rw(a.companionAddress(mint)),
+      rw(creator),
+      ro(a.launchAddress(mint)),
+      ro(mint),
+      ro(a.poolAddress(mint, keys.quoteMint, keys.lpFeeBps, a.LAUNCH_PROGRAM)),
+      rw(a.scriptAddress(mint)),
+      rw(a.scriptStateAddress(mint)),
+      ro(a.approvalAddress(scriptProgram)),
+      ro(scriptProgram),
+      ro(a.programDataAddress(scriptProgram)),
+      ro(a.SYSTEM_PROGRAM),
+    ];
+    return build('scriptStep', {}, named, [...extra.map((m) => ({ ...m })), ...remaining(token.createHolding(cranker, mint, creator)), ...unwrapAccounts(creator)]);
+  },
+  /**
+   * `claim_fees` of a script companion: the plain claim (`claimFees`), then its `Script` (writable:
+   * it keeps the author's running total) and, when the claim pays the script's author, the
+   * author's wallet (writable): `scriptClaimAuthor(script, companion)`, the author unless there is
+   * none or it is the launch's beneficiary. Left out when due, the claim is refused (`MissingAccount`).
+   */
+  claimFeesScript(cranker: PublicKey, mint: PublicKey, author: PublicKey | null): TransactionInstruction {
+    const ix = companion.claimFees(cranker, mint);
+    ix.keys.push(rw(a.scriptAddress(mint)), ...(author ? [rw(author)] : []));
+    return ix;
   },
   /** `share` (anyone): the holders' part into the kit's reward pool. */
   share(cranker: PublicKey, mint: PublicKey): TransactionInstruction {
@@ -811,7 +966,7 @@ export function strategyArgsProblem(args: GameArgs, s: StrategyArgs): string | n
   if (args.kind !== 'strategy') return 'A strategy game is of kind strategy.';
   if (args.prizeBps !== 0 || args.maxAttempts !== 0) return 'A strategy decides the payouts: no prize share and no attempts.';
   if (!validRoundSecs(args.roundSecs)) return 'A period is an hour to 30 days.';
-  if (args.claimWindowSecs < GAME_LIMITS.minClaimWindowSecs || args.claimWindowSecs > GAME_LIMITS.maxClaimWindowSecs || args.claimWindowSecs * GAME_LIMITS.claimsPerRound > args.roundSecs) return 'The payment window is 5 minutes to half a period.';
+  if (args.claimWindowSecs < GAME_LIMITS.minEpochClaimWindowSecs || args.claimWindowSecs > GAME_LIMITS.maxClaimWindowSecs || args.claimWindowSecs * GAME_LIMITS.claimsPerRound > args.roundSecs) return 'The payment window is 5 minutes to half a period.';
   if (args.minPot < GAME_LIMITS.minMinPot || args.minPot > GAME_LIMITS.maxMinPot) return 'The minimum pot is 0.1 to 1,000 SOL.';
   if (s.budgetBps < 1 || s.budgetBps > L.maxBudgetBps) return 'A period pays at most half the pot.';
   if (s.maxShareBps < 1 || s.maxShareBps > L.maxShareBps) return 'One holder gets at most a quarter of a period’s budget.';
@@ -869,6 +1024,8 @@ export function decodeCompanion(data: Buffer): Companion {
     strandedBurnedAt: num(r.strandedBurnedAt),
     gameKind: variant(r.gameKind) as GameKind,
     potLocked: big(r.potLocked),
+    snowball: num(r.mode) === 1,
+    script: num(r.mode) === MODE_SCRIPT,
   };
 }
 
@@ -1094,9 +1251,11 @@ const sat = (v: bigint): bigint => (v > I64_MAX ? I64_MAX : v < -I64_MAX - 1n ? 
 
 /** When the claims of round `round`'s draw end: when the round after it ends (`state::claims_end`). */
 export const gameClaimsEnd = (round: number, roundSecs: number): number => roundEnd(Math.min(round + 1, 0xffff_ffff), roundSecs);
-/** The last moment a draw of `round` may be made: 10 minutes (`GAME_LIMITS.revealSecs`) for ORAO's answer and the reveal, then a whole claim window, before its claims end; later, the round rolls over (`Game::last_draw`). */
+/** What a draw of a round of `roundSecs` leaves for ORAO's answer and the reveal: 10 minutes (`GAME_LIMITS.revealSecs`), or a quarter of a shorter round (`constants::reveal_secs`): every round of 40 minutes or more keeps the 10 minutes. */
+export const gameRevealSecs = (roundSecs: number): number => Math.min(Math.floor(roundSecs / 4), GAME_LIMITS.revealSecs);
+/** The last moment a draw of `round` may be made: `gameRevealSecs` for ORAO's answer and the reveal, then a whole claim window, before its claims end; later, the round rolls over (`Game::last_draw`). */
 export const gameLastDraw = (g: Pick<Game, 'roundSecs' | 'claimWindowSecs'>, round: number): number =>
-  Number(sat(BigInt(gameClaimsEnd(round, g.roundSecs)) - BigInt(g.claimWindowSecs) - BigInt(GAME_LIMITS.revealSecs)));
+  Number(sat(BigInt(gameClaimsEnd(round, g.roundSecs)) - BigInt(g.claimWindowSecs) - BigInt(gameRevealSecs(g.roundSecs))));
 /** When attempt `attempt`'s claim opens: `revealedAt + attempt * window`; null on overflow (`Game::attempt_opens`). */
 export function gameAttemptOpens(g: Pick<Game, 'revealedAt' | 'claimWindowSecs'>, attempt: number): number | null {
   const v = BigInt(g.revealedAt) + BigInt(g.claimWindowSecs) * BigInt(attempt);

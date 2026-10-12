@@ -2,11 +2,13 @@
  * Build your own (docs/hooks-v2.md §5.7, §5.8), read and checked the way `create_config` and
  * `create_launch` check it, before anything is signed: a `LaunchConfig` by its key (the rules
  * against the launch config's bounds, the creator fee, the custom hook's rules), a hook program
- * (deployed, none of the protocol's, who can upgrade it: immutable, or only Bordrless Studio's key
- * or the protocol's, as `create_config` requires) and whether the hook has been prepared for
- * a mint (its registry at `["bordrless-hook-accounts", mint]`). Every problem is one plain sentence,
- * the same the launch form shows. And the one-call way to make a config: a fresh keypair, the
- * instruction, and the key to paste.
+ * (deployed, none of the protocol's, who can upgrade it: immutable, behind its own `hook_timelock`,
+ * or only Bordrless's upgrade keys (the Workshop's, `STUDIO_UPGRADE_AUTHORITY`, and the protocol's:
+ * `HOOK_UPGRADE_AUTHORITIES`), as `create_config` requires) and whether the hook has been prepared
+ * for a mint (its registry at `["bordrless-hook-accounts", mint]`). Every problem is one plain
+ * sentence, the same the launch form shows. And the one-call way to make a config: a fresh keypair,
+ * the instruction, and the key to paste (`buildCreateConfig`; `buildCreateListedConfig` for a listed
+ * one, which pays its author half the creator fee of every launch someone else makes from it).
  */
 import { Keypair, PublicKey, type AccountInfo, type Connection, type TransactionInstruction } from '@solana/web3.js';
 import { HOOK_AUTHORITY_PROBLEM, HOOK_UPGRADE_AUTHORITIES, PROGRAM_IDS, TOKEN_HOOK_FLAGS_ALL, checkLaunchRules, hookAuthorityAccepted, kitModules, type LaunchRulesInput } from '@bordrless/shared';
@@ -66,15 +68,16 @@ export function programUpgradeInfoOf(program: AccountInfo<Buffer> | null, progra
 
 /**
  * Why `create_config` would refuse this hook for who can upgrade it, or null: a custom hook must be
- * immutable, or upgradeable only by Bordrless Studio's upgrade key or the protocol's
- * (`HOOK_UPGRADE_AUTHORITIES`), so it can never be swapped for other code after its token launched.
+ * immutable, behind its own `hook_timelock`, or upgradeable only by Bordrless's keys (the
+ * Workshop's upgrade key or the protocol's, `HOOK_UPGRADE_AUTHORITIES`), so it can never be swapped
+ * for other code after its token launched.
  */
 export function hookAuthorityProblem(info: ProgramUpgradeInfo): string | null {
   if (!info.executable || info.upgradeable !== true || !info.upgradeAuthority) return null;
   if (HOOK_UPGRADE_AUTHORITIES.includes(info.upgradeAuthority.toBase58())) return null;
   // Phase 3a: behind its own timelock (the launch program checks the delay is at least 3 days).
   if (info.timelocked === true) return null;
-  return `Anyone holding ${info.upgradeAuthority.toBase58()} could change this hook after launch. Make it immutable first (solana program set-upgrade-authority <program> --final), or deploy it with Bordrless Studio.`;
+  return `Anyone holding ${info.upgradeAuthority.toBase58()} could change this hook after launch. Make it immutable first (solana program set-upgrade-authority <program> --final), or submit it to the Workshop, which deploys it under Bordrless's key.`;
 }
 
 /** Reads a program and its ProgramData account in one round trip. */
@@ -85,8 +88,9 @@ export async function fetchProgramUpgradeInfo(connection: Connection, program: P
 
 /**
  * Whether the launch program accepts a config's own hook for who can upgrade it
- * (`hookAuthorityAccepted` in @bordrless/shared): no hook, an immutable one, or one only Bordrless
- * Studio's key or the protocol's can upgrade. Only a known outside authority is refused.
+ * (`hookAuthorityAccepted` in @bordrless/shared): no hook, an immutable one, a timelocked one, or
+ * one only Bordrless's keys (the Workshop's or the protocol's) can upgrade. Only a known outside
+ * authority is refused.
  */
 export function hookAcceptedBy(hook: PublicKey | null, info: ProgramUpgradeInfo | null): boolean {
   return hookAuthorityAccepted(hook?.toBase58() ?? null, info ? { upgradeAuthority: info.upgradeAuthority?.toBase58() ?? null, upgradeable: info.upgradeable, timelocked: info.timelocked === true } : null);
@@ -136,9 +140,10 @@ export interface ConfigInspectionResult {
   /** The custom hook program's upgrade info; null without a hook. */
   hook: ProgramUpgradeInfo | null;
   /**
-   * The launch program accepts the hook for who can upgrade it (`hookAcceptedBy`): immutable, or
-   * only Bordrless Studio's key or the protocol's. True without a hook. When false, `problems` holds
-   * `HOOK_AUTHORITY_PROBLEM` (unless the hook is not even deployed, which says so instead).
+   * The launch program accepts the hook for who can upgrade it (`hookAcceptedBy`): immutable,
+   * timelocked, or only Bordrless's keys (the Workshop's or the protocol's). True without a hook.
+   * When false, `problems` holds `HOOK_AUTHORITY_PROBLEM` (unless the hook is not even deployed,
+   * which says so instead).
    */
   hookAccepted: boolean;
   /** With a hook and a mint: the hook's accounts resolved from its registry for the mint, or null when the hook has not been prepared for it. */
@@ -270,8 +275,20 @@ export interface BuiltConfig {
 /**
  * A `LaunchConfig` to create: a fresh keypair for the account, and the `create_config` instruction
  * signed by `creator` (the payer) and the keypair. Send it in any transaction; `address` is what the
- * launch form takes under "Build your own".
+ * launch form takes under "Custom config". A config made on a timelocked hook takes
+ * `launch.createConfigTimelocked` instead.
  */
 export function buildCreateConfig(creator: PublicKey, args: CreateConfigArgs, keypair: Keypair = Keypair.generate()): BuiltConfig {
   return { keypair, address: keypair.publicKey, instruction: launch.createConfig(creator, keypair.publicKey, args) };
+}
+
+/**
+ * A listed `LaunchConfig` to create (`create_listed_config`), as `buildCreateConfig` plus the
+ * author's share: `authorShareBps` (1 to `MAX_AUTHOR_SHARE_BPS`, 5,000; the Workshop lists at
+ * exactly `AUTHOR_SHARE_BPS`, half) of the creator fee of every launch someone else makes from it,
+ * paid to `creator` by every fee claim, fixed for ever. A listed config cannot launch through a
+ * companion (the companion program requires no author share: a pair's config is a plain one).
+ */
+export function buildCreateListedConfig(creator: PublicKey, args: CreateConfigArgs, authorShareBps: number, keypair: Keypair = Keypair.generate()): BuiltConfig {
+  return { keypair, address: keypair.publicKey, instruction: launch.createListedConfig(creator, keypair.publicKey, args, authorShareBps) };
 }

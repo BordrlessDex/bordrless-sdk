@@ -36,8 +36,8 @@ export const GAME_MAGIC: Readonly<Uint8Array> = Uint8Array.from(Buffer.from('BRG
 export const GAME_HEADER_LEN = 112;
 /** Bytes of hook data per holding. */
 export const TICKET_SLOTS_LEN = 64;
-/** The shortest round (an hour) and the longest (30 days). */
-export const MIN_ROUND_SECS = 3_600;
+/** The shortest round (5 minutes, since the five-minute rounds upgrade of 2026-10-12; an hour before) and the longest (30 days). */
+export const MIN_ROUND_SECS = 300;
 export const MAX_ROUND_SECS = 30 * 86_400;
 
 /** Where each header field sits in a game hook's state account (absolute offsets, the discriminator first; integers little-endian). */
@@ -76,7 +76,7 @@ const saturate = (v: bigint): bigint => (v > I64_MAX ? I64_MAX : v);
 export const roundStart = (round: number, roundSecs: number): number => Number(saturate(BigInt(round) * BigInt(roundSecs)));
 /** When `round` ends, the next round's start: its tickets are final from then on. */
 export const roundEnd = (round: number, roundSecs: number): number => Number(saturate(saturate(BigInt(round) * BigInt(roundSecs)) + BigInt(roundSecs)));
-/** Whether a round length is within the standard's bounds (an hour to 30 days). */
+/** Whether a round length is within the standard's bounds (5 minutes to 30 days; a streak's epochs and a strategy's periods keep an hour as their floor, `GAME_LIMITS.minEpochSecs`). */
 export const validRoundSecs = (roundSecs: number): boolean => roundSecs >= MIN_ROUND_SECS && roundSecs <= MAX_ROUND_SECS;
 
 // ---- the header ------------------------------------------------------------------------------------

@@ -14,7 +14,14 @@
  *   bordrless hook lengthen --program <id> --delay <dur>
  *   bordrless hook status --program <id>                      the risk label terminals show
  *   bordrless hook verify --program <id> --source <dir> --commit <sha> [--api <url>]
+ *                                                             asks Bordrless what it holds on the program: Studio's build record against the
+ *                                                             code on chain, and your `src/**.rs` (sent) against the source Studio built
  *   bordrless strategy …                                      the same, for a strategy program
+ *   bordrless mm --mint <mint> --keypair <path> [--pool <address>] [--step 1] [--buy 1] [--sell 1]
+ *                [--interval 20] [--max-sol 0.5] [--max-tokens <n>] [--slippage 1] [--ref <price>]
+ *                [--rpc <url>] [--lookup-table <address|none>] [--dry-run] [--once]
+ *                                                             a self-custodied market maker on the token's pool (cli/mm.ts decides,
+ *                                                             cli/mmRun.ts reads and sends); it refuses to run without --keypair
  *
  * Common: `--keypair <path>` (default the Solana CLI's keypair, else ~/.config/solana/id.json: the
  * payer, the deploy's upgrade authority and, by default, the author), `--url <rpc>` (default the
@@ -35,16 +42,17 @@
  * immutable once `disable_sbpf_v0_v1_v2_deployment` is active, so `finalize` could never run.
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { ComputeBudgetProgram, Connection, Keypair, PublicKey, Transaction, sendAndConfirmTransaction, type TransactionInstruction } from '@solana/web3.js';
 import { programDataAddress } from '../addresses.ts';
 import { decodeTimelock, executableHash, timelockAddress, trimmedLength, MAX_TIMELOCK_DELAY_SECS, MIN_TIMELOCK_DELAY_SECS } from '../authority.ts';
 import { hookRiskLabel } from '../risk.ts';
 import { loader, timelock } from '../timelock.ts';
+import { runMarketMaker } from './mmRun.ts';
 
-export type Kind = 'hook' | 'strategy';
+export type Kind = 'hook' | 'strategy' | 'mm';
 
 export interface Args {
   kind: Kind;
@@ -53,11 +61,8 @@ export interface Args {
   flags: Record<string, string | true>;
 }
 
-/** Parses `argv` (without node and the script): `<kind> <command> [positional…] [--flag value | --switch]`. */
-export function parseArgs(argv: readonly string[]): Args {
-  const [kind, command, ...rest] = argv;
-  if (kind !== 'hook' && kind !== 'strategy') throw new Error('usage: bordrless <hook|strategy> <command> …');
-  if (!command) throw new Error(`usage: bordrless ${kind} <build|sim|deploy|propose|execute|expire|cancel|finalize|lengthen|status|verify>`);
+/** `[positional…] [--flag value | --switch]` split into the two. */
+function parseFlags(rest: readonly string[]): { positional: string[]; flags: Record<string, string | true> } {
   const positional: string[] = [];
   const flags: Record<string, string | true> = {};
   for (let i = 0; i < rest.length; i += 1) {
@@ -71,7 +76,20 @@ export function parseArgs(argv: readonly string[]): Args {
       } else flags[name] = true;
     } else positional.push(a);
   }
-  return { kind, command, positional, flags };
+  return { positional, flags };
+}
+
+/**
+ * Parses `argv` (without node and the script): `<kind> <command> [positional…] [--flag value |
+ * --switch]`; `mm` takes no command (its command is `run`), only flags.
+ */
+export function parseArgs(argv: readonly string[]): Args {
+  const [kind, ...tail] = argv;
+  if (kind === 'mm') return { kind, command: 'run', ...parseFlags(tail) };
+  if (kind !== 'hook' && kind !== 'strategy') throw new Error('usage: bordrless <hook|strategy> <command> … | bordrless mm --mint <mint> --keypair <path> …');
+  const [command, ...rest] = tail;
+  if (!command) throw new Error(`usage: bordrless ${kind} <build|sim|deploy|propose|execute|expire|cancel|finalize|lengthen|status|verify>`);
+  return { kind, command, ...parseFlags(rest) };
 }
 
 /** A delay: `3d`, `72h`, `259200` (seconds), within `hook_timelock`'s bounds (3 to 365 days). */
@@ -159,6 +177,25 @@ const str = (f: string | true | undefined, name: string): string => {
   if (typeof f !== 'string') throw new Error(`--${name} is required`);
   return f;
 };
+
+/**
+ * The source files `verify` sends: every `.rs` under `<dir>/src`, by its path relative to `dir`
+ * with forward slashes (`src/lib.rs`), in path order: the files a Studio project keeps, hashed the
+ * same way on the server (`Cargo.toml` is the template's and is never sent).
+ */
+export function sourceFilesOf(dir: string): { path: string; content: string }[] {
+  const src = join(dir, 'src');
+  if (!statSync(src, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`${dir} has no src/ directory: point --source at the hook's crate`);
+  const files = readdirSync(src, { recursive: true, withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.endsWith('.rs'))
+    .map((e) => {
+      const full = join(e.parentPath, e.name);
+      return { path: relative(dir, full).split(sep).join('/'), content: readFileSync(full, 'utf8') };
+    })
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  if (files.length === 0) throw new Error(`${src} holds no .rs files`);
+  return files;
+}
 
 /** The Solana CLI's RPC URL and keypair path (`solana config get`), when the CLI is installed. */
 export function solanaConfig(read: () => string = () => execFileSync('solana', ['config', 'get'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })): { url: string | null; keypair: string | null } {
@@ -259,6 +296,8 @@ async function readTimelock(connection: Connection, program: PublicKey) {
 
 export async function main(argv: readonly string[]): Promise<void> {
   const a = parseArgs(argv);
+  // The market maker has its own key rule (it never falls back on the Solana CLI's keypair) and its own RPC flag.
+  if (a.kind === 'mm') return runMarketMaker(a.flags);
   const print = a.flags.print === true;
   const priority = priorityFeeOf(a.flags['priority-fee']);
   const cli = typeof a.flags.url === 'string' && typeof a.flags.keypair === 'string' ? { url: null, keypair: null } : solanaConfig();
@@ -351,12 +390,23 @@ export async function main(argv: readonly string[]): Promise<void> {
       return;
     }
     case 'verify': {
-      const api = typeof a.flags.api === 'string' ? a.flags.api : 'https://api.bordrless.com';
-      const body = { kind: a.kind, program: program().toBase58(), commit: str(a.flags.commit, 'commit'), source: str(a.flags.source, 'source') };
-      process.stdout.write(`POST ${api}/v1/studio/verify ${JSON.stringify(body)}\n`);
+      // The server compares its records with the chain (apps/server/src/studio/verify.ts): Studio's build of this program id against the code on chain, and the files sent against the source it built. It answers `rebuilt: false`: it does not rebuild the source yet.
+      const api = (typeof a.flags.api === 'string' ? a.flags.api : 'https://api.bordrless.com').replace(/\/+$/, '');
+      const source = str(a.flags.source, 'source');
+      const files = sourceFilesOf(source);
+      const body = { kind: a.kind, program: program().toBase58(), commit: str(a.flags.commit, 'commit'), source, files };
+      process.stdout.write(`POST ${api}/v1/studio/verify ${JSON.stringify({ ...body, files: files.map((f) => `${f.path} (${f.content.length} chars)`) })}\n`);
       if (!print) {
         const res = await fetch(`${api}/v1/studio/verify`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-        process.stdout.write(`${res.status} ${await res.text()}\n`);
+        const text = await res.text();
+        let parsed: { verdict?: string; reasons?: string[] } | null = null;
+        try {
+          parsed = JSON.parse(text) as { verdict?: string; reasons?: string[] };
+        } catch {
+          parsed = null;
+        }
+        if (parsed && typeof parsed.verdict === 'string') process.stdout.write(`${parsed.verdict}\n${(parsed.reasons ?? []).map((r) => `  ${r}`).join('\n')}\n`);
+        process.stdout.write(`${res.status} ${text}\n`);
       }
       return;
     }

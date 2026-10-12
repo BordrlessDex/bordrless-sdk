@@ -1,8 +1,8 @@
 {
   "name": "@bordrless/sdk",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "type": "module",
-  "description": "TypeScript client of the Bordrless programs: addresses, account and event decoding from the IDLs, instruction builders, and the resolution of a hook's extra accounts.",
+  "description": "TypeScript client of the Bordrless programs: addresses, account and event decoding from the IDLs, instruction builders for every program (the token standard, the DEX, the bridge, the launchpad, the kit, companions, scripts and approvals), the resolution of a hook's extra accounts, balance changes for integrators, and the bordrless CLI.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -24,6 +24,7 @@
     ".": "./src/index.ts"
   },
   "files": [
+    "CHANGELOG.md",
     "LICENSE",
     "README.md",
     "dist",

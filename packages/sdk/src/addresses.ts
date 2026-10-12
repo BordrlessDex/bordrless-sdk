@@ -191,6 +191,14 @@ export const companionAddress = (mint: PublicKey): PublicKey => pda([enc('compan
 /** The launch's creator when it has a companion: `PDA(["creator", mint])`, system-owned, signed for only by the companion. */
 export const companionCreatorAddress = (mint: PublicKey): PublicKey => pda([enc('creator'), mint.toBuffer()], COMPANION_PROGRAM);
 export const COMPANION_EVENT_AUTHORITY = pda([enc('__event_authority')], COMPANION_PROGRAM);
+/** A Snowball companion's market maker: `PDA(["snowball", mint])` under the companion (2026-10-12). */
+export const snowballAddress = (mint: PublicKey): PublicKey => pda([enc('snowball'), mint.toBuffer()], COMPANION_PROGRAM);
+/** Bordrless's approval of a program's code (a token hook or a companion script): `PDA(["approval", program])` under the companion (2026-10-12). */
+export const approvalAddress = (program: PublicKey): PublicKey => pda([enc('approval'), program.toBuffer()], COMPANION_PROGRAM);
+/** A script companion's script: `PDA(["script", mint])` under the companion (2026-10-12). */
+export const scriptAddress = (mint: PublicKey): PublicKey => pda([enc('script'), mint.toBuffer()], COMPANION_PROGRAM);
+/** A script's state: `PDA(["script-state", mint])` under the companion, which `create_script` makes (zeroed, owned by the script) when the script asks for one; passed to `create_script` and `script_step` either way. */
+export const scriptStateAddress = (mint: PublicKey): PublicKey => pda([enc('script-state'), mint.toBuffer()], COMPANION_PROGRAM);
 
 // ---- Games (companion v2, docs/companions.md "Games") ------------------------------------------------
 

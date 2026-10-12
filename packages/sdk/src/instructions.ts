@@ -557,9 +557,11 @@ export const launch = {
     return out;
   },
   /**
-   * `create_listed_config`: a config for the marketplace, as `createConfig`, plus the author's share
-   * of the creator fee (1 to `MAX_AUTHOR_SHARE_BPS` bps of it) on every launch someone else makes
-   * from it. Fixed for ever: a launch keeps the share it was made with.
+   * `create_listed_config`: a listed config (the Workshop's, offered on the launch page), as
+   * `createConfig`, plus the author's share of the creator fee (1 to `MAX_AUTHOR_SHARE_BPS` bps of
+   * it; the Workshop lists at `AUTHOR_SHARE_BPS`, half) on every launch someone else makes from it.
+   * Fixed for ever: a launch keeps the share it was made with. A companion refuses a launch from a
+   * listed config (it requires no author share), so a pair's config is a plain `createConfig`.
    */
   createListedConfig(creator: PublicKey, launchConfig: PublicKey, args: CreateConfigArgs, authorShareBps: number): TransactionInstruction {
     const keys = [rw(creator, true), ro(a.LAUNCH_CONFIG), rw(launchConfig, true), opt(a.LAUNCH_PROGRAM, args.customHook), ro(a.SYSTEM_PROGRAM)];
