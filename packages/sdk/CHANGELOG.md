@@ -8,7 +8,9 @@ same version of it). The monorepo is where both are written.
 
 The launchpad's partner fee, live on mainnet (verified build `614760c7…` of bordrless-programs
 `9e644e7`; bordrless-programs `docs/partner-fee.md`). The launchpad's largest creator fee is now
-1,000 bps (10%, `Config.max_creator_fee_bps`).
+1,000 bps (10%, `Config.max_creator_fee_bps`), and so is a side's creator fee, holder fee and burn
+together (`rule_bounds.max_rules_fee_bps`, 300 before); the holder fee (2%) and the burn (1%) keep
+their own bounds.
 
 ### The partner fee
 
