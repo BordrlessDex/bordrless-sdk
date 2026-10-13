@@ -232,6 +232,31 @@ export interface Launch {
   authorShareBps: number;
   /** Creator fees paid to the config's author so far. */
   authorFeesPaid: bigint;
+  /**
+   * The custom hook's SOL cut (`docs/quote-cut.md` in bordrless-programs; `Launch.reserved[0..4]`):
+   * its caps per side, when the launch's config gave it one; then every trade but the creator's
+   * passes `quoteCutExtras` (`launch.swap` does). Absent from launches decoded by older code.
+   */
+  quoteCut?: QuoteCutCaps | null;
+  /** SOL the hook's cut has taken so far (`reserved[4..12]`; part of `creatorFeesAccrued`). */
+  quoteCutAccrued?: bigint;
+}
+
+/** A custom hook's SOL cut caps, in basis points of a buy's SOL in and a sell's SOL out (each at most `QUOTE_CUT_MAX_BPS`). */
+export interface QuoteCutCaps {
+  maxBuyBps: number;
+  maxSellBps: number;
+}
+
+/** The most a custom hook's SOL cut may take on either side: 10%. */
+export const QUOTE_CUT_MAX_BPS = 1_000;
+
+const u16At = (b: number[] | Uint8Array, i: number): number => Number(b[i]) | (Number(b[i + 1]) << 8);
+
+/** The SOL cut caps in `reserved` at `at` (a launch's 0, a config's 1), or null when both are 0. */
+export function quoteCutCapsOf(reserved: number[] | Uint8Array, at: number): QuoteCutCaps | null {
+  const caps = { maxBuyBps: u16At(reserved, at), maxSellBps: u16At(reserved, at + 2) };
+  return caps.maxBuyBps > 0 || caps.maxSellBps > 0 ? caps : null;
 }
 
 /** The `LaunchConfig` a launch was made from, or null for inline rules (the account keeps the default key then). */
@@ -271,6 +296,8 @@ export interface LaunchConfigAccount {
    * proposal (`HookTimelockPending`).
    */
   hookTimelocked: boolean;
+  /** The custom hook's SOL cut caps (`create_quote_cut_config`, `reserved[1..5]`); null for none. Absent from configs decoded by older code. */
+  quoteCut?: QuoteCutCaps | null;
 }
 
 /** A `LaunchConfig` account is 176 bytes. */
@@ -531,6 +558,8 @@ export const decodeLaunch = (data: Buffer): Launch => {
     customHookFlags: Number(r.customHookFlags),
     authorShareBps: Number(r.authorShareBps),
     authorFeesPaid: big(r.authorFeesPaid),
+    quoteCut: r.customHook != null ? quoteCutCapsOf(r.reserved as number[], 0) : null,
+    quoteCutAccrued: Buffer.from((r.reserved as number[]).slice(4, 12)).readBigUInt64LE(0),
   };
 };
 
@@ -548,6 +577,7 @@ export const decodeLaunchConfigAccount = (data: Buffer): LaunchConfigAccount => 
     createdAt: int(r.createdAt),
     authorShareBps: Number(r.authorShareBps),
     hookTimelocked: r.customHook != null && Number((r.reserved as number[] | Uint8Array)[0]) === LAUNCH_CONFIG_TIMELOCKED_HOOK,
+    quoteCut: r.customHook != null ? quoteCutCapsOf(r.reserved as number[] | Uint8Array, 1) : null,
   };
 };
 

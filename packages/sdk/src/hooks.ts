@@ -319,6 +319,28 @@ export function launchPoolRegistryList(holderVault: PublicKey, kitConfig: Public
   };
 }
 
+/**
+ * A launch pool's registry when its custom hook `hook` takes a SOL cut
+ * (`registry_list_with_quote_cut`): `launchPoolRegistryList`, then the hook (r, a key), the trader's
+ * holding of the token `Pda token ["holding", Account(2), Account(4) = actor]` (r), the hook's state
+ * `Pda hook ["state", Account(2)]` (w) and the launchpad's signer `Pda launch ["quote-cut",
+ * Account(9) = hook]` (r). Resolved for a trader, the last four are `quoteCutExtras`.
+ */
+export function launchPoolRegistryListWithQuoteCut(holderVault: PublicKey, kitConfig: PublicKey, hook: PublicKey): HookAccountList {
+  const literal = (s: string): Seed => ({ kind: 'literal', bytes: Buffer.from(s, 'utf8') });
+  const list = launchPoolRegistryList(holderVault, kitConfig);
+  return {
+    version: 1,
+    accounts: [
+      ...list.accounts,
+      { writable: false, source: { kind: 'key', key: hook } },
+      { writable: false, source: { kind: 'pda', program: TOKEN_PROGRAM, seeds: [literal('holding'), { kind: 'account', index: 2 }, { kind: 'account', index: 4 }] } },
+      { writable: true, source: { kind: 'pda', program: hook, seeds: [literal('state'), { kind: 'account', index: 2 }] } },
+      { writable: false, source: { kind: 'pda', program: LAUNCH_PROGRAM, seeds: [literal('quote-cut'), { kind: 'account', index: 9 }] } },
+    ],
+  };
+}
+
 // ---- pool hooks ------------------------------------------------------------------------------------
 
 /** The extras of a pool hook's callback, resolved against `[hookSigner, pool, baseMint, quoteMint, actor]`; `hookSigner` is the DEX's signer for the pool's hook (`dexHookSigner`). */

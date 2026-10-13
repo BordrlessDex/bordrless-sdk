@@ -1,0 +1,1475 @@
+{
+  "address": "AfDhsethmkoimbyoSWnRfLtjFXZteRNtbFMioR9qWMjD",
+  "metadata": {
+    "name": "rules_hook",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Bordrless rules engine: one token hook that runs a rule set composed as data (at most 6 rules of conditions on a holding and one action each: a cut, a refusal, a count, a mark), bound to a launch config, and keeps each holding's 64-byte record in the Loss cover layout."
+  },
+  "docs": [
+    "Instructions of the rules engine."
+  ],
+  "instructions": [
+    {
+      "name": "before_burn",
+      "docs": [
+        "`before_burn`: the burner's rules on `BURN` (no cuts: a cut on a burn is refused at",
+        "`bind`), its record written as for a send."
+      ],
+      "discriminator": [
+        7,
+        177,
+        19,
+        160,
+        28,
+        229,
+        57,
+        73
+      ],
+      "accounts": [
+        {
+          "name": "hook_signer",
+          "signer": true,
+          "address": "FaU6drNBY2nayBkXiirtk5c29Hw3rqXMtv2K1La5V4cG"
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "source"
+        },
+        {
+          "name": "destination"
+        },
+        {
+          "name": "authority"
+        },
+        {
+          "name": "state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "launch"
+        },
+        {
+          "name": "pool"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "TokenHookArgs"
+            }
+          }
+        }
+      ],
+      "returns": {
+        "defined": {
+          "name": "HookReturn"
+        }
+      }
+    },
+    {
+      "name": "before_transfer",
+      "docs": [
+        "`before_transfer`: the sender's rules, then the receiver's; one delta for the cuts; the",
+        "records of both sides written as the set keeps them."
+      ],
+      "discriminator": [
+        23,
+        118,
+        189,
+        23,
+        179,
+        222,
+        94,
+        146
+      ],
+      "accounts": [
+        {
+          "name": "hook_signer",
+          "signer": true,
+          "address": "FaU6drNBY2nayBkXiirtk5c29Hw3rqXMtv2K1La5V4cG"
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "source"
+        },
+        {
+          "name": "destination"
+        },
+        {
+          "name": "authority"
+        },
+        {
+          "name": "state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "launch"
+        },
+        {
+          "name": "pool"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "TokenHookArgs"
+            }
+          }
+        }
+      ],
+      "returns": {
+        "defined": {
+          "name": "HookReturn"
+        }
+      }
+    },
+    {
+      "name": "bind",
+      "docs": [
+        "Binds a rule set to `launch_config`, once: the bytes (checked as `validateRules` checks",
+        "them), the destination (the header's own) and, for a named destination, its wallet (on the",
+        "curve, not the default key; zeros are kept for any other destination). The config must name",
+        "this program with the flags the rules need and carry no kit rules, and the payer must be the",
+        "config's creator (`LaunchConfig.creator`, its author: the launchpad pays it the author share);",
+        "the SDK and the API bind in the transaction that makes the config, with that one signer."
+      ],
+      "discriminator": [
+        178,
+        57,
+        187,
+        254,
+        138,
+        43,
+        99,
+        134
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "docs": [
+            "Pays the rent; recorded as the set's author."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "launch_config",
+          "docs": [
+            "The `LaunchConfig` the set is bound to (the launch program's)."
+          ]
+        },
+        {
+          "name": "rule_set",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  117,
+                  108,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "launch_config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "rules",
+          "type": "bytes"
+        },
+        {
+          "name": "destination",
+          "type": "u8"
+        },
+        {
+          "name": "wallet",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "prepare",
+      "docs": [
+        "The Workshop template's `prepare` with the config's `RuleSet` as one more account: the",
+        "state for `mint` (which need not exist yet) with the rules copied in, the launch, the",
+        "launch pool and the cut's destination derived (the launch's reserve holding for burn, the",
+        "payer's holding for the creator, the named wallet's), and the registry. Anyone, once per",
+        "mint; `NoRules` when the account is not a bound `RuleSet`."
+      ],
+      "discriminator": [
+        121,
+        155,
+        156,
+        90,
+        164,
+        252,
+        220,
+        109
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "docs": [
+            "Pays the rent; the creator, for a creator destination."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "registry",
+          "writable": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rule_set",
+          "docs": [
+            "checked in the handler: `NoRules` otherwise)."
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "record_payout",
+      "docs": [
+        "The companion's payout authority alone (the Loss cover hook's `record_payout`): records",
+        "`lamports` paid to `holding` (0: a touch) in round `tag`. The holding is of this mint, its",
+        "owner is eligible (a wallet on the curve, none of the launch, its pool or the cut's",
+        "destination owner) and it has a record; the record is written through the token program."
+      ],
+      "discriminator": [
+        227,
+        164,
+        213,
+        54,
+        69,
+        172,
+        31,
+        216
+      ],
+      "accounts": [
+        {
+          "name": "payout_authority",
+          "docs": [
+            "The companion program's `PDA([\"payout-authority\"])`, signing by CPI."
+          ],
+          "signer": true,
+          "address": "8XJcBCYmYyggTQBNvK3RausfyRMpmtjJTjKd53W3StkG"
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "holding",
+          "docs": [
+            "`mint`; the token program writes its hook data."
+          ],
+          "writable": true
+        },
+        {
+          "name": "state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "hook_authority",
+          "address": "9SydDjwfgWaG8akwwsEpTpRpdoVZCtMYSeiqf6EkMdkK"
+        },
+        {
+          "name": "token_program",
+          "address": "2XoEWp8cF3kRXg74eVwPAyTFhVCAztn3V88komxAvr22"
+        },
+        {
+          "name": "token_event_authority",
+          "address": "69vhpnkYjtiJgdfU7QsA5Ww7V8FWtvPcZ2r4znuyByvq"
+        }
+      ],
+      "args": [
+        {
+          "name": "lamports",
+          "type": "u64"
+        },
+        {
+          "name": "tag",
+          "type": "u32"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "RuleSet",
+      "discriminator": [
+        57,
+        66,
+        204,
+        128,
+        106,
+        151,
+        170,
+        243
+      ]
+    },
+    {
+      "name": "RulesState",
+      "discriminator": [
+        43,
+        128,
+        159,
+        106,
+        203,
+        156,
+        213,
+        50
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "Bound",
+      "discriminator": [
+        246,
+        254,
+        75,
+        186,
+        240,
+        107,
+        207,
+        246
+      ]
+    },
+    {
+      "name": "Prepared",
+      "discriminator": [
+        203,
+        59,
+        178,
+        86,
+        6,
+        123,
+        13,
+        36
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Length",
+      "msg": "A rule set is 8 bytes and then 48 for each rule."
+    },
+    {
+      "code": 6001,
+      "name": "Version",
+      "msg": "The rule set’s version is not 1."
+    },
+    {
+      "code": 6002,
+      "name": "RuleCount",
+      "msg": "A rule set has 1 to 6 rules."
+    },
+    {
+      "code": 6003,
+      "name": "Keeps",
+      "msg": "The header’s keeps bits are entry, times and count only."
+    },
+    {
+      "code": 6004,
+      "name": "Destination",
+      "msg": "The destination is none, burn, the creator or a named wallet."
+    },
+    {
+      "code": 6005,
+      "name": "Side",
+      "msg": "A rule’s sides are some of sell, buy, send, receive and burn, at least one."
+    },
+    {
+      "code": 6006,
+      "name": "Value",
+      "msg": "A condition reads one of the values the engine computes."
+    },
+    {
+      "code": 6007,
+      "name": "Op",
+      "msg": "A condition compares with one of lt, le, gt, ge, eq and ne."
+    },
+    {
+      "code": 6008,
+      "name": "Action",
+      "msg": "A rule’s action is a cut, a refusal, a count or a mark."
+    },
+    {
+      "code": 6009,
+      "name": "Arg",
+      "msg": "A refusal’s reason is cooling, cap, locked or rule; a count adds or resets; a mark names a flag 0 to 3."
+    },
+    {
+      "code": 6010,
+      "name": "WhenCount",
+      "msg": "A rule has at most 3 conditions."
+    },
+    {
+      "code": 6011,
+      "name": "UnlessCount",
+      "msg": "A rule has at most one unless."
+    },
+    {
+      "code": 6012,
+      "name": "Slot",
+      "msg": "A rule’s atom slots hold its conditions and its unless, in order, and nothing else."
+    },
+    {
+      "code": 6013,
+      "name": "Literal",
+      "msg": "A threshold is within its unit’s bound: at most 10,000 basis points, 365 days, 10,000 SOL, the supply, or a count of 65,535."
+    },
+    {
+      "code": 6014,
+      "name": "CutBps",
+      "msg": "A cut is 1 to 1,500 basis points; other actions carry none."
+    },
+    {
+      "code": 6015,
+      "name": "CutOnBurn",
+      "msg": "A cut cannot be taken on a burn."
+    },
+    {
+      "code": 6016,
+      "name": "CutDestination",
+      "msg": "A cut needs a destination: burn, the creator or a named wallet."
+    },
+    {
+      "code": 6017,
+      "name": "SideTotal",
+      "msg": "The cuts on one side add up to at most 1,500 basis points."
+    },
+    {
+      "code": 6018,
+      "name": "KeepsEntry",
+      "msg": "A condition on gain, loss or the entry price needs the set to keep an entry price."
+    },
+    {
+      "code": 6019,
+      "name": "KeepsTimes",
+      "msg": "A condition on a time since receiving, sending, the first tokens or the holding’s age needs the set to keep times."
+    },
+    {
+      "code": 6020,
+      "name": "KeepsCount",
+      "msg": "A count, a mark or a condition on one needs the set to keep a counter."
+    },
+    {
+      "code": 6021,
+      "name": "EntryCap",
+      "msg": "The entry cap is 1 to 5,000 basis points and needs the set to keep an entry price."
+    },
+    {
+      "code": 6022,
+      "name": "RefuseWhen",
+      "msg": "A refusal needs at least one condition."
+    },
+    {
+      "code": 6023,
+      "name": "RefuseMarks",
+      "msg": "A refusal of a sell, a send or a burn must turn on time, amount, balance, share, price or value, not on a mark or the count alone."
+    },
+    {
+      "code": 6024,
+      "name": "DestinationWallet",
+      "msg": "A named destination is a wallet on the curve, not the default key."
+    },
+    {
+      "code": 6025,
+      "name": "ConfigHook",
+      "msg": "The config does not name the rules engine as its custom hook."
+    },
+    {
+      "code": 6026,
+      "name": "ConfigFlags",
+      "msg": "The config’s hook flags are not the ones the rules need."
+    },
+    {
+      "code": 6027,
+      "name": "ConfigKitRules",
+      "msg": "A composed config carries no kit rules."
+    },
+    {
+      "code": 6028,
+      "name": "ConfigCreator",
+      "msg": "Only the config’s creator binds rules to it."
+    },
+    {
+      "code": 6029,
+      "name": "CoolingDown",
+      "msg": "Refused by the token's rules: tokens that arrived too recently cannot move yet (cooling)."
+    },
+    {
+      "code": 6030,
+      "name": "OverCap",
+      "msg": "Refused by the token's rules: a wallet would hold more than the rules allow (cap)."
+    },
+    {
+      "code": 6031,
+      "name": "Locked",
+      "msg": "Refused by the token's rules: these tokens are locked for now (locked)."
+    },
+    {
+      "code": 6032,
+      "name": "Refused",
+      "msg": "Refused by the token's rules (rule)."
+    },
+    {
+      "code": 6033,
+      "name": "NoRules",
+      "msg": "No rule set is bound: the config names the rules engine but has no rules, so it cannot launch"
+    },
+    {
+      "code": 6034,
+      "name": "Unbound",
+      "msg": "This mint was prepared with another config's rules than the one it launched from"
+    },
+    {
+      "code": 6035,
+      "name": "WrongAccount",
+      "msg": "an account is not the one this mint's hook expects"
+    },
+    {
+      "code": 6036,
+      "name": "BadHookSigner",
+      "msg": "the hook signer is not the token program's signer for this hook"
+    },
+    {
+      "code": 6037,
+      "name": "WrongMint",
+      "msg": "the holding is of another mint"
+    },
+    {
+      "code": 6038,
+      "name": "NotEligible",
+      "msg": "this owner holds no record: the launch, its pool, the cut's destination, the default key or an address off the ed25519 curve"
+    },
+    {
+      "code": 6039,
+      "name": "NotTheCompanion",
+      "msg": "only the companion program's payout authority records a payout"
+    },
+    {
+      "code": 6040,
+      "name": "NoRecord",
+      "msg": "this holding has no record to pay against"
+    },
+    {
+      "code": 6041,
+      "name": "MathOverflow",
+      "msg": "arithmetic overflow"
+    }
+  ],
+  "types": [
+    {
+      "name": "Bound",
+      "docs": [
+        "A rule set was bound to a config."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "config",
+            "type": "pubkey"
+          },
+          {
+            "name": "rule_set",
+            "type": "pubkey"
+          },
+          {
+            "name": "author",
+            "type": "pubkey"
+          },
+          {
+            "name": "destination",
+            "type": "u8"
+          },
+          {
+            "name": "destination_wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "flags",
+            "type": "u16"
+          },
+          {
+            "name": "hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "len",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Delta",
+      "docs": [
+        "One cut an answer takes from the amount."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "amount",
+            "docs": [
+              "How much (above zero)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "account",
+            "docs": [
+              "Index in the callback's account list (prefix first, then extras) of the holding that",
+              "receives it. Must be an extra."
+            ],
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "HookReturn",
+      "docs": [
+        "What a callback may answer in its return data. Which fields a callback may fill depends on the",
+        "callback and the flags ([`Allowed`]); the calling program refuses an answer that fills any",
+        "other field."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "deltas",
+            "docs": [
+              "Cuts from the amount (the transfer; a swap's input before, its output after), at most",
+              "[`MAX_DELTAS`]."
+            ],
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "Delta"
+                }
+              }
+            }
+          },
+          {
+            "name": "burn",
+            "docs": [
+              "Pool swap callbacks only: an amount to burn from the same side."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "lp_fee_bps",
+            "docs": [
+              "`before_swap` only: the LP fee to apply instead of the pool's."
+            ],
+            "type": {
+              "option": "u16"
+            }
+          },
+          {
+            "name": "source_hook_data",
+            "docs": [
+              "Token callbacks only (`before_transfer`, `before_burn`): the source holding's new hook data",
+              "([`HOOK_DATA_LEN`] bytes)."
+            ],
+            "type": {
+              "option": {
+                "array": [
+                  "u8",
+                  64
+                ]
+              }
+            }
+          },
+          {
+            "name": "destination_hook_data",
+            "docs": [
+              "Token callbacks only (`before_transfer`, `before_mint`): the destination holding's new hook",
+              "data."
+            ],
+            "type": {
+              "option": {
+                "array": [
+                  "u8",
+                  64
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "LaunchConfig",
+      "docs": [
+        "A launch config (`docs/hooks-v2.md` §5.7): the rules, the creator fee and, for a",
+        "build-your-own token, the creator's own token hook, made with the SDK by anyone as a keypair",
+        "account (so its key can be shared and pasted), fixed once created and usable for any number of",
+        "launches. `create_launch` takes one as an optional account; without one the rules come inline.",
+        "A config can never touch the protocol's share."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "docs": [
+              "Layout version."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "creator",
+            "docs": [
+              "Who made it."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "rules",
+            "docs": [
+              "The token rules (within the launch config's bounds when made, checked again at launch)."
+            ],
+            "type": {
+              "defined": {
+                "name": "LaunchRules"
+              }
+            }
+          },
+          {
+            "name": "creator_fee_bps",
+            "docs": [
+              "Creator fee on every swap, in basis points of the quote."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "custom_hook",
+            "docs": [
+              "The creator's own token hook program (§5.8), when the config is for a build-your-own",
+              "token; then no kit module may be on (one token hook per mint). The mint is created with it",
+              "and no hook authority."
+            ],
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "custom_hook_flags",
+            "docs": [
+              "The hook's flags (`bordrless_hook::token_flags`); 0 without a custom hook."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "label",
+            "docs": [
+              "A short name, for the site."
+            ],
+            "type": "string"
+          },
+          {
+            "name": "created_at",
+            "docs": [
+              "Creation time."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "author_share_bps",
+            "docs": [
+              "A listed config's author share (`create_listed_config`): the part of the creator fee, in",
+              "basis points of it (at most `MAX_AUTHOR_SHARE_BPS`), paid to `creator` (the config's",
+              "author) on every launch made from it by someone else. Fixed at creation; 0 for a config",
+              "made with `create_config`."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Reserved. `reserved[0]` is [`LaunchConfig::TIMELOCKED_HOOK`] when the custom hook's upgrade",
+              "authority was its own `hook_timelock` when the config was made (phase 3a); 0 for every other",
+              "config, and for every config made before."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                30
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "LaunchRules",
+      "docs": [
+        "The rules a launch fixes for its token (`docs/hooks-v2.md` §5.1): what the pool hook takes on",
+        "each side, and the kit modules the token gets. Holder rewards are on when either holder fee is",
+        "above 0."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "holder_fee_buy_bps",
+            "docs": [
+              "Holder fee on buys, from the quote input, paid to the holder vault."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "holder_fee_sell_bps",
+            "docs": [
+              "Holder fee on sells, from the quote output after the protocol fee."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "burn_buy_bps",
+            "docs": [
+              "Burn on buys, from the token output."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "burn_sell_bps",
+            "docs": [
+              "Burn on sells, from the token input."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "max_wallet_bps",
+            "docs": [
+              "Max wallet in basis points of the supply; 0 = off. Lifts at graduation."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "creator_lock_secs",
+            "docs": [
+              "Creator wallet lock, counted from the launch; 0 = off."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "early_window_secs",
+            "docs": [
+              "Early-buyer window, counted from the launch; 0 = off."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "early_lock_secs",
+            "docs": [
+              "Early-buyer unlock, counted from the launch; above `early_window_secs` (0 when the lock is",
+              "off)."
+            ],
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Phase",
+      "docs": [
+        "Before or after the operation."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Before"
+          },
+          {
+            "name": "After"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Prepared",
+      "docs": [
+        "The engine was prepared for a mint."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "state",
+            "type": "pubkey"
+          },
+          {
+            "name": "config",
+            "type": "pubkey"
+          },
+          {
+            "name": "rule_set",
+            "type": "pubkey"
+          },
+          {
+            "name": "launch",
+            "type": "pubkey"
+          },
+          {
+            "name": "pool",
+            "type": "pubkey"
+          },
+          {
+            "name": "destination_holding",
+            "type": "pubkey"
+          },
+          {
+            "name": "destination_owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "companion_creator",
+            "docs": [
+              "The companion's creator address for the mint: exempt."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "prepared_by",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RuleSet",
+      "docs": [
+        "The rule set bound to one `LaunchConfig`, at `[\"rules\", config]`: 447 bytes."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "docs": [
+              "Layout version (1)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "Bump of `[\"rules\", config]`."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "config",
+            "docs": [
+              "The `LaunchConfig` it is bound to."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "author",
+            "docs": [
+              "Who bound it."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "bound_at",
+            "docs": [
+              "When."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "destination",
+            "docs": [
+              "Where cuts go (the header's): 0 none, 1 burn, 2 the creator, 3 a named wallet."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "destination_wallet",
+            "docs": [
+              "The named wallet; zeros otherwise."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "flags",
+            "docs": [
+              "`flags_for(rules)`: the config's `custom_hook_flags`."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "hash",
+            "docs": [
+              "sha256 of the bytes."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "len",
+            "docs": [
+              "The bytes' length (`8 + 48 * rules`)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "rules",
+            "docs": [
+              "The bytes, zero after `len`."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                296
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "RulesState",
+      "docs": [
+        "The engine's state for one mint, at `[\"state\", mint]`: 628 bytes."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "docs": [
+              "Layout version (1)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "Bump of `[\"state\", mint]`."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "launch",
+            "docs": [
+              "The launch program's `[\"launch\", mint]`: exempt."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "pool",
+            "docs": [
+              "The launch pool at the launchpad's LP fee: exempt; the registry's third extra."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "config",
+            "docs": [
+              "The `LaunchConfig` whose rules these are: a launch from any other config never trades."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "rule_set",
+            "docs": [
+              "The `RuleSet` they were copied from."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "destination_holding",
+            "docs": [
+              "Where cuts go (the default key without a destination)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "destination_owner",
+            "docs": [
+              "Its owner: exempt."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "prepared_by",
+            "docs": [
+              "Who sent `prepare` (the creator, for a creator destination), and when."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "prepared_at",
+            "type": "i64"
+          },
+          {
+            "name": "reference",
+            "docs": [
+              "Kept in the layout (§2.2) and always 0: entry prices are not capped against a reference."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "reference_at",
+            "type": "i64"
+          },
+          {
+            "name": "paid_total",
+            "docs": [
+              "Lamports recorded by `record_payout`, and the records it wrote (touches included)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "records",
+            "type": "u64"
+          },
+          {
+            "name": "flags",
+            "docs": [
+              "The mint's hook flags, from the set."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "rules_len",
+            "docs": [
+              "The rules' bytes, as bound."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "rules",
+            "type": {
+              "array": [
+                "u8",
+                296
+              ]
+            }
+          },
+          {
+            "name": "creator_bump",
+            "docs": [
+              "Bump of the companion's `[\"creator\", mint]`: its creator address, exempt (rules never touch",
+              "a companion's own trades: Snowball steps, buybacks, script sells)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Reserved."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                21
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "TokenHookArgs",
+      "docs": [
+        "Arguments of a token hook callback. Balances and hook data are those of the holdings before",
+        "(`Before`) or after (`After`) the operation; `delta` is what the deltas took, known only after."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "op",
+            "docs": [
+              "The operation."
+            ],
+            "type": {
+              "defined": {
+                "name": "TokenOp"
+              }
+            }
+          },
+          {
+            "name": "phase",
+            "docs": [
+              "Before or after it."
+            ],
+            "type": {
+              "defined": {
+                "name": "Phase"
+              }
+            }
+          },
+          {
+            "name": "mint",
+            "docs": [
+              "The mint."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "source",
+            "docs": [
+              "Source holding (the mint for a mint)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "destination",
+            "docs": [
+              "Destination holding (the mint for a burn)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "source_owner",
+            "docs": [
+              "Owner of the source holding (default for a mint)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "destination_owner",
+            "docs": [
+              "Owner of the destination holding (default for a burn)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "docs": [
+              "Who signed."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "authority_is_delegate",
+            "docs": [
+              "Whether the signer acted as a delegate rather than the owner."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "The amount of the operation."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "delta",
+            "docs": [
+              "The sum of the deltas a `before_transfer` answer took (zero before)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "source_balance",
+            "docs": [
+              "Source balance."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "destination_balance",
+            "docs": [
+              "Destination balance."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "decimals",
+            "docs": [
+              "Decimals of the mint."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "supply",
+            "docs": [
+              "Supply of the mint."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "source_hook_data",
+            "docs": [
+              "The source holding's hook data (zeros for a mint)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "destination_hook_data",
+            "docs": [
+              "The destination holding's hook data (zeros for a burn)."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "TokenOp",
+      "docs": [
+        "What a token hook is being told about."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Transfer"
+          },
+          {
+            "name": "Mint"
+          },
+          {
+            "name": "Burn"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -8,9 +8,119 @@
   },
   "instructions": [
     {
+      "name": "allow_wallet_payouts",
+      "docs": [
+        "Before the launch, whoever holds the mint lets the script pay any wallet SOL (wallet",
+        "answers), within its payout terms (2026-10-13). Without it, a script pays holders only."
+      ],
+      "discriminator": [
+        71,
+        92,
+        55,
+        9,
+        153,
+        76,
+        199,
+        214
+      ],
+      "accounts": [
+        {
+          "name": "mint",
+          "docs": [
+            "The launch's mint, the keypair that made the companion: only its holder allows it."
+          ],
+          "signer": true
+        },
+        {
+          "name": "companion",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  97,
+                  110,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "terms",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  121,
+                  111,
+                  117,
+                  116,
+                  45,
+                  116,
+                  101,
+                  114,
+                  109,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "script",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  99,
+                  114,
+                  105,
+                  112,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "approve",
       "docs": [
-        "The protocol's upgrade authority: approves `program`'s code (its hash recomputed here) as a",
+        "The protocol's upgrade authority or the script approver (`SCRIPT_APPROVER`): approves",
+        "`program`'s code (its hash recomputed here) as a",
         "token hook (kind 0) or a companion script (kind 1), `author` its author (a script's earns",
         "half the creator fees of the companions made with it). Only a program nobody but Bordrless",
         "can change (immutable, Bordrless's keys, or a hook timelock); an upgrade voids it."
@@ -29,7 +139,8 @@
         {
           "name": "authority",
           "docs": [
-            "The companion program's upgrade authority (the protocol's); pays the rent the first time."
+            "The companion program's upgrade authority (the protocol's) or the script approver; pays the",
+            "rent the first time."
           ],
           "writable": true,
           "signer": true
@@ -1487,7 +1598,8 @@
       "name": "create_script",
       "docs": [
         "Before the launch, the mint signing: the companion becomes a script companion, its pot's part",
-        "of every fee claim spent by an approved builder's program (the script), whose",
+        "of every fee claim spent by a builder's program (the script: approved by Bordrless, or",
+        "immutable), whose",
         "`companion_init` runs here. The remaining accounts are forwarded to it."
       ],
       "discriminator": [
@@ -1626,7 +1738,10 @@
           "name": "creator_quote"
         },
         {
-          "name": "approval"
+          "name": "approval",
+          "docs": [
+            "for an immutable script)."
+          ]
         },
         {
           "name": "script_program"
@@ -1651,6 +1766,215 @@
           "type": {
             "defined": {
               "name": "CreateScriptArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "create_script_v2",
+      "docs": [
+        "`create_script` with payout terms (Loss cover, 2026-10-12): the bounds the script's payouts",
+        "keep within, kept at `PDA([\"payout-terms\", mint])`, the payer paying its rent."
+      ],
+      "discriminator": [
+        122,
+        6,
+        129,
+        158,
+        70,
+        188,
+        71,
+        57
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "docs": [
+            "Pays the rent of the script account, of the script's state and of the terms; never passed",
+            "to the script."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "mint",
+          "docs": [
+            "The launch's mint, not created yet: it signs."
+          ],
+          "signer": true
+        },
+        {
+          "name": "companion",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  97,
+                  110,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "script",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  99,
+                  114,
+                  105,
+                  112,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "script_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  99,
+                  114,
+                  105,
+                  112,
+                  116,
+                  45,
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  114,
+                  101,
+                  97,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "creator_quote"
+        },
+        {
+          "name": "approval"
+        },
+        {
+          "name": "script_program"
+        },
+        {
+          "name": "script_programdata"
+        },
+        {
+          "name": "terms",
+          "docs": [
+            "The payout terms, `PDA([\"payout-terms\", mint])`, made here."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  121,
+                  111,
+                  117,
+                  116,
+                  45,
+                  116,
+                  101,
+                  114,
+                  109,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "CreateScriptArgs"
+            }
+          }
+        },
+        {
+          "name": "payout",
+          "type": {
+            "defined": {
+              "name": "PayoutTermsArgs"
             }
           }
         }
@@ -3362,7 +3686,7 @@
     {
       "name": "revoke_approval",
       "docs": [
-        "The protocol's upgrade authority: revokes `program`'s approval."
+        "The protocol's upgrade authority or the script approver: revokes `program`'s approval."
       ],
       "discriminator": [
         44,
@@ -3378,7 +3702,7 @@
         {
           "name": "authority",
           "docs": [
-            "The companion program's upgrade authority."
+            "The companion program's upgrade authority, or the script approver."
           ],
           "signer": true
         },
@@ -3433,7 +3757,10 @@
       "docs": [
         "Anyone, once an interval: the script's `companion_step`, the creator address signing, then",
         "the companion's checks (the pot spent and nothing else, the dev bag and the lamports kept,",
-        "custody unchanged); pays a bounty from the pot. The remaining accounts are forwarded to it."
+        "custody unchanged); pays a bounty from the pot. The remaining accounts are forwarded to it.",
+        "A script may answer payouts in its return data (Loss cover, 2026-10-12): each entry is",
+        "checked against the script's payout terms, paid to the holding's owner as SOL and recorded",
+        "by the launch's hook (`record_payout`)."
       ],
       "discriminator": [
         8,
@@ -3573,7 +3900,10 @@
           }
         },
         {
-          "name": "approval"
+          "name": "approval",
+          "docs": [
+            "not read for an immutable script)."
+          ]
         },
         {
           "name": "script_program"
@@ -3769,6 +4099,109 @@
               "u8",
               32
             ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "set_payees",
+      "docs": [
+        "Up to 10 wallets that share the beneficiary part, each a fixed share of it, set once before",
+        "the launch by whoever holds the mint (2026-10-13): every `withdraw` pays them their parts as",
+        "SOL, the beneficiary the rest."
+      ],
+      "discriminator": [
+        92,
+        10,
+        255,
+        107,
+        111,
+        30,
+        22,
+        33
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "mint",
+          "docs": [
+            "The launch's mint, the keypair that made the companion: only its holder sets payees."
+          ],
+          "signer": true
+        },
+        {
+          "name": "companion",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  109,
+                  112,
+                  97,
+                  110,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "payees",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  121,
+                  101,
+                  101,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "entries",
+          "type": {
+            "vec": {
+              "defined": {
+                "name": "PayeeArgs"
+              }
+            }
           }
         }
       ]
@@ -4290,6 +4723,32 @@
       ]
     },
     {
+      "name": "Payees",
+      "discriminator": [
+        209,
+        71,
+        156,
+        186,
+        208,
+        21,
+        110,
+        34
+      ]
+    },
+    {
+      "name": "PayoutTerms",
+      "discriminator": [
+        252,
+        164,
+        195,
+        162,
+        43,
+        38,
+        139,
+        7
+      ]
+    },
+    {
       "name": "Script",
       "discriminator": [
         152,
@@ -4669,6 +5128,45 @@
       ]
     },
     {
+      "name": "PayeePaid",
+      "discriminator": [
+        60,
+        129,
+        205,
+        198,
+        109,
+        22,
+        177,
+        14
+      ]
+    },
+    {
+      "name": "PayeesSet",
+      "discriminator": [
+        134,
+        94,
+        33,
+        56,
+        99,
+        88,
+        127,
+        198
+      ]
+    },
+    {
+      "name": "PayoutTermsSet",
+      "discriminator": [
+        128,
+        36,
+        79,
+        17,
+        215,
+        82,
+        128,
+        106
+      ]
+    },
+    {
       "name": "PeriodPlanned",
       "discriminator": [
         74,
@@ -4799,6 +5297,19 @@
       ]
     },
     {
+      "name": "ScriptPayout",
+      "discriminator": [
+        82,
+        90,
+        25,
+        247,
+        154,
+        237,
+        100,
+        207
+      ]
+    },
+    {
       "name": "ScriptStepped",
       "discriminator": [
         70,
@@ -4809,6 +5320,19 @@
         216,
         104,
         25
+      ]
+    },
+    {
+      "name": "ScriptWalletPayout",
+      "discriminator": [
+        253,
+        212,
+        119,
+        70,
+        190,
+        133,
+        38,
+        167
       ]
     },
     {
@@ -4913,6 +5437,19 @@
         5,
         133,
         183
+      ]
+    },
+    {
+      "name": "WalletPayoutsAllowed",
+      "discriminator": [
+        179,
+        98,
+        201,
+        80,
+        160,
+        102,
+        92,
+        127
       ]
     }
   ],
@@ -5316,6 +5853,61 @@
       "code": 6079,
       "name": "ProgramNotBounded",
       "msg": "an approved program must be one only Bordrless can change: immutable, upgradeable only by Bordrless's keys, or behind a hook timelock (passed)"
+    },
+    {
+      "code": 6080,
+      "name": "PayoutsOff",
+      "msg": "this script companion has no payout terms: a script made with create_script pays nobody"
+    },
+    {
+      "code": 6081,
+      "name": "PayoutsNeedHook",
+      "msg": "payouts need a custom hook that writes hook data, which records each one"
+    },
+    {
+      "code": 6082,
+      "name": "BadPayoutAnswer",
+      "msg": "the script's answer does not decode as a payout answer: its version, its length, more than 16 entries, an index past the accounts, an account that is no holding of the mint, or a holding named twice"
+    },
+    {
+      "code": 6083,
+      "name": "PayoutTarget",
+      "msg": "a payout can only go to a wallet holding the token: not the launch, its pool, the creator address, a program's account, an account left out or read-only, or one left below its rent-exempt minimum"
+    },
+    {
+      "code": 6084,
+      "name": "PayoutToBeneficiary",
+      "msg": "the launcher's own holding is never paid by a script"
+    },
+    {
+      "code": 6085,
+      "name": "PayoutOverBound",
+      "msg": "a payout is over the terms: the holding's cap, the step's budget, or the window's"
+    },
+    {
+      "code": 6086,
+      "name": "BadPayoutTerms",
+      "msg": "payout terms are 1 to 10,000 basis points each and a window of 10 seconds to a day"
+    },
+    {
+      "code": 6087,
+      "name": "BadPayees",
+      "msg": "payees are 1 to 10 distinct wallets, each 1 to 10,000 basis points of the beneficiary part and 10,000 in all at most, none of them the beneficiary, the creator address or the companion, set once before the launch"
+    },
+    {
+      "code": 6088,
+      "name": "PayeesMissing",
+      "msg": "this companion shares its beneficiary part: pass its payees account (writable) and each payee"
+    },
+    {
+      "code": 6089,
+      "name": "WalletPayoutTarget",
+      "msg": "a wallet payout goes to an account passed writable that can take SOL and keeps its rent-exempt minimum: no account of a Bordrless program, the launch's, the pool's, the creator address, the companion, the script's or the hook's, named once"
+    },
+    {
+      "code": 6090,
+      "name": "WalletPayoutsOff",
+      "msg": "this script may not pay wallets: its launcher did not allow wallet payouts before the launch (allow_wallet_payouts)"
     }
   ],
   "types": [
@@ -5349,7 +5941,8 @@
       "name": "Approval",
       "docs": [
         "Bordrless's approval of a program's code (2026-10-12), `PDA([\"approval\", program])`, written only",
-        "by the companion program's upgrade authority (`approve`, `revoke_approval`). It is bound to the",
+        "by the companion program's upgrade authority or the script approver (`SCRIPT_APPROVER`;",
+        "`approve`, `revoke_approval`). It is bound to the",
         "code: `approve` hashes the program's code on chain and refuses any other hash, and an approval",
         "counts only while the program still runs that code (`approval::approved`: the ProgramData's slot",
         "unchanged since, or the code hashed again). Upgrading an approved program voids its approval",
@@ -5401,7 +5994,8 @@
           {
             "name": "updated_by",
             "docs": [
-              "Who last wrote it (the upgrade authority that approved or revoked it)."
+              "Who last wrote it (the upgrade authority or the script approver that approved or revoked",
+              "it)."
             ],
             "type": "pubkey"
           },
@@ -6118,7 +6712,8 @@
           {
             "name": "round_secs",
             "docs": [
-              "An hour to 30 days, as the hook's header says."
+              "As the hook's header says: a lottery's rounds 5 minutes to 30 days, a streak's epochs an",
+              "hour to 30 days."
             ],
             "type": "u32"
           },
@@ -6139,7 +6734,8 @@
           {
             "name": "claim_window_secs",
             "docs": [
-              "How long each claim attempt is open (5 minutes to a day)."
+              "How long each claim attempt is open (a minute to a day; a streak's least time for claims,",
+              "5 minutes to half an epoch)."
             ],
             "type": "u32"
           },
@@ -6244,7 +6840,8 @@
           {
             "name": "program",
             "docs": [
-              "The script: a program with a current approval of kind `APPROVAL_KIND_SCRIPT`."
+              "The script: a program with a current approval of kind `APPROVAL_KIND_SCRIPT`, or an immutable",
+              "one, which needs none."
             ],
             "type": "pubkey"
           },
@@ -8097,7 +8694,11 @@
           {
             "name": "reserved",
             "docs": [
-              "Reserved."
+              "Reserved. `reserved[0..4]` are the custom hook's SOL cut caps from the config",
+              "([`Launch::quote_cut`]), `reserved[4..12]` the SOL it has taken so far (part of",
+              "`creator_fees_accrued`), `reserved[12]` the bump of the hook's `[\"state\", mint]` and",
+              "`reserved[13]` of the launchpad's `[\"quote-cut\", hook]` signer; zeros for every launch made",
+              "before (`docs/quote-cut.md`)."
             ],
             "type": {
               "array": [
@@ -8174,6 +8775,366 @@
               "Early-buyer unlock, counted from the launch; above `early_window_secs` (0 when the lock is",
               "off)."
             ],
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Payee",
+      "docs": [
+        "One payee of a `Payees`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "bps",
+            "docs": [
+              "Its part of the beneficiary part, in basis points."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "owed",
+            "docs": [
+              "Owed and not yet paid (part of the companion's `pending_beneficiary`)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "paid",
+            "docs": [
+              "Paid all time."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PayeeArgs",
+      "docs": [
+        "One payee of `set_payees`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "bps",
+            "docs": [
+              "Its part of the beneficiary part: 1 to 10,000 basis points."
+            ],
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PayeePaid",
+      "docs": [
+        "A payee was paid its part of the beneficiary part, as SOL, by `withdraw`; `owed` is what it is",
+        "still owed (its account could not take a payment yet, or was not passed)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "companion",
+            "type": "pubkey"
+          },
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "lamports",
+            "type": "u64"
+          },
+          {
+            "name": "owed",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PayeeShare",
+      "docs": [
+        "One payee and its share, in `PayeesSet`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "bps",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Payees",
+      "docs": [
+        "The wallets that share a companion's beneficiary part (`set_payees`, 2026-10-13),",
+        "`PDA([\"payees\", mint])`: each gets its basis points of every `withdraw`'s beneficiary part, as",
+        "SOL; the beneficiary keeps the rest. A payee whose account can't take a payment (not passed,",
+        "read-only, or it would stay below its rent-exempt minimum) is owed it: it stays in the",
+        "companion's `pending_beneficiary` and is paid at a later `withdraw`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "count",
+            "docs": [
+              "How many of `payees` are set."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "beneficiary_owed",
+            "docs": [
+              "The beneficiary's own part owed: its account could not take it (not payable, or it would",
+              "stay below its rent-exempt minimum), so it waits, as a payee's does, instead of failing",
+              "every payee's payment with it."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "payees",
+            "type": {
+              "array": [
+                {
+                  "defined": {
+                    "name": "Payee"
+                  }
+                },
+                10
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "PayeesSet",
+      "docs": [
+        "A companion's beneficiary part is shared (`set_payees`, before the launch): each payee's basis",
+        "points of it; the beneficiary keeps the rest."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "companion",
+            "type": "pubkey"
+          },
+          {
+            "name": "payees",
+            "type": {
+              "vec": {
+                "defined": {
+                  "name": "PayeeShare"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "PayoutTerms",
+      "docs": [
+        "The bounds a script companion's payouts keep within (Loss cover, 2026-10-12),",
+        "`PDA([\"payout-terms\", mint])`, 128 bytes, made by `create_script_v2` with the script. A script",
+        "made with `create_script` has none, and its answers pay nobody (`PayoutsOff`). The counters are",
+        "the companion's: a step writes them after it paid."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "step_bps",
+            "docs": [
+              "The most one step pays, of the pot at the step's start (1 to 10,000 basis points)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "holding_bps",
+            "docs": [
+              "The most one holding gets of a step's budget (1 to 10,000)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "window_bps",
+            "docs": [
+              "The most a window pays, of the pot as it stood at the window's first step (1 to 10,000)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "window_secs",
+            "docs": [
+              "The window: `floor(now / window_secs)` (10 seconds to a day: a round, or a day)."
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "window_start",
+            "docs": [
+              "The window the counters are for (its first second), the pot at its first step after the",
+              "script ran, and what it has paid."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "window_pot",
+            "type": "u64"
+          },
+          {
+            "name": "window_paid",
+            "type": "u64"
+          },
+          {
+            "name": "paid_total",
+            "docs": [
+              "Lamports paid to holders all time, entries recorded all time (touches included), when."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "payouts",
+            "type": "u64"
+          },
+          {
+            "name": "last_paid_at",
+            "type": "i64"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                28
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "PayoutTermsArgs",
+      "docs": [
+        "The terms of `create_script_v2`: each share 1 to 10,000 basis points, the window 10 seconds to",
+        "a day."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "step_bps",
+            "docs": [
+              "The most one step pays, of the pot at the step's start."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "holding_bps",
+            "docs": [
+              "The most one holding gets of a step's budget."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "window_bps",
+            "docs": [
+              "The most a window pays, of the pot as it stood at the window's first step."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "window_secs",
+            "docs": [
+              "The window: `floor(now / window_secs)`."
+            ],
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PayoutTermsSet",
+      "docs": [
+        "`create_script_v2`: the bounds the script's payouts keep within (`PayoutTerms`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "companion",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "terms",
+            "type": "pubkey"
+          },
+          {
+            "name": "step_bps",
+            "type": "u16"
+          },
+          {
+            "name": "holding_bps",
+            "type": "u16"
+          },
+          {
+            "name": "window_bps",
+            "type": "u16"
+          },
+          {
+            "name": "window_secs",
             "type": "u32"
           }
         ]
@@ -8626,7 +9587,8 @@
             "docs": [
               "The script's author, copied from its approval at `create_script`: paid `AUTHOR_SHARE_BPS` of",
               "what every fee claim takes from the launch, unless they are the launch's beneficiary. The",
-              "default key: no author. (From what was `reserved`.)"
+              "default key: no author (an approval naming nobody, or an immutable script, which needs no",
+              "approval). (From what was `reserved`.)"
             ],
             "type": "pubkey"
           },
@@ -8697,9 +9659,68 @@
           {
             "name": "author",
             "docs": [
-              "The script's author, from its approval (the default key: none)."
+              "The script's author, from its approval (the default key: none, as for an immutable script,",
+              "which needs no approval)."
             ],
             "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ScriptPayout",
+      "docs": [
+        "One entry of a script's payout answer, paid and recorded (`script_step`): `lamports` paid to the",
+        "holding's owner as SOL (0: a touch, recorded alone), `tag` the script's, passed to the hook's",
+        "`record_payout` untouched."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "companion",
+            "type": "pubkey"
+          },
+          {
+            "name": "program",
+            "type": "pubkey"
+          },
+          {
+            "name": "holding",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "lamports",
+            "type": "u64"
+          },
+          {
+            "name": "tag",
+            "type": "u32"
+          },
+          {
+            "name": "window_paid",
+            "docs": [
+              "What the window has paid so far, this entry included."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "paid_total",
+            "docs": [
+              "What the terms have paid all time, this entry included."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "pot_after",
+            "docs": [
+              "The pot after the step (every entry and the bounty paid)."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -8760,6 +9781,58 @@
           {
             "name": "cranker",
             "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ScriptWalletPayout",
+      "docs": [
+        "A script paid a wallet as SOL (a wallet payout, `PayoutAnswer` version 2), within its terms."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "companion",
+            "type": "pubkey"
+          },
+          {
+            "name": "program",
+            "type": "pubkey"
+          },
+          {
+            "name": "to",
+            "type": "pubkey"
+          },
+          {
+            "name": "lamports",
+            "type": "u64"
+          },
+          {
+            "name": "tag",
+            "type": "u32"
+          },
+          {
+            "name": "window_paid",
+            "docs": [
+              "What the window has paid so far, this entry included."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "paid_total",
+            "docs": [
+              "What the terms have paid all time, this entry included."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "pot_after",
+            "docs": [
+              "The pot after the step (every entry and the bounty paid)."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -9616,6 +10689,26 @@
                 15
               ]
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "WalletPayoutsAllowed",
+      "docs": [
+        "A script companion's launcher allowed its script to pay wallets (`allow_wallet_payouts`, before",
+        "the launch)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "companion",
+            "type": "pubkey"
+          },
+          {
+            "name": "program",
+            "type": "pubkey"
           }
         ]
       }

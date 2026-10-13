@@ -494,6 +494,82 @@ code hash, the ProgramData slot it was approved at, revoked or not, the author);
 `scriptStateAddress(mint)` is the script's own layout. `inspectScriptProgram` reads the three
 together for a program.
 
+### Holders your script pays: keeper.json
+
+A script that pays holders needs their holdings among its step's accounts, and the sender of a step
+chooses those. You never run a keeper: put **`keeper.json`** at the root of the script's source,
+beside `src/` (where Cargo.toml sits), and submit it with the source. The Workshop checks it, the
+review reads it beside your code, the approval binds it, and Bordrless's keeper then brings what it
+says to every step of every launch with your script. The schema (version 1, in
+docs/scripts.md "What a script may ask the keeper for"): which holdings (`minBalance`,
+`maxBalance` in base units or a field of your state; a filter on a field of their 64 bytes of hook
+data against a constant, `"poolPrice"` or the current epoch), where each is paid (`owner`, the
+owner's wallet; `ownerQuoteHolding`, the owner's bridged-SOL holding; `none`), how many a step
+brings with the launch pool's swap accounts and without them, and whether it carries them. Anyone
+can still send a step with any accounts: check every holding and payee in the script itself.
+
+```ts
+import { readFileSync, writeFileSync } from 'node:fs';
+import { KEEPER_EXAMPLE, checkKeeperJson } from '@bordrless/sdk';
+
+// The template's example (a dividend pair: holders under 20M tokens not paid this epoch, each paid to
+// its SOL holding, 3 a step beside the swap accounts): start from it beside src/, then change it to your layout.
+writeFileSync('my_script/keeper.json', KEEPER_EXAMPLE);
+const checked = checkKeeperJson(readFileSync('my_script/keeper.json', 'utf8'));
+if (!checked.ok) throw new Error(checked.problem);   // the sentence the Workshop would refuse it with
+console.log(checked.words);                           // what its page will say: "Each step brings up to 3 holders ..."
+```
+
+### Compose a hook: rules, no program
+
+The third way (docs/rules-lane.md): most custom hooks are a few conditions over a holding's state
+and a few actions on the transfer. Write exactly that as data, bind it to a launch config, and
+Bordrless's one rules engine (`rules_hook`) runs it; the site reads the bytes back word for word,
+with no review, no build and no trading test, and lists it with no submission fee. A rule set is at
+most 6 rules; each runs `on` some sides (sell, buy, send, receive, burn), `when` up to three
+conditions all hold, `unless` one holds, and `then` takes a cut (1 to 1,500 bps of the amount, the
+cuts of a side at most 1,500 in all, burned or paid to the creator or a named wallet), refuses the
+operation with a reason, counts, or marks the holding. No oracle: a dollar threshold is fixed in SOL
+when the set is composed, and the sentence says the SOL figure.
+
+```ts
+import { buildCreateComposedConfig, rules, workshop } from '@bordrless/sdk';
+
+const set = rules
+  .compose({ keeps: ['entry'], destination: 'burn' })
+  .rule({ on: ['sell'], when: [rules.gain.gt(0)], then: rules.cut(500) })
+  .build();                                       // throws the engine’s own refusal, by code (RulesError.code)
+const words = rules.render(set);                  // { sentences, mostTakes, flags, watch, keeps }
+// words.sentences: ["Takes 5% of every sell by a holder in profit, burned.", "Holders under water sell free."]
+// words.mostTakes.text: "5% of a sell; nothing from buys or transfers"; words.flags: 209
+
+const made = buildCreateComposedConfig(me, { label: 'Loss shield', creatorFeeBps: 100, listed: true }, set);
+// made.instructions: create_listed_config (half the creator fee to you on launches by others) then bind,
+// in ONE transaction signed by me and made.keypair; made.address is the key to paste under "Custom config".
+// Once it landed, list it on the Workshop's shelves as the wallet that made it (six a day, no fee):
+const session = await workshop.signIn(me, signMessage);          // the Workshop's sign-in message: a message, never a transaction
+const item = await workshop.registerComposed(made.address, session); // lane: 'rules', approved at once, its words read from its rules
+```
+
+The values a rule can see (`rules.amount`, `amountShare`, `balanceBefore`, `balanceAfter`,
+`shareAfter`, `tradePrice`, `spotPrice`, `gain`, `loss`, `valueBefore`, `valueAfter`,
+`sinceReceived`, `sinceSent`, `age`, `firstAfterLaunch`, `sinceLaunch`, `counter`,
+`flag(k)`, and `graduated`, `hasEntry` with their negations), the actions (`rules.cut(bps)`,
+`rules.refuse('cooling' | 'cap' | 'locked' | 'rule')`, `rules.count('add' | 'reset')`,
+`rules.mark(k, set)`) and every bound are docs/rules-lane.md §1; what the engine keeps per holding
+(`keeps: ['entry' | 'times' | 'count']`) must cover what the conditions read. Reading what is
+there: `decodeRuleSetAccount(data)` at `ruleSetAddress(config)`, `decodeRulesState(data)` at
+`rulesStateAddress(mint)`, `decodeRulesHolding(hookData)` (the 64 bytes, the Loss cover script's
+fields at the same offsets, so Lossback runs unchanged on a composed hook). `rulesHook.prepare(me,
+mint, config)` prepares the engine for a mint of your own; the launch does it for its own.
+
+When the lane cannot say it (randomness, a call into a program, a second cut destination, a price
+feed: §1.4), `rules.toStarter(set)` writes the Workshop template's `src/lib.rs` with the same rules
+spelled out in Rust (`rules::decide` on plain numbers), so the code lane starts from a familiar
+file. Every call here is in `packages/sdk/src/rules.test.ts`, against the shared vectors
+(`packages/shared/vectors/rules.json`) the engine's own tests read. The engine is not deployed
+yet: `RULES_HOOK.deployed` says so, and `RULES_HOOK_PROGRAM` is a placeholder until it is.
+
 **Coming, not built:** the payout answer (docs/loss-cover.md §1): a `companion_step` will answer
 a `PayoutAnswer` (up to 16 holdings among its extra accounts, with lamports and a tag) that the
 companion pays from the pot within bounds and records through the hook. Its encoder lands in

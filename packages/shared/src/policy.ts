@@ -6,7 +6,7 @@
  * `programs/tests/vectors/launch-fees.json`, which the Rust tests render from the reference the
  * programs are held to, and requires exact equality.
  */
-import type { CompanionSplitBps, CompanionTemplate, GameKindName, GameRequest, GameRolloverReason, JackpotRequest, LaunchRules, LaunchRulesInput, LotteryRequest, ScriptRequest, Side, SnowballRequest, SnowballTerms, StreakRequest } from './api.ts';
+import type { CompanionSplitBps, CompanionTemplate, GameKindName, GameRequest, GameRolloverReason, JackpotRequest, LaunchRules, LaunchRulesInput, LossCoverRequest, LossCoverTerms, LotteryRequest, PayeeRequest, PayoutTermsRequest, ScriptRequest, Side, SnowballRequest, SnowballTerms, StreakRequest } from './api.ts';
 import type { StudioGameSettings } from './studio.ts';
 import { HOOK_DATA_LEN, TOKEN_HOOK_FLAGS } from './programs.ts';
 
@@ -845,7 +845,27 @@ export function scriptRequestOf(companion: unknown): ScriptRequest | null | 'mal
   if (typeof r.interval !== 'number' || !Number.isInteger(r.interval) || typeof r.stateLen !== 'number' || !Number.isInteger(r.stateLen)) return 'malformed';
   const initData = r.initData === undefined || r.initData === null ? '' : r.initData;
   if (typeof initData !== 'string' || scriptInitDataLength(initData) === null) return 'malformed';
-  return { potBps: r.potBps as number, program: r.program, interval: r.interval, initData, stateLen: r.stateLen };
+  const payout = payoutTermsRequestOf(r.payout);
+  if (payout === 'malformed') return 'malformed';
+  return { potBps: r.potBps as number, program: r.program, interval: r.interval, initData, stateLen: r.stateLen, ...(payout ? { payout } : {}) };
+}
+
+/** The companion program's bounds on payout terms (`PayoutTermsArgs::valid`): each share 1 to 10,000 basis points, the window 10 seconds to a day. */
+export const PAYOUT_TERMS_BOUNDS = { minWindowSecs: 10, maxWindowSecs: 86_400 } as const;
+
+/** A script's payout terms as a request names them (`script.payout`); null without them; `'malformed'` when they are there and not four whole numbers. */
+function payoutTermsRequestOf(raw: unknown): PayoutTermsRequest | null | 'malformed' {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'object') return 'malformed';
+  const r = raw as Record<string, unknown>;
+  if (![r.stepBps, r.holdingBps, r.windowBps].every(isShare) || typeof r.windowSecs !== 'number' || !Number.isInteger(r.windowSecs)) return 'malformed';
+  return { stepBps: r.stepBps as number, holdingBps: r.holdingBps as number, windowBps: r.windowBps as number, windowSecs: r.windowSecs };
+}
+
+/** Whether payout terms are within the companion program's bounds (`create_script_v2` refuses them otherwise, `BadPayoutTerms`). */
+export function payoutTermsWithin(t: PayoutTermsRequest): boolean {
+  const share = (v: number): boolean => Number.isInteger(v) && v >= 1 && v <= 10_000;
+  return share(t.stepBps) && share(t.holdingBps) && share(t.windowBps) && Number.isInteger(t.windowSecs) && t.windowSecs >= PAYOUT_TERMS_BOUNDS.minWindowSecs && t.windowSecs <= PAYOUT_TERMS_BOUNDS.maxWindowSecs;
 }
 
 /**
@@ -863,10 +883,208 @@ export function scriptProblem(s: ScriptRequest, split: CompanionSplitBps, rules:
   if (initLen === null) return 'The script’s init data is hex or base64.';
   if (initLen > B.maxInitLen) return `The script’s init data is at most ${B.maxInitLen} bytes.`;
   if (!Number.isInteger(s.stateLen) || s.stateLen < 0 || s.stateLen > B.maxStateLen) return `The script’s state is 0 to ${B.maxStateLen.toLocaleString('en-US')} bytes.`;
+  if (s.payout && !payoutTermsWithin(s.payout)) return 'The script’s payout limits are each 0.01% to 100%, over a window of 10 seconds to a day.';
   if (rules.creatorLockDays > 0) return 'A creator fee run by a program can’t come with the creator wallet lock: the program vests your first buy instead.';
   if (creatorFeeBps === 0) return 'There is no creator fee for the script to spend: set one.';
   if (splitPaysHolders(split) && !rewardsOn(rules)) return 'A share of the creator fee for holders needs holder rewards on.';
   return null;
+}
+
+// ---- Payees and wallet payouts (2026-10-13, docs/payees-and-wallet-payouts.md) ---------------------
+
+/** The most wallets that share a launcher's part (`set_payees`; the SDK's `MAX_PAYEES`). */
+export const MAX_PAYEES = 10;
+
+/** The system program's id, the default key: never a payee. */
+const DEFAULT_KEY = '11111111111111111111111111111111';
+
+/** The payees a launch request's `companion` names (`companion.payees`); null without any (absent, null or empty); `'malformed'` when they are there and not a list of `{ wallet, bps }` with an address and a whole number. */
+export function payeesRequestOf(companion: unknown): PayeeRequest[] | null | 'malformed' {
+  if (typeof companion !== 'object' || companion === null) return null;
+  const raw = (companion as Record<string, unknown>).payees;
+  if (raw === undefined || raw === null) return null;
+  if (!Array.isArray(raw)) return 'malformed';
+  if (raw.length === 0) return null;
+  const out: PayeeRequest[] = [];
+  for (const entry of raw as unknown[]) {
+    if (typeof entry !== 'object' || entry === null) return 'malformed';
+    const e = entry as Record<string, unknown>;
+    if (typeof e.wallet !== 'string' || !BASE58_ADDRESS.test(e.wallet) || typeof e.bps !== 'number' || !Number.isInteger(e.bps)) return 'malformed';
+    out.push({ wallet: e.wallet, bps: e.bps });
+  }
+  return out;
+}
+
+/** What the payees leave the launcher of their part, basis points of it (10,000 with none). */
+export const payeesLeaveBps = (payees: readonly Pick<PayeeRequest, 'bps'>[]): number => 10_000 - payees.reduce((sum, p) => sum + p.bps, 0);
+
+/**
+ * Why `set_payees` would refuse these payees (`BadPayees`), in the words the launch form and the
+ * backend use (`companion_rules`); null when it would take them: 1 to 10 wallets, each named once,
+ * each 0.01% to 100% of the launcher's part and 100% in all at most; none the default key, the
+ * launcher (`beneficiary`) or one of `reserved` (the companion and its creator address, which the
+ * backend derives for the mint). A split with no part for the launcher has nothing to share.
+ */
+export function payeesProblem(payees: readonly PayeeRequest[], split: Pick<CompanionSplitBps, 'beneficiaryBps'>, beneficiary: string, reserved: readonly string[] = []): string | null {
+  if (payees.length === 0 || payees.length > MAX_PAYEES) return `Up to ${MAX_PAYEES} wallets can share your part.`;
+  if (split.beneficiaryBps <= 0) return 'The wallets share your part of the creator fee, and this split leaves you none.';
+  if (payees.some((p) => !Number.isInteger(p.bps) || p.bps < 1 || p.bps > 10_000)) return 'Each wallet gets 0.01% to 100% of your part.';
+  if (payeesLeaveBps(payees) < 0) return 'The wallets’ shares add up to more than 100% of your part.';
+  const seen = new Set<string>();
+  for (const p of payees) {
+    if (!BASE58_ADDRESS.test(p.wallet) || p.wallet === DEFAULT_KEY) return `${p.wallet} is not a wallet.`;
+    if (seen.has(p.wallet)) return 'Name each wallet once.';
+    seen.add(p.wallet);
+    if (p.wallet === beneficiary) return 'You keep what the wallets don’t take: name wallets other than your own.';
+    if (reserved.includes(p.wallet)) return 'A wallet can’t be the hook’s own account.';
+  }
+  return null;
+}
+
+/**
+ * Why a request's `allowWalletPayouts` can't be taken (`companion_rules`); null when it can, or it
+ * is off: only a custom hook's script with payout terms (`script.payout`, `create_script_v2`) may
+ * pay wallets, never Lossback's (its script pays holders under water, and nothing else).
+ */
+export function walletPayoutsProblem(allow: boolean, script: Pick<ScriptRequest, 'payout'> | null): string | null {
+  if (!allow) return null;
+  if (!script) return 'Only a custom hook’s script can pay wallets.';
+  if (!script.payout) return 'A script pays wallets only within payout limits: set them.';
+  return null;
+}
+
+// ---- Loss cover (2026-10-12; the site says Lossback): the pot pays holders who are under water (docs/loss-cover.md) ----
+
+/**
+ * The bounds a Lossback coin's terms keep within, as the site offers them: the programs' own
+ * (`loss_cover_script::CoverTerms::valid`, the companion's `PayoutTermsArgs::valid`) and the
+ * policy's tighter ones (the step at least 10 s and at most a quarter of the round, a holding of
+ * at most 1% of the supply, a loss of at least 0.0001 SOL, a wait of at most a day). The keeper's
+ * batches (`batchPaying`, `batchMeasuring`) are what one step carries within the runtime's
+ * instruction trace, measured by the programs' `loss_cover_vectors` (a measuring step carries one
+ * fewer on a coin's first step, when the creator's holding is made on the way).
+ */
+export const LOSS_COVER_LIMITS = {
+  minRoundSecs: 60,
+  maxRoundSecs: DAY_SECS,
+  minStepSecs: 10,
+  maxStepSecs: 3_600,
+  /** The step is at most this part of the round: a round has at least four steps. */
+  stepsPerRoundMin: 4,
+  minBps: 100,
+  maxBps: 10_000,
+  minCoverBps: 1_000,
+  maxCoverBps: 10_000,
+  /** The least holding that counts, at most this part of the supply (basis points). */
+  maxMinHoldingBps: 100,
+  minMinLossLamports: 100_000n,
+  maxMinAgeSecs: DAY_SECS,
+  maxMinPotLamports: 100_000_000_000n,
+  batchPaying: 7,
+  batchMeasuring: 13,
+} as const;
+
+/**
+ * The terms the site launches a Lossback coin with: rounds of 5 minutes stepped every 15 seconds,
+ * the whole pot available to each step, each holding and each round, the whole loss covered when
+ * the pot can, a holding of 100,000 tokens (6 decimals: base units) and a loss of 0.001 SOL at
+ * least, a minute after its last buy (the owner, 2026-10-12; the first coin, LIFEVEST, was made with
+ * half an hour, fixed in its script state), a round only once the pot holds 1 SOL, the hook's whole
+ * fee row to the pot (the launcher's row 0: `potBps` is 10,000 less the launcher's part). The
+ * launcher sets `roundSecs`, `minPotLamports`, `coverBps` and `minHolding` (`LossCoverRequest`);
+ * the rest is fixed here. There is no cooldown: a holding is measured or paid once a round.
+ */
+/** A holding's wait in words: "45 seconds", "1 minute", "30 minutes". */
+export function ageWords(secs: number): string {
+  if (secs % 60 !== 0 || secs < 60) return `${secs} second${secs === 1 ? '' : 's'}`;
+  const m = secs / 60;
+  return `${m} minute${m === 1 ? '' : 's'}`;
+}
+
+export const LOSS_COVER_DEFAULTS = {
+  potBps: 10_000,
+  roundSecs: 300,
+  stepSecs: 15,
+  roundBps: 10_000,
+  stepBps: 10_000,
+  holdingBps: 10_000,
+  coverBps: 10_000,
+  minHolding: '100000000000',
+  minLossLamports: '1000000',
+  minAgeSecs: 60,
+  minPotLamports: '1000000000',
+} as const;
+
+/** The round lengths the launch form offers (seconds): 5, 10, 30 and 60 minutes. */
+export const LOSS_COVER_ROUND_CHOICES_SECS = [300, 600, 1_800, 3_600] as const;
+/** The cover shares the launch form offers: the whole loss, half, a quarter. */
+export const LOSS_COVER_COVER_CHOICES_BPS = [10_000, 5_000, 2_500] as const;
+/** The minimum pots the launch form offers, lamports: none, 0.5, 1, 5 SOL. */
+export const LOSS_COVER_MIN_POT_CHOICES_LAMPORTS = ['0', '500000000', '1000000000', '5000000000'] as const;
+
+const LAMPORTS = /^\d{1,20}$/;
+
+/** The Lossback terms a launch request's `companion` names (`companion.lossCover`); null without them; `'malformed'` when they are there and not whole numbers and lamport strings. */
+export function lossCoverRequestOf(companion: unknown): LossCoverRequest | null | 'malformed' {
+  if (typeof companion !== 'object' || companion === null) return null;
+  const raw = (companion as Record<string, unknown>).lossCover;
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'object') return 'malformed';
+  const r = raw as Record<string, unknown>;
+  if (typeof r.roundSecs !== 'number' || !Number.isInteger(r.roundSecs) || !isShare(r.coverBps)) return 'malformed';
+  if (typeof r.minPotLamports !== 'string' || !LAMPORTS.test(r.minPotLamports) || typeof r.minHolding !== 'string' || !LAMPORTS.test(r.minHolding)) return 'malformed';
+  return { roundSecs: r.roundSecs, minPotLamports: r.minPotLamports, coverBps: r.coverBps as number, minHolding: r.minHolding };
+}
+
+/** The full terms a request launches with: what it names, the rest from `LOSS_COVER_DEFAULTS`. */
+export function lossCoverTermsOf(s: LossCoverRequest): LossCoverTerms {
+  const D = LOSS_COVER_DEFAULTS;
+  return { roundSecs: s.roundSecs, stepSecs: D.stepSecs, stepBps: D.stepBps, holdingBps: D.holdingBps, roundBps: D.roundBps, coverBps: s.coverBps, minHolding: s.minHolding, minLossLamports: D.minLossLamports, minAgeSecs: D.minAgeSecs, minPotLamports: s.minPotLamports };
+}
+
+/** The pot's part of every fee claim for a Lossback coin: what the launcher's part of the split leaves (the hook's whole fee row). */
+export const lossCoverPotBps = (split: CompanionSplitBps): number => 10_000 - split.buybackBps - split.holdersBps - split.beneficiaryBps;
+
+/**
+ * Why a Lossback coin with these terms can't launch with this split on these rules at this fee, in
+ * the words the launch form and the backend use (`companion_rules`); null when it can: a creator
+ * fee to fill the pot, no other token rules (it launches from Bordrless's Loss cover config, which
+ * has none, and runs its own hook in the kit's place), nothing bought back and no holders' part (the
+ * pot and the launcher only), a part for the pot, and the terms within `LOSS_COVER_LIMITS` (the
+ * programs refuse anything outside their own bounds at the setup's dry run). `supply` is the
+ * launch's, for the least holding's cap.
+ */
+export function lossCoverProblem(s: LossCoverRequest, split: CompanionSplitBps, rules: LaunchRulesInput, creatorFeeBps: number, supply: bigint = TOKEN_SUPPLY): string | null {
+  const L = LOSS_COVER_LIMITS;
+  const D = LOSS_COVER_DEFAULTS;
+  if (creatorFeeBps === 0) return 'There is no creator fee to fill the pot with: set one.';
+  if ((Object.keys(NO_RULES) as (keyof LaunchRulesInput)[]).some((k) => rules[k] !== 0)) return 'A Lossback coin has no other token rules: its hook keeps each holding’s entry price.';
+  if (split.buybackBps !== 0 || split.holdersBps !== 0) return 'A Lossback coin’s creator fee goes to its pot and to the launcher: nothing bought back, no holders’ part.';
+  const potBps = lossCoverPotBps(split);
+  if (!(potBps > 0) || !isShare(split.beneficiaryBps)) return 'The pot’s part and the launcher’s must add up to 100%, with a part for the pot.';
+  if (!Number.isInteger(s.roundSecs) || s.roundSecs < L.minRoundSecs || s.roundSecs > L.maxRoundSecs) return 'A round lasts a minute to a day.';
+  if (s.roundSecs < D.stepSecs * L.stepsPerRoundMin) return `A round holds at least ${L.stepsPerRoundMin} steps of ${D.stepSecs} seconds.`;
+  if (!Number.isInteger(s.coverBps) || s.coverBps < L.minCoverBps || s.coverBps > L.maxCoverBps) return 'The pot covers 10% to 100% of a loss.';
+  const minHolding = BigInt(s.minHolding);
+  if (minHolding < 1n || minHolding > (supply * BigInt(L.maxMinHoldingBps)) / BPS) return 'The least holding that counts is at least one base unit and at most 1% of the supply.';
+  const minPot = BigInt(s.minPotLamports);
+  if (minPot > L.maxMinPotLamports) return 'The minimum pot is at most 100 SOL.';
+  return null;
+}
+
+/**
+ * The review step's sentence for a Lossback coin, in numbers: what it does, never that it protects
+ * anyone (docs/loss-cover.md §5).
+ */
+export function lossCoverSentence(s: LossCoverRequest, decimals: number = TOKEN_DECIMALS): string {
+  const D = LOSS_COVER_DEFAULTS;
+  const minutes = Math.round(s.roundSecs / 60);
+  const pot = Number(BigInt(s.minPotLamports)) / 1e9;
+  const holding = Number(BigInt(s.minHolding)) / 10 ** decimals;
+  const loss = Number(BigInt(D.minLossLamports)) / 1e9;
+  const share = s.coverBps === 10_000 ? 'the same share of what they are down' : `the same share of ${s.coverBps / 100}% of what they are down`;
+  const once = pot > 0 ? `, once the pot holds ${pot} SOL,` : '';
+  return `Every ${minutes} minutes${once} it pays every holder under water ${share}, as much as the pot allows, in steps of ${D.stepSecs} seconds; a holding counts from ${holding.toLocaleString('en-US')} tokens and ${loss} SOL of loss, ${ageWords(D.minAgeSecs)} after it bought.`;
 }
 
 /** The template whose split this is, or null for any other split. */

@@ -75,6 +75,8 @@ export interface CompanionArgs {
 }
 
 export interface Companion {
+  /** Its beneficiary part is shared with payees (`set_payees`; version 2): withdraw with `companion.withdrawWithPayees`. Absent from companions decoded by older code. */
+  payees?: boolean;
   mint: PublicKey;
   beneficiary: PublicKey;
   split: CompanionSplit;
@@ -534,6 +536,44 @@ export const companion = {
     return build('scriptStep', {}, named, [...extra.map((m) => ({ ...m })), ...remaining(token.createHolding(cranker, mint, creator)), ...unwrapAccounts(creator)]);
   },
   /**
+   * `create_script_v2(args, payout)` (docs/loss-cover.md §1.2): `createScript` with the script's
+   * payout terms, made at `payoutTermsAddress(mint)` (writable, after the ProgramData; `payer` pays
+   * their rent too): the most one step pays of the pot, the most one holding gets of a step's
+   * budget, the most a window pays of the pot at its first step, and the window (10 seconds to a
+   * day; `BadPayoutTerms` out of bounds, `payoutTermsValid`). A script made with `createScript` has
+   * no terms, and its first answer with an entry fails (`PayoutsOff`). Everything else is
+   * `createScript`'s (held to `vectors/payouts.json`).
+   */
+  createScriptV2(payer: PublicKey, mint: PublicKey, args: ScriptArgs, payout: { stepBps: number; holdingBps: number; windowBps: number; windowSecs: number }, scriptExtra: AccountMeta[] = []): TransactionInstruction {
+    const creator = a.companionCreatorAddress(mint);
+    const named = [
+      rw(payer, true),
+      ro(mint, true),
+      rw(a.companionAddress(mint)),
+      rw(a.scriptAddress(mint)),
+      rw(a.scriptStateAddress(mint)),
+      rw(creator),
+      ro(a.holdingAddress(a.BRIDGED_SOL_MINT, creator)),
+      ro(a.approvalAddress(args.program)),
+      ro(args.program),
+      ro(a.programDataAddress(args.program)),
+      rw(a.payoutTermsAddress(mint)),
+      ro(a.SYSTEM_PROGRAM),
+    ];
+    const data = { args: { split: args.split, potBps: args.potBps, program: args.program, interval: new BN(args.interval), stateLen: args.stateLen, initData: Buffer.from(args.initData) }, payout: { stepBps: payout.stepBps, holdingBps: payout.holdingBps, windowBps: payout.windowBps, windowSecs: payout.windowSecs } };
+    return build('createScriptV2', data, named, scriptExtra.map((m) => ({ ...m })));
+  },
+  /**
+   * The accounts a step that answers payouts needs beside the script's own, as the program looks
+   * them up (`client::payout_accounts`): the terms (w), the launch's hook program `hook`, the payout
+   * authority, the hook's state for the mint (w) and its `["hook-authority"]`, the token program
+   * and its event authority. The candidates follow in `extra`: each holding (w: the hook records
+   * into it) and, when it is paid, its owner (w).
+   */
+  payoutAccounts(mint: PublicKey, hook: PublicKey): AccountMeta[] {
+    return [rw(a.payoutTermsAddress(mint)), ro(hook), ro(a.PAYOUT_AUTHORITY), rw(a.gameStateAddress(hook, mint)), ro(a.hookAuthority(hook)), ro(a.TOKEN_PROGRAM), ro(a.TOKEN_EVENT_AUTHORITY)];
+  },
+  /**
    * `claim_fees` of a script companion: the plain claim (`claimFees`), then its `Script` (writable:
    * it keeps the author's running total) and, when the claim pays the script's author, the
    * author's wallet (writable): `scriptClaimAuthor(script, companion)`, the author unless there is
@@ -554,6 +594,33 @@ export const companion = {
   withdraw(sender: PublicKey, mint: PublicKey, beneficiary: PublicKey): TransactionInstruction {
     const creator = a.companionCreatorAddress(mint);
     return build('withdraw', {}, [ro(sender, true), rw(a.companionAddress(mint)), rw(creator), rw(beneficiary), ro(a.SYSTEM_PROGRAM)], unwrapAccounts(creator));
+  },
+  /**
+   * `withdraw` of a companion with payees (`Companion.payees`, 2026-10-13): `withdraw`, then its
+   * payees account and each payee (writable), whom it pays their parts first. A payee left out, or
+   * one whose account can't take its part, is owed it (never lost); the beneficiary likewise.
+   * Without the payees account the withdraw fails (`PayeesMissing`) once anything is pending.
+   */
+  withdrawWithPayees(sender: PublicKey, mint: PublicKey, beneficiary: PublicKey, payees: PublicKey[]): TransactionInstruction {
+    const ix = companion.withdraw(sender, mint, beneficiary);
+    ix.keys.push(rw(a.payeesAddress(mint)), ...payees.map((p) => rw(p)));
+    return ix;
+  },
+  /**
+   * `set_payees` (2026-10-13): before the launch, the mint (the launch's keypair) signing, up to 10
+   * wallets that share the beneficiary part, each its basis points of it (10,000 in all at most);
+   * the beneficiary keeps the rest. Once, for good.
+   */
+  setPayees(payer: PublicKey, mint: PublicKey, payees: { wallet: PublicKey; bps: number }[]): TransactionInstruction {
+    return build('setPayees', { entries: payees.map((p) => ({ wallet: p.wallet, bps: p.bps })) }, [rw(payer, true), ro(mint, true), rw(a.companionAddress(mint)), rw(a.payeesAddress(mint)), ro(a.SYSTEM_PROGRAM)], []);
+  },
+  /**
+   * `allow_wallet_payouts` (2026-10-13): before the launch, the mint signing, a script companion
+   * made with `createScriptV2` lets its script pay any wallet SOL (`encodeWalletPayoutAnswer`) as
+   * well as holders, within the same payout terms. Once, for good; buyers read it on chain.
+   */
+  allowWalletPayouts(mint: PublicKey): TransactionInstruction {
+    return build('allowWalletPayouts', {}, [ro(mint, true), ro(a.companionAddress(mint)), rw(a.payoutTermsAddress(mint)), ro(a.scriptAddress(mint))], []);
   },
   /** `withdraw` before the launch, signed by the mint: the creator address's funding back to the beneficiary (a launch that never happened). */
   refund(sender: PublicKey, mint: PublicKey, beneficiary: PublicKey): TransactionInstruction {
@@ -1026,6 +1093,31 @@ export function decodeCompanion(data: Buffer): Companion {
     potLocked: big(r.potLocked),
     snowball: num(r.mode) === 1,
     script: num(r.mode) === MODE_SCRIPT,
+    payees: num(r.version) === COMPANION_VERSION_WITH_PAYEES,
+  };
+}
+
+/** `Companion.version` of a companion whose beneficiary part is shared (`set_payees`): its `withdraw` takes its payees (`companion.withdrawWithPayees`). */
+export const COMPANION_VERSION_WITH_PAYEES = 2;
+/** The most wallets that share a beneficiary part. */
+export const MAX_PAYEES = 10;
+
+/** A companion's payees, `PDA(["payees", mint])` (2026-10-13). */
+export interface Payees {
+  mint: PublicKey;
+  /** The beneficiary's own part owed (its account could not take it). */
+  beneficiaryOwed: bigint;
+  payees: { wallet: PublicKey; bps: number; owed: bigint; paid: bigint }[];
+}
+
+export function decodePayees(data: Buffer): Payees {
+  const r = CODERS.companion.accounts.decode('payees', data) as Record<string, unknown>;
+  const count = num(r.count);
+  const list = (r.payees as Record<string, unknown>[]).slice(0, count);
+  return {
+    mint: r.mint as PublicKey,
+    beneficiaryOwed: big(r.beneficiaryOwed),
+    payees: list.map((p) => ({ wallet: p.wallet as PublicKey, bps: num(p.bps), owed: big(p.owed), paid: big(p.paid) })),
   };
 }
 

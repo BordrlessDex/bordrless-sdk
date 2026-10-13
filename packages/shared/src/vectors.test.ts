@@ -1,6 +1,5 @@
 /**
- * Every case of `vectors/launch-fees.json` (a copy of bordrless-programs'
- * `programs/tests/vectors/launch-fees.json`; copy it again whenever the programs' math changes) through the TypeScript mirror, with exact
+ * Every case of `programs/tests/vectors/launch-fees.json` through the TypeScript mirror, with exact
  * equality. The file is rendered by `programs/tests/tests/vectors.rs` from the Rust reference the
  * programs are held to (`bordrless_core`, the tests' `quote_launch_swap`, `max_buy_within` and
  * `dev_buy_max`, and `bordrless_kit::mirror`), which rewrites it and fails when the math changes, so

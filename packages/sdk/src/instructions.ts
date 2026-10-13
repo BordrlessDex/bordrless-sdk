@@ -15,7 +15,7 @@ import BN from 'bn.js';
 import { PublicKey, TransactionInstruction, type AccountMeta } from '@solana/web3.js';
 import type { RuleBounds } from '@bordrless/shared';
 import * as a from './addresses.ts';
-import { kitModulesOf, rulesBurn, type Launch, type LaunchRulesData } from './accounts.ts';
+import { kitModulesOf, rulesBurn, type Launch, type LaunchRulesData, type QuoteCutCaps } from './accounts.ts';
 import { CODERS, type ProgramName } from './coders.ts';
 import { customHookLaunchAccounts, customHookSlice, kitHookSlice, tokenHookSlice, type CustomHookAccounts, type TokenHook } from './hooks.ts';
 import { timelockAddress } from './authority.ts';
@@ -500,6 +500,10 @@ export interface LaunchKeys {
   burns: boolean;
   /** The creator's own token hook with its extras (§5.8), the base side's slice on every swap and the graduation; null for the kit or no hook. */
   customHook?: CustomHookAccounts | null;
+  /** The custom hook when it takes a SOL cut (`Launch.quoteCut`): every swap but the creator's passes `quoteCutExtras` for its trader. */
+  quoteCutHook?: PublicKey | null;
+  /** The launch's creator, with `quoteCutHook`: its trades to itself skip the SOL cut and its accounts. */
+  creator?: PublicKey;
 }
 
 /** The keys of a launch of `mint` with `rules`. */
@@ -509,10 +513,11 @@ export const launchKeys = (mint: PublicKey, quoteMint: PublicKey, lpFeeBps: numb
  * (`fetchCustomHookAccounts(connection, launch.customHook, launch.mint)`): without them the swap
  * would be built without the token's hook and refused on chain, so this throws.
  */
-export function launchKeysOf(l: Pick<Launch, 'mint' | 'quoteMint' | 'lpFeeBps' | 'rules' | 'customHook'>, customHook: CustomHookAccounts | null = null): LaunchKeys {
+export function launchKeysOf(l: Pick<Launch, 'mint' | 'quoteMint' | 'lpFeeBps' | 'rules' | 'customHook'> & Partial<Pick<Launch, 'quoteCut' | 'creator'>>, customHook: CustomHookAccounts | null = null): LaunchKeys {
   if (l.customHook && !customHook) throw new Error(`the launch's token runs the hook ${l.customHook.toBase58()}: resolve its accounts for the mint first`);
   if (l.customHook && customHook && !customHook.program.equals(l.customHook)) throw new Error('the hook accounts given are another program’s');
-  return launchKeys(l.mint, l.quoteMint, l.lpFeeBps, l.rules, l.customHook ? customHook : null);
+  const keys = launchKeys(l.mint, l.quoteMint, l.lpFeeBps, l.rules, l.customHook ? customHook : null);
+  return l.customHook && l.quoteCut ? { ...keys, quoteCutHook: l.customHook, ...(l.creator ? { creator: l.creator } : {}) } : keys;
 }
 
 const HOLDER_REWARDS = 1;
@@ -566,6 +571,16 @@ export const launch = {
   createListedConfig(creator: PublicKey, launchConfig: PublicKey, args: CreateConfigArgs, authorShareBps: number): TransactionInstruction {
     const keys = [rw(creator, true), ro(a.LAUNCH_CONFIG), rw(launchConfig, true), opt(a.LAUNCH_PROGRAM, args.customHook), ro(a.SYSTEM_PROGRAM)];
     return ix(a.LAUNCH_PROGRAM, 'launch', 'createListedConfig', { args: { ...args, rules: { ...args.rules } }, authorShareBps }, [...withEvents(a.LAUNCH_PROGRAM, keys), ...hookProgramData(args.customHook)]);
+  },
+  /**
+   * `create_quote_cut_config` (`docs/quote-cut.md`): as `createConfig` (or, with `authorShareBps`
+   * above 0, `createListedConfig`), for a custom hook that also takes a SOL cut on every trade: its
+   * `quote_cut` answers a rate, the launchpad takes at most `cut`'s cap (each side at most
+   * `QUOTE_CUT_MAX_BPS`, one above 0) of the trade's SOL with the creator fee.
+   */
+  createQuoteCutConfig(creator: PublicKey, launchConfig: PublicKey, args: CreateConfigArgs, authorShareBps: number, cut: QuoteCutCaps): TransactionInstruction {
+    const keys = [rw(creator, true), ro(a.LAUNCH_CONFIG), rw(launchConfig, true), opt(a.LAUNCH_PROGRAM, args.customHook), ro(a.SYSTEM_PROGRAM)];
+    return ix(a.LAUNCH_PROGRAM, 'launch', 'createQuoteCutConfig', { args: { ...args, rules: { ...args.rules } }, authorShareBps, cut: { ...cut } }, [...withEvents(a.LAUNCH_PROGRAM, keys), ...hookProgramData(args.customHook)]);
   },
   /**
    * `create_launch`: 32 accounts, then, with a custom hook, its accounts as remaining accounts
@@ -685,7 +700,8 @@ export const launch = {
    * `swap_with_base_slice`) by `trader`, delivered to `recipient`'s holding: direction 1 buys the
    * token with the quote, 0 sells it. The base mint is writable exactly when the launch burns (never
    * the quote); the token's hook slice (the kit's, or a custom hook's) goes on the base side (a
-   * buy's output, a sell's input); the pool hook gets its four extras whatever the rules.
+   * buy's output, a sell's input); the pool hook gets its four extras whatever the rules, and, on a
+   * launch whose custom hook takes a SOL cut (`keys.quoteCutHook`), the cut's four for `trader`.
    * `minAmountOut` is checked against what the recipient's holding gains.
    */
   swap(keys: LaunchKeys, trader: PublicKey, recipient: PublicKey, direction: 0 | 1, amountIn: bigint, minAmountOut: bigint): TransactionInstruction {
@@ -696,7 +712,7 @@ export const launch = {
     return swap.swap(
       { trader, pool: a.launchPoolAddress(keys.mint, keys.quoteMint, keys.lpFeeBps), baseMint: keys.mint, quoteMint: keys.quoteMint, traderBase, traderQuote, hookProgram: a.LAUNCH_PROGRAM, baseMintWritable: keys.burns, quoteMintWritable: false },
       { direction, amountIn, minAmountOut, inHookAccounts: buy ? 0 : slice.length, outHookAccounts: buy ? slice.length : 0, hookData: new Uint8Array() },
-      [...slice, ...a.launchHookExtras(keys.mint, keys.quoteMint)],
+      [...slice, ...a.launchHookExtras(keys.mint, keys.quoteMint), ...(keys.quoteCutHook && !(keys.creator?.equals(trader) && keys.creator.equals(recipient)) ? a.quoteCutExtras(keys.quoteCutHook, keys.mint, trader) : [])],
     );
   },
 };

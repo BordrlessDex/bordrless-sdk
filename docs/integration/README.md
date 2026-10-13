@@ -3,6 +3,12 @@
 For trading terminals, aggregators, indexers, wallets and portfolio trackers that want to show and
 trade Bordrless tokens.
 
+**Changed 2026-10-13 (SDK 0.10.0):** apps can charge their own fee on swaps they route (the
+router: at most 1%, `router.swap`); a custom hook may take a SOL cut on every trade of its coin, so
+a trade on such a coin passes four more accounts (`launch.swap` adds them; `quoteCutExtras`);
+companions may share their beneficiary part with up to 10 payees, and scripts may pay any wallet SOL
+when their launcher allowed it. Full list: [CHANGELOG](../../packages/sdk/CHANGELOG.md).
+
 **Changed 2026-10-12 (SDK 0.9.0):** Snowball (a companion that trades its pot on the token's own
 pool), script companions and their approvals, a custom hook beside any companion, five-minute
 lottery rounds, and `tokenBalanceChanges` / `holdingBalanceChanges` for pre/post balances of
@@ -28,7 +34,7 @@ here is public and permissionless: read the chain, build transactions with
 [`@bordrless/sdk`](../../packages/sdk), and send them yourself.
 
 ```sh
-npm install @bordrless/sdk@0.9.0 @bordrless/shared@0.9.0 @solana/web3.js
+npm install @bordrless/sdk@0.10.0 @bordrless/shared@0.10.0 @solana/web3.js
 ```
 
 ## Integration checklist

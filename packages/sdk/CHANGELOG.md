@@ -4,6 +4,86 @@ The public package is `@bordrless/sdk` on npm, published from the public reposit
 BordrlessDex/bordrless-sdk together with `@bordrless/shared` (shared first; the SDK depends on the
 same version of it). The monorepo is where both are written.
 
+## 0.10.0 (13 Oct 2026)
+
+Everything since 0.9.0. The programs it mirrors are live on mainnet: the rules engine (`rules_hook`,
+`RULES_HOOK_PROGRAM`), the launchpad's SOL cut, the companion's payees and wallet payouts (verified
+build `708a6083…` of bordrless-programs `212f6ba`), and the router (`7M5GTuzh…`, verified build
+`f6718c16…`).
+
+### The router: an integrator fee on any swap
+
+- `router.swap(trader, integratorQuote, treasuryQuote, dexSwap, feeBps, minQuoteAfterFee)` wraps any
+  DEX swap (`launch.swap`, `swap.swap`) with an app's fee: at most 1% (`ROUTER_MAX_FEE_BPS`) of the
+  trade's quote side, a buy's from its input before the swap, a sell's from what it delivered; 20%
+  of it (`ROUTER_BORDRLESS_SHARE_BPS`) to the DEX treasury's holding (`routerTreasuryQuote`), the
+  rest to the integrator's. `routerFeeSplit` computes it as the program does. `ROUTER_PROGRAM`, the
+  router's IDL and errors. bordrless-programs `docs/router.md`.
+
+### Companions: payees and wallet payouts
+
+- **Payees:** `companion.setPayees(payer, mint, [{ wallet, bps }])` before the launch (the mint
+  signs): up to 10 wallets (`MAX_PAYEES`) share the beneficiary part, each its basis points of it;
+  the beneficiary keeps the rest. `companion.withdrawWithPayees(sender, mint, beneficiary, wallets)`
+  pays them (`Companion.payees` says a companion has them); a payee that can't take its part yet is
+  owed it. `payeesAddress`, `decodePayees` (with `beneficiaryOwed`), `COMPANION_VERSION_WITH_PAYEES`.
+- **Wallet payouts:** `companion.allowWalletPayouts(mint)` before the launch lets a script with
+  payout terms (`createScriptV2`) pay any wallet SOL within them: its answer is
+  `encodeWalletPayoutAnswer([{ to, lamports, tag }])` (version `WALLET_PAYOUT_ANSWER_VERSION`, each
+  wallet passed writable). `decodePayoutTerms(...).walletsAllowed`, `decodeWalletPayoutAnswer`,
+  `decodeScriptAnswer` (by version).
+- The companion IDL of 13 Oct: `set_payees`, `allow_wallet_payouts`, the `Payees` account, the events
+  `PayeesSet`, `PayeePaid`, `ScriptWalletPayout`, `WalletPayoutsAllowed`, errors 6087 to 6090.
+
+### Compose a hook: rules, no program
+
+- **The builder** (`rules.ts`, held to `vectors/rules.json` in @bordrless/shared, which the engine's
+  own tests read): `rules.compose({ keeps, destination, entryCapBps }).rule({ on, when, unless,
+  then, stop }).build()` throws the engine's own refusal by code (`RulesError`); the values
+  (`rules.gain.gt(0)`, `rules.sinceReceived.lt(3600)`, ...), the actions (`rules.cut`,
+  `rules.refuse`, `rules.count`, `rules.mark`), and the shared coders and words (`rules.encode`,
+  `rules.decode`, `rules.validate`, `rules.render`, `rules.flagsFor`, `rules.reading`).
+- **The engine's two instructions**, hand-encoded until its IDL exists, their wire format in one
+  block to check against it: `rulesHook.bind` (`bindData`, `bindKeys`, `BIND_DISCRIMINATOR`) and
+  `rulesHook.prepare` (`prepareData`, `prepareKeys`: the template's five accounts and the config's
+  `RuleSet`, read-only). `buildCreateComposedConfig`: `create_config` (or `create_listed_config`)
+  naming the engine with the set's flags, and `bind`, in one transaction.
+- **Reading what is there:** `ruleSetAddress`, `rulesStateAddress`, `decodeRuleSetAccount`,
+  `decodeRulesState`, `decodeRulesHolding` (the holding's 64 bytes, the Loss cover script's fields
+  at the same offsets), `rulesDestinationHolding`, `RULE_SET_LAYOUT`, `RULES_STATE_LAYOUT`,
+  `RULES_HOLDING_LAYOUT`.
+- **Listing it** (`workshop.ts`): `workshop.signIn(wallet, signMessage)` signs the Workshop's
+  sign-in message (a message, never a transaction) and answers the session;
+  `workshop.registerComposed(config, session)` lists a listed composed config on the Workshop's
+  shelves (`POST /v1/workshop/register`: no checks, no fee, six a day); `BORDRLESS_API`,
+  `WorkshopApiError` (the API's status and code).
+- **The escape hatch:** `rules.toStarter(set)` writes the Workshop template's `src/lib.rs` with the
+  same rules spelled out in Rust, for what the lane cannot say.
+
+### In @bordrless/shared
+
+- `rules.ts`: the language, `encodeRules` / `decodeRules`, `validateRules` (`RULES_ERROR_TEXT`),
+  `renderRules`, `rulesFlagsOf`, `rulesHookReading`, `rulesReadingWords`, `RULES_LIMITS`; the
+  engine's refusals by reason (`RULES_REFUSAL_ERRORS`, `RULES_REFUSAL_CODES`, `RULES_REFUSAL_TEXT`,
+  `refuseReasonOfError`, `refuseReasonOfCode`) and the line a refused trade says from the token's
+  own rules (`rulesRefusalLine`).
+- `HookReading.lane` and `.verdict` take `rules`; `WorkshopLane` takes `rules`; a composed hook's
+  set travels as `CustomHookInfo.rules` and `LaunchConfigData.customHook.rules` (`RulesReadout`).
+- `RULES_HOOK`, `RULES_HOOK_PROGRAM` (a placeholder until the engine is deployed).
+
+### The launchpad: a custom hook's SOL cut (live on mainnet)
+
+- **A custom hook's SOL cut** (launchpad upgrade of 13 Oct 2026, bordrless-programs `22932e5`,
+  `docs/quote-cut.md`): a launch config whose custom hook also takes SOL on every trade. The
+  launchpad asks the hook's `quote_cut`, caps its answer (at most 10% a side) and takes it with the
+  creator fee. `launch.createQuoteCutConfig`; `Launch.quoteCut` / `quoteCutAccrued` and
+  `LaunchConfigAccount.quoteCut` (`quoteCutCapsOf`, `QUOTE_CUT_MAX_BPS`); `quoteCutExtras`,
+  `quoteCutSignerAddress`, `quoteCutStateAddress`, `launchPoolRegistryListWithQuoteCut`.
+  `launchKeysOf` + `launch.swap` add the four accounts for the trader on such a coin (none for the
+  creator trading to itself); without them a trade fails with `QuoteCutAccountsMissing`. The launch
+  IDL gains `create_quote_cut_config`, the events `QuoteCutConfigured`, `LaunchQuoteCut` and
+  `QuoteCutTaken` (logged, not self-CPI) and the errors 6046 to 6049.
+
 ## 0.9.0 (prepared; npm has 0.8.0 until it is published)
 
 Everything since 0.8.0 (10 Oct 2026, phase 3a). The programs it mirrors are live on mainnet; the

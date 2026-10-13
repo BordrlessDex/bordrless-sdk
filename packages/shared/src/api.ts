@@ -3,6 +3,7 @@
  * (`Amount`), dollar figures as numbers, times as unix seconds. A figure the backend could not
  * read is null, never zero.
  */
+import type { RulesReadout } from './rules.ts';
 import type { WorkshopReading } from './workshop.ts';
 
 export type Address = string;
@@ -133,6 +134,33 @@ export interface CustomHookInfo {
    * from lists.
    */
   workshop?: HookReading | null;
+  /**
+   * A composed hook's rule set (docs/rules-lane.md §4): the hook is the rules engine and the set is
+   * the `RuleSet` bound to the launch's config, as the chain holds it (`RulesReadout`: its bytes and
+   * what they say). The one place the set travels: `workshop` beside it is the synthetic reading
+   * (`lane: 'rules'`, the words alone). Null for any other hook, or a set that could not be read;
+   * absent from older servers and from lists.
+   */
+  rules?: RulesReadout | null;
+  /**
+   * Its SOL cut (`QuoteCutInfo`), read live from the launch on a launch's own page (`LaunchDetail`):
+   * null when the launch takes none or could not be read; absent from older servers and from lists.
+   */
+  quoteCut?: QuoteCutInfo | null;
+}
+
+/**
+ * A custom hook's SOL cut (the launchpad of 13 Oct: a config made with `create_quote_cut_config`): on
+ * a trade the launchpad asks the hook for a rate, at most its side's cap, and takes it from the
+ * trade's SOL with the creator fee (a buy's SOL in, a sell's SOL out). It takes no tokens, and a send
+ * pays none of it.
+ */
+export interface QuoteCutInfo {
+  /** The caps, basis points of the trade's SOL (each at most 1,000). */
+  maxBuyBps: number;
+  maxSellBps: number;
+  /** SOL the cut has taken so far, lamports (part of the creator fees); '0' for a config, which has taken nothing. */
+  takenLamports: Amount;
 }
 
 /**
@@ -145,7 +173,10 @@ export interface CustomHookInfo {
  * `warn`: passed with notes; `fail`: only in the reading lane, where the words are shown anyway).
  * Served for an item that is approved and deployed (the Workshop lane), or matched (the reading
  * lane, docs/workshop.md "The reading lane": the builder deployed the program themselves, and the
- * words show while the code on chain stays the build Bordrless checked).
+ * words show while the code on chain stays the build Bordrless checked). A composed hook
+ * (docs/rules-lane.md §4) answers a synthetic one: `lane` and `verdict` `rules`, its words read
+ * from the rule set bound to the config (the set itself is `customHook.rules`), no measured cut,
+ * and `workshopId` '' while it is not listed.
  */
 export interface HookReading {
   workshopId: string;
@@ -155,11 +186,12 @@ export interface HookReading {
   kind: 'hook' | 'companion';
   reading: WorkshopReading | null;
   measuredCutBps: number | null;
-  verdict: 'pass' | 'warn' | 'fail' | null;
+  /** `rules`: a composed hook's, read from its rules (no review, no build, no trading test). */
+  verdict: 'pass' | 'warn' | 'fail' | 'rules' | null;
   /** Who approved it: the checks ('auto', a clean pass) or the operator; null for items approved before that was kept, and for the reading lane (nothing is approved). */
   approvedBy?: 'auto' | 'operator' | null;
-  /** `workshop`: Bordrless deployed it under its own key; `reading`: its builder deployed it, and Bordrless read the source that matches it. Absent from older servers: `workshop`. */
-  lane?: 'workshop' | 'reading';
+  /** `workshop`: Bordrless deployed it under its own key; `reading`: its builder deployed it, and Bordrless read the source that matches it; `rules`: composed from Bordrless rules and run by the rules engine. Absent from older servers: `workshop`. */
+  lane?: 'workshop' | 'reading' | 'rules';
   /** With a `fail` verdict: the titles of the review's first findings (the most severe first), for the site to say what failed. Absent otherwise. */
   findings?: string[];
 }
@@ -231,7 +263,15 @@ export type ProtocolModel = 'flat' | 'share';
 export interface LaunchConfigData {
   rules: LaunchRulesInput;
   creatorFeeBps: number;
-  customHook: { program: Address; flags: number; /** As `CustomHookInfo.about`. */ about?: HookAbout | null; risk?: HookRiskStatus | null } | null;
+  customHook: {
+    program: Address;
+    flags: number;
+    /** As `CustomHookInfo.about`. */
+    about?: HookAbout | null;
+    risk?: HookRiskStatus | null;
+    /** As `CustomHookInfo.rules`: a composed hook's rule set, read from the `RuleSet` bound to this config; null for any other hook or an unbound one. Absent from older servers. */
+    rules?: RulesReadout | null;
+  } | null;
   label: string;
 }
 
@@ -277,8 +317,9 @@ export interface ConfigInspection {
   requiredCompanion?: RequiredCompanion;
   /**
    * Bordrless's own words for the config's custom hook (`HookReading`) when it is a Workshop hook
-   * (or a pair's hook) that is approved and deployed; null for a hook deployed outside the
-   * Workshop, or one no longer approved. Absent from older servers.
+   * (or a pair's hook) that is approved and deployed, or a composed hook's synthetic reading
+   * (`lane: 'rules'`; its set is `config.customHook.rules`); null for a hook deployed outside the
+   * Workshop, one no longer approved, or the rules engine with no set bound. Absent from older servers.
    */
   hook?: HookReading | null;
 }
@@ -694,7 +735,38 @@ export interface LaunchPrepareRequest {
  * preset splits by name; with `game`, a lottery coin (docs/games.md): the split's holders' share is
  * then 0 and the pot's part (`game.potBps`) makes the four add up to 10,000.
  */
-export type CompanionRequest = { split: CompanionSplitBps; vestDays?: number; game?: GameRequest; snowball?: SnowballRequest; script?: ScriptRequest; lossCover?: LossCoverRequest } | { template: CompanionTemplate; vestDays?: number };
+export type CompanionRequest = ({ split: CompanionSplitBps; vestDays?: number; game?: GameRequest; snowball?: SnowballRequest; script?: ScriptRequest; lossCover?: LossCoverRequest } | { template: CompanionTemplate; vestDays?: number }) & CompanionExtras;
+
+/**
+ * What any companion request may add (2026-10-13, docs/payees-and-wallet-payouts.md), each set once
+ * before the launch, the mint signing:
+ * - `payees`: up to 10 wallets that share the launcher's part of the creator fee (the split's
+ *   `beneficiaryBps`), each a fixed share of that part (1 to 10,000 basis points, 10,000 in all at
+ *   most); the launcher keeps the rest. Not the launcher, the companion or its creator address, each
+ *   named once. Bounds: `payeesProblem`. The setup carries `set_payees`, in its own transaction when
+ *   the setup leaves no room (a Lossback or custom hook's setup).
+ * - `allowWalletPayouts`: a custom hook's script with payout terms (`script.payout`, made with
+ *   `create_script_v2`) may also pay any wallet SOL from the pot, within those terms. Refused
+ *   (`companion_rules`) on any other companion: `walletPayoutsProblem`.
+ */
+export interface CompanionExtras {
+  payees?: PayeeRequest[];
+  allowWalletPayouts?: boolean;
+}
+
+/** A wallet that shares the launcher's part of the creator fee (`set_payees`): its share of that part, basis points. */
+export interface PayeeRequest {
+  wallet: Address;
+  bps: number;
+}
+
+/** A payee as the token page shows it (`CompanionSummary.payees`): its share of the launcher's part, what it was paid and what it is owed (its account could not take it yet), lamports. */
+export interface PayeeSummary {
+  wallet: Address;
+  bps: number;
+  paid: Amount;
+  owed: Amount;
+}
 
 /**
  * A Lossback coin as the launch request names it (docs/loss-cover.md; the programs and the policy
@@ -740,7 +812,7 @@ export interface LossCoverSummary {
   hookState: Address;
   script: Address;
   scriptState: Address;
-  termsAddress: Address;
+  payoutTerms: Address;
   /** The pot (`Companion.pendingPot`), lamports. */
   pot: Amount;
   /** Lamports paid to holders all time, and entries recorded all time (touches included), the terms'. */
@@ -827,6 +899,21 @@ export interface ScriptRequest {
   interval: number;
   initData: string;
   stateLen: number;
+  /** Payout terms (2026-10-13): the script is made with `create_script_v2`, its payouts bound by them; absent, `create_script` (no payouts). Bounds: `scriptProblem`. */
+  payout?: PayoutTermsRequest;
+}
+
+/**
+ * A script's payout terms as a launch request names them (the companion's `PayoutTerms`, made by
+ * `create_script_v2`): the most one step pays (`stepBps` of the pot at the step's start), the most
+ * one holding or wallet gets of a step's budget (`holdingBps`), and the most a window pays
+ * (`windowBps` of the pot at the window's first step), the window `windowSecs` long (10 s to a day).
+ */
+export interface PayoutTermsRequest {
+  stepBps: number;
+  holdingBps: number;
+  windowBps: number;
+  windowSecs: number;
 }
 
 /** A custom companion's script as its token page shows it (`CompanionSummary.script`), read from the chain and the Workshop. */
@@ -873,6 +960,8 @@ export interface ScriptSummary {
    * Workshop script and from older servers.
    */
   lane?: 'workshop' | 'reading';
+  /** Its payout terms let it pay any wallet SOL from the pot (`allow_wallet_payouts`, `PayoutTerms.reserved[0]`, 2026-10-13); absent otherwise and from older servers. */
+  walletPayouts?: true;
 }
 
 /**
@@ -1257,6 +1346,8 @@ export interface CompanionSummary {
   script?: ScriptSummary | null;
   /** A Lossback coin's figures (docs/loss-cover.md); null for any other companion (a Lossback coin's `script` is set too); absent from older servers. */
   lossCover?: LossCoverSummary | null;
+  /** The wallets that share the launcher's part (`set_payees`, 2026-10-13); null for a companion without payees (or whose payees can't be read); absent from older servers. */
+  payees?: PayeeSummary[] | null;
 }
 
 /**

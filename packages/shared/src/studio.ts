@@ -579,7 +579,9 @@ export const MAX_AUTHOR_SHARE_BPS = 5_000;
  * The only share Studio lists with: a listed config's author gets half the creator fee of every
  * launch someone else makes from it (nothing when the config has no creator fee). It is not the
  * author's to choose. A config listed straight through the SDK may carry less, so the marketplace
- * always shows the share that is on chain.
+ * always shows the share that is on chain. A Workshop builder may take nothing instead
+ * (`WORKSHOP_AUTHOR_SHARES_BPS`): its config is then made with `create_config` (author share 0) and
+ * still shown on the marketplace, with 0% to its builder.
  */
 export const AUTHOR_SHARE_BPS = 5_000;
 

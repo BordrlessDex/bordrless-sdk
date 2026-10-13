@@ -12,7 +12,10 @@
  *    Bordrless's upgrade key. The builder never holds the upgrade authority.
  * 4. **Credit**: a hook's builder makes its launch config, listed, and earns `AUTHOR_SHARE_BPS` (half)
  *    of the creator fee of every launch someone else makes with it, fixed on chain. A companion's
- *    builder is paid the same half by the companion program.
+ *    builder is paid the same half by the companion program. A builder may take nothing instead
+ *    (`authorShareBps` 0, the owner, 2026-10-13): a hook's config is then made unlisted on chain
+ *    (`create_config`, no author share) and still shown on the shelves and the marketplace as theirs;
+ *    a companion's (or a pair's) script is approved on chain naming no author (the default key).
  *
  * Built on Studio's backend pipeline (studio_projects: review, build, trading test, deploy,
  * config); Studio's own pages are gone. Companions wait in a queue until the companion program's
@@ -37,7 +40,7 @@
  * no author share, nothing on the Workshop's shelves; the item's page is public once matched.
  */
 import type { Address, PreparedTx } from './api.ts';
-import type { StudioFile } from './studio.ts';
+import { AUTHOR_SHARE_BPS, type StudioFile } from './studio.ts';
 
 export type WorkshopKind = 'hook' | 'companion' | 'pair';
 export const WORKSHOP_KINDS: readonly WorkshopKind[] = ['hook', 'companion', 'pair'];
@@ -45,11 +48,13 @@ export const WORKSHOP_KINDS: readonly WorkshopKind[] = ['hook', 'companion', 'pa
 /**
  * Which lane an item is in: `workshop` (Bordrless checks, approves and deploys it under its own key)
  * or `reading` (the builder deployed it themselves; Bordrless reads and checks the source and, when
- * the build matches the program on chain, its words show wherever the program is used). Absent from
- * older servers: read as `workshop`.
+ * the build matches the program on chain, its words show wherever the program is used) or `rules`
+ * (docs/rules-lane.md §4: a composed hook, listed by its config; its program is the rules engine,
+ * its words are read from the rule set bound to the config, approved at once with no checks, no
+ * build, no trading test and no fee). Absent from older servers: read as `workshop`.
  */
-export type WorkshopLane = 'workshop' | 'reading';
-export const WORKSHOP_LANES: readonly WorkshopLane[] = ['workshop', 'reading'];
+export type WorkshopLane = 'workshop' | 'reading' | 'rules';
+export const WORKSHOP_LANES: readonly WorkshopLane[] = ['workshop', 'reading', 'rules'];
 
 /**
  * Where a submission stands: `unpaid` (taken; nothing runs until its builder pays the submission
@@ -193,7 +198,7 @@ export interface WorkshopItem {
    * Null for a hook; absent from older servers.
    */
   scriptApproved?: boolean | null;
-  /** Its lane (`WorkshopLane`); absent from older servers: `workshop`. A reading-lane item's `program` is the builder's own, from the start. */
+  /** Its lane (`WorkshopLane`); absent from older servers: `workshop`. A reading-lane item's `program` is the builder's own, from the start; a rules-lane item's is the rules engine and its `config` the composed config it was listed by. */
   lane?: WorkshopLane;
   /**
    * A reading-lane item: whether its build's executable hash equals the code on chain (true:
@@ -201,6 +206,14 @@ export interface WorkshopItem {
    * Null for a Workshop-lane item; absent from older servers.
    */
   matched?: boolean | null;
+  /**
+   * What its builder takes of the creator fee of every launch someone else makes with it, bps of the
+   * fee (`WORKSHOP_AUTHOR_SHARES_BPS`): `AUTHOR_SHARE_BPS` (half), or 0 when they chose to take
+   * nothing (a hook's config made unlisted on chain, a script approved naming no author). Recorded at
+   * the submission; a hook's is chosen again at its config step, until the config is made. 0 for a
+   * reading-lane item (it pays nobody). Absent from older servers: `AUTHOR_SHARE_BPS`.
+   */
+  authorShareBps?: number;
 }
 
 /** What a reading-lane item's match compared, and who can change the program (`WorkshopDetail.match`). */
@@ -302,6 +315,8 @@ export interface WorkshopSubmitRequest {
   scriptFiles?: StudioFile[];
   /** The program's address when the builder deployed it themselves (the reading lane). */
   program?: Address;
+  /** What its builder takes (`WORKSHOP_AUTHOR_SHARES_BPS`): `AUTHOR_SHARE_BPS` when absent, 0 to take nothing. A companion's or a pair's script is approved on chain with it; a hook's is its config step's first choice. */
+  authorShareBps?: number;
 }
 
 /**
@@ -345,9 +360,23 @@ export interface WorkshopDeployRequest {
 /** The creator fees a hook's builder may list its config with (they earn `AUTHOR_SHARE_BPS` of it). */
 export const WORKSHOP_CONFIG_FEES_BPS: readonly number[] = [50, 100, 200];
 
+/**
+ * What a Workshop builder may take of the creator fee of others' launches (the owner, 2026-10-13):
+ * `AUTHOR_SHARE_BPS` (half, the default), or nothing. Nothing in between: the shelves read "50%" or
+ * "0%" to the builder, and the backend refuses any other share (`author_share`).
+ */
+export const WORKSHOP_AUTHOR_SHARES_BPS: readonly number[] = [AUTHOR_SHARE_BPS, 0];
+
 /** `POST /v1/workshop/:id/config/prepare`: the builder's listed launch config on their deployed hook (a pair's: on its hook, requiring its script). */
 export interface WorkshopConfigPrepareRequest {
   creatorFeeBps: number;
+  /**
+   * A hook's: what its builder takes (`WORKSHOP_AUTHOR_SHARES_BPS`); the item's recorded choice when
+   * absent. 0 makes the config with `create_config` (no author share), still on the shelves and the
+   * marketplace. A pair's config never pays an author (its builder is paid by its script's approval):
+   * a pair refuses a share other than the one it was submitted with (`author_share_fixed`).
+   */
+  authorShareBps?: number;
   /** The address of a keypair the browser made; it signs after the wallet. */
   config: Address;
 }

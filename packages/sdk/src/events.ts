@@ -14,6 +14,7 @@ import { PublicKey } from '@solana/web3.js';
 import * as a from './addresses.ts';
 import { launchRulesData, type LaunchRulesData } from './accounts.ts';
 import { CODERS, type ProgramName } from './coders.ts';
+import { decodeCompanionPayoutEvent } from './lossCover.ts';
 
 /** `sha256("anchor:event")[..8]`, little-endian as Anchor writes it. */
 export const EVENT_IX_TAG = Buffer.from([0xe4, 0x45, 0xa5, 0x2e, 0x51, 0xcb, 0x9a, 0x1d]);
@@ -28,8 +29,8 @@ const PROGRAM_OF: ReadonlyMap<string, ProgramName> = new Map([
   [a.HALF_LIFE_PROGRAM.toBase58(), 'halfLife'],
 ]);
 
-/** Every program the SDK has a coder for, by id: the indexed ones above, the companion, the lottery hook, `hook_timelock` and `hook_vault`. */
-const ANY_PROGRAM_OF: ReadonlyMap<string, ProgramName> = new Map<string, ProgramName>([...PROGRAM_OF, [a.COMPANION_PROGRAM.toBase58(), 'companion'], [a.LOTTERY_HOOK_PROGRAM.toBase58(), 'lotteryHook'], [a.HOOK_TIMELOCK_PROGRAM.toBase58(), 'hookTimelock'], [a.HOOK_VAULT_PROGRAM.toBase58(), 'hookVault']]);
+/** Every program the SDK has a coder for, by id: the indexed ones above, the companion, the lottery hook, `hook_timelock`, `hook_vault`, the Loss cover hook and script. */
+const ANY_PROGRAM_OF: ReadonlyMap<string, ProgramName> = new Map<string, ProgramName>([...PROGRAM_OF, [a.COMPANION_PROGRAM.toBase58(), 'companion'], [a.LOTTERY_HOOK_PROGRAM.toBase58(), 'lotteryHook'], [a.HOOK_TIMELOCK_PROGRAM.toBase58(), 'hookTimelock'], [a.HOOK_VAULT_PROGRAM.toBase58(), 'hookVault'], [a.LOSS_COVER_HOOK_PROGRAM.toBase58(), 'lossCoverHook'], [a.LOSS_COVER_SCRIPT_PROGRAM.toBase58(), 'lossCoverScript'], [a.RULES_ENGINE_PROGRAM.toBase58(), 'rulesHook'], [a.ROUTER_PROGRAM.toBase58(), 'router']]);
 
 /** The SDK's name of a Bordrless program id whose events the indexer reads (`INDEXED_EVENT_PROGRAMS`); null for any other program. */
 export const programNameOf = (programId: string | PublicKey): ProgramName | null => PROGRAM_OF.get(typeof programId === 'string' ? programId : programId.toBase58()) ?? null;
@@ -82,10 +83,11 @@ export function flatten(value: unknown): unknown {
 export function decodeEventPayload(program: ProgramName, payload: Buffer): { name: string; data: Record<string, unknown> } | null {
   try {
     const ev = CODERS[program].events.decode(payload.toString('base64')) as { name: string; data: unknown } | null;
-    if (!ev) return null;
+    // The companion's payout events (`ScriptPayout`, `PayoutTermsSet`; docs/loss-cover.md §1) until its IDL on disk carries them.
+    if (!ev) return program === 'companion' ? decodeCompanionPayoutEvent(payload) : null;
     return { name: ev.name, data: flatten(ev.data) as Record<string, unknown> };
   } catch {
-    return null;
+    return program === 'companion' ? decodeCompanionPayoutEvent(payload) : null;
   }
 }
 
@@ -110,6 +112,39 @@ export function eventsOf(accountKeys: string[], inner: RawInnerInstruction[], de
     const decoded = decodeEventPayload(program, bytes.subarray(8));
     if (!decoded) continue;
     out.push({ ordinal: out.length, program, programId, name: decoded.name, data: decoded.data });
+  }
+  return out;
+}
+
+/** The programs whose events are logs (`emit!`, `Program data:` lines), not self-CPIs: the rules engine's `Bound` and `Prepared` (its instructions take no event authority). */
+export const LOG_EVENT_PROGRAMS: readonly ProgramName[] = ['rulesHook'];
+
+/**
+ * The events `programs` logged with `emit!` while they ran, read from a transaction's logs: each
+ * `Program data: <base64>` line belongs to the program on top of the invocation stack (`Program
+ * <id> invoke [n]` pushes it, `Program <id> success` or `failed` pops it). Ordinals count only these,
+ * from `first` (the indexer numbers them after the transaction's self-CPI events).
+ */
+export function logEventsOf(logs: readonly string[], programs: readonly ProgramName[] = LOG_EVENT_PROGRAMS, first = 0): DecodedEvent[] {
+  const out: DecodedEvent[] = [];
+  const stack: string[] = [];
+  for (const line of logs) {
+    const invoke = /^Program (\w+) invoke \[\d+\]/.exec(line);
+    if (invoke) {
+      stack.push(invoke[1]!);
+      continue;
+    }
+    if (/^Program \w+ (success|failed)/.test(line)) {
+      stack.pop();
+      continue;
+    }
+    if (!line.startsWith('Program data: ')) continue;
+    const programId = stack[stack.length - 1];
+    const program = programId ? ANY_PROGRAM_OF.get(programId) : undefined;
+    if (!programId || !program || !programs.includes(program)) continue;
+    const decoded = decodeEventPayload(program, Buffer.from(line.slice('Program data: '.length).trim(), 'base64'));
+    if (!decoded) continue;
+    out.push({ ordinal: first + out.length, program, programId, name: decoded.name, data: decoded.data });
   }
   return out;
 }

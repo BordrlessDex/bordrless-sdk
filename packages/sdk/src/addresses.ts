@@ -5,7 +5,7 @@
  * programs.
  */
 import { PublicKey, type AccountMeta } from '@solana/web3.js';
-import { ASSOCIATED_TOKEN_PROGRAM_ID, COMPUTE_BUDGET_PROGRAM_ID, HOOK_SIGNERS, NATIVE_MINT, PROGRAM_IDS, PROTOCOL_LOOKUP_TABLE_ADDRESSES, SYSTEM_PROGRAM_ID } from '@bordrless/shared';
+import { ASSOCIATED_TOKEN_PROGRAM_ID, COMPUTE_BUDGET_PROGRAM_ID, HOOK_SIGNERS, NATIVE_MINT, PROGRAM_IDS, PROTOCOL_LOOKUP_TABLE_ADDRESSES, RULES_HOOK_PROGRAM_ID_MAINNET, SYSTEM_PROGRAM_ID } from '@bordrless/shared';
 
 export const TOKEN_PROGRAM = new PublicKey(PROGRAM_IDS.token);
 export const SWAP_PROGRAM = new PublicKey(PROGRAM_IDS.swap);
@@ -21,6 +21,12 @@ export const LOTTERY_HOOK_PROGRAM = new PublicKey(PROGRAM_IDS.lotteryHook);
 export const HOOK_TIMELOCK_PROGRAM = new PublicKey(PROGRAM_IDS.hookTimelock);
 /** `hook_vault` (phase 3a): where a hook's cuts go, each slot with a policy fixed before the launch. */
 export const HOOK_VAULT_PROGRAM = new PublicKey(PROGRAM_IDS.hookVault);
+/** The Loss cover hook (`programs/loss_cover_hook`, docs/loss-cover.md; the site says Lossback): a Lossback coin's token hook, which keeps each holding's entry price and the cover it was paid. */
+export const LOSS_COVER_HOOK_PROGRAM = new PublicKey(PROGRAM_IDS.lossCoverHook);
+/** The Loss cover script (`programs/loss_cover_script`): the companion script of a Lossback coin, which names the holders under water. */
+export const LOSS_COVER_SCRIPT_PROGRAM = new PublicKey(PROGRAM_IDS.lossCoverScript);
+/** The router: an app's integrator fee on any DEX swap (docs/router.md). */
+export const ROUTER_PROGRAM = new PublicKey(PROGRAM_IDS.router);
 export const SYSTEM_PROGRAM = new PublicKey(SYSTEM_PROGRAM_ID);
 export const SPL_TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 export const SPL_TOKEN_2022_PROGRAM = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
@@ -160,6 +166,26 @@ export function launchHookExtras(mint: PublicKey, quoteMint: PublicKey): Account
   ];
 }
 
+/** The launchpad's signer of `hook`'s `quote_cut`: `PDA(["quote-cut", hook], launchpad)` (`docs/quote-cut.md`). */
+export const quoteCutSignerAddress = (hook: PublicKey): PublicKey => pda([enc('quote-cut'), hook.toBuffer()], LAUNCH_PROGRAM);
+/** A custom hook's state the launchpad passes, writable, to its `quote_cut`: `PDA(["state", mint], hook)` (the Workshop template's `hookStateAddress`). */
+export const quoteCutStateAddress = (hook: PublicKey, mint: PublicKey): PublicKey => pda([enc('state'), mint.toBuffer()], hook);
+
+/**
+ * The four accounts a trade by `actor` on a launch whose custom hook `hook` takes a SOL cut passes
+ * after `launchHookExtras` (the pool's registry lists them at 9 to 12): the hook, `actor`'s holding
+ * of the token, the hook's state (w) and the launchpad's signer for the hook. Without them the trade
+ * fails (`QuoteCutAccountsMissing`); the launch's creator may leave them out.
+ */
+export function quoteCutExtras(hook: PublicKey, mint: PublicKey, actor: PublicKey): AccountMeta[] {
+  return [
+    { pubkey: hook, isSigner: false, isWritable: false },
+    { pubkey: holdingAddress(mint, actor), isSigner: false, isWritable: false },
+    { pubkey: quoteCutStateAddress(hook, mint), isSigner: false, isWritable: true },
+    { pubkey: quoteCutSignerAddress(hook), isSigner: false, isWritable: false },
+  ];
+}
+
 // ---- example hook ----------------------------------------------------------------------------------
 
 export const taxConfigAddress = (mint: PublicKey): PublicKey => pda([enc('tax'), mint.toBuffer()], TAX_HOOK_PROGRAM);
@@ -199,6 +225,12 @@ export const approvalAddress = (program: PublicKey): PublicKey => pda([enc('appr
 export const scriptAddress = (mint: PublicKey): PublicKey => pda([enc('script'), mint.toBuffer()], COMPANION_PROGRAM);
 /** A script's state: `PDA(["script-state", mint])` under the companion, which `create_script` makes (zeroed, owned by the script) when the script asks for one; passed to `create_script` and `script_step` either way. */
 export const scriptStateAddress = (mint: PublicKey): PublicKey => pda([enc('script-state'), mint.toBuffer()], COMPANION_PROGRAM);
+/** A script companion's payout terms (docs/loss-cover.md §1): `PDA(["payout-terms", mint])` under the companion, made by `create_script_v2`. */
+export const payoutTermsAddress = (mint: PublicKey): PublicKey => pda([enc('payout-terms'), mint.toBuffer()], COMPANION_PROGRAM);
+/** The wallets that share a companion's beneficiary part: `PDA(["payees", mint])` (2026-10-13). */
+export const payeesAddress = (mint: PublicKey): PublicKey => pda([enc('payees'), mint.toBuffer()], COMPANION_PROGRAM);
+/** The one signer of a hook's `record_payout`: `PDA(["payout-authority"])` under the companion (`8XJcBC…`, bump 251), a program-wide address that signs nothing else. */
+export const PAYOUT_AUTHORITY = pda([enc('payout-authority')], COMPANION_PROGRAM);
 
 // ---- Games (companion v2, docs/companions.md "Games") ------------------------------------------------
 
@@ -221,6 +253,20 @@ export const TOKEN_HOOK_SIGNER_LOTTERY = tokenHookSigner(LOTTERY_HOOK_PROGRAM);
 /** The lottery hook's `["hook-authority"]` (`6oZ9Lk…`, bump 255): it signs the token program's `write_hook_data` in `enter`. */
 export const LOTTERY_HOOK_AUTHORITY = hookAuthority(LOTTERY_HOOK_PROGRAM);
 export const LOTTERY_EVENT_AUTHORITY = eventAuthority(LOTTERY_HOOK_PROGRAM);
+
+// ---- Loss cover (docs/loss-cover.md; the site says Lossback) ------------------------------------------
+
+/** The Loss cover hook's state for a mint: `PDA(["state", mint])` under the hook (274 bytes). */
+export const lossCoverStateAddress = (mint: PublicKey): PublicKey => gameStateAddress(LOSS_COVER_HOOK_PROGRAM, mint);
+/** The Loss cover hook's registry for a mint: `["bordrless-hook-accounts", mint]` under the hook. */
+export const lossCoverRegistryAddress = (mint: PublicKey): PublicKey => registryAddress(LOSS_COVER_HOOK_PROGRAM, mint);
+/** The token program's signer of the Loss cover hook's callbacks (`A2WKjd…`). */
+export const TOKEN_HOOK_SIGNER_LOSS_COVER = tokenHookSigner(LOSS_COVER_HOOK_PROGRAM);
+/** The Loss cover hook's `["hook-authority"]` (`J7duBV…`, bump 252): it signs the token program's `write_hook_data` in `record_payout`. */
+export const LOSS_COVER_HOOK_AUTHORITY = hookAuthority(LOSS_COVER_HOOK_PROGRAM);
+export const LOSS_COVER_EVENT_AUTHORITY = eventAuthority(LOSS_COVER_HOOK_PROGRAM);
+/** The Loss cover script's state for a mint: the companion's `["script-state", mint]` (128 bytes, owned by the script). */
+export const lossCoverScriptStateAddress = (mint: PublicKey): PublicKey => scriptStateAddress(mint);
 /** The incinerator: lamports sent to it are burned (where `burn_stranded` sends a blocked game's stranded buyback). */
 export const INCINERATOR = new PublicKey('1nc1nerator11111111111111111111111111111111');
 /** The slot hashes sysvar: `draw` makes its seed from the parent slot's hash. */
@@ -237,3 +283,16 @@ export const oraoRequestAddress = (seed: Uint8Array): PublicKey => {
   if (seed.length !== 32) throw new RangeError(`a seed is 32 bytes, not ${seed.length}`);
   return pda([enc('orao-vrf-randomness-request'), Buffer.from(seed)], ORAO_VRF_PROGRAM);
 };
+
+// ---- The rules engine (programs/rules_hook, docs/rules-lane.md) -----------------------------------------
+
+/**
+ * The rules engine's program id (`RULES_HOOK_PROGRAM_ID_MAINNET`): what the SDK builds `bind`,
+ * `prepare` and `record_payout` for. Built, not deployed yet (2026-10-12): the API's lane stays
+ * closed until `RULES_HOOK_PROGRAM` in `@bordrless/shared` is set to it.
+ */
+export const RULES_ENGINE_PROGRAM = new PublicKey(RULES_HOOK_PROGRAM_ID_MAINNET);
+/** The token program's signer of the engine's callbacks (`FaU6dr…`). */
+export const TOKEN_HOOK_SIGNER_RULES = tokenHookSigner(RULES_ENGINE_PROGRAM);
+/** The engine's `["hook-authority"]` (`9SydDj…`, bump 254): it signs `write_hook_data` in `record_payout`. */
+export const RULES_ENGINE_HOOK_AUTHORITY = hookAuthority(RULES_ENGINE_PROGRAM);

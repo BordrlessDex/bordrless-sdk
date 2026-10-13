@@ -10,6 +10,7 @@
 import anchor from '@anchor-lang/core';
 import type { PublicKey } from '@solana/web3.js';
 import * as a from './addresses.ts';
+import { RULES_REFUSAL_TEXT } from '@bordrless/shared';
 import { IDL, type ProgramName } from './coders.ts';
 import { anyProgramNameOf } from './events.ts';
 
@@ -39,6 +40,10 @@ export const PROGRAM_ERRORS: Readonly<Record<ProgramName, ReadonlyMap<number, Pr
   lotteryHook: table(IDL.lotteryHook),
   hookTimelock: table(IDL.hookTimelock),
   hookVault: table(IDL.hookVault),
+  lossCoverHook: table(IDL.lossCoverHook),
+  lossCoverScript: table(IDL.lossCoverScript),
+  rulesHook: table(IDL.rulesHook),
+  router: table(IDL.router),
 };
 
 const ANCHOR_ERRORS: ReadonlyMap<number, ProgramErrorEntry> = new Map(
@@ -99,6 +104,10 @@ const EXPLANATIONS: Partial<Record<ProgramName, Readonly<Record<string, string>>
     InvalidLabel: 'A config’s label is at most 32 bytes.',
     HookTimelockInvalid: 'This hook’s upgrade authority is its timelock: pass its Timelock account (a delay of at least 3 days).',
     HookTimelockPending: 'This hook’s timelock holds a proposal of new code: no config or launch is made on it until its author cancels the proposal (or it lands), so buyers always get the full notice.',
+    InvalidQuoteCut: 'A SOL cut needs the config’s custom hook, at most 10% on each side and above 0 on one.',
+    QuoteCutAccountsMissing: 'This coin’s hook takes a SOL cut on every trade: the trade needs four more accounts (update the SDK, or resolve the pool’s registry).',
+    QuoteCutWrongAccount: 'One of the SOL cut’s accounts is not this trade’s (the hook, your holding of the token, the hook’s state, the launchpad’s signer).',
+    QuoteCutBadAnswer: 'The coin’s hook answered something other than a rate: its trades fail until its author fixes it.',
   },
   companion: {
     PotTooSmall: 'The pot is below the game’s minimum: the draw waits for more fees.',
@@ -155,6 +164,14 @@ const EXPLANATIONS: Partial<Record<ProgramName, Readonly<Record<string, string>>
     ShareTooSmall: 'A share must be at least 0.001 SOL.',
     NoEligibleHolders: 'Nobody is eligible for holder rewards yet, so nothing can be shared.',
   },
+  /** The rules engine (docs/rules-lane.md): a composed hook's four refusals, as the API says them (`RULES_REFUSAL_TEXT`). */
+  rulesHook: {
+    CoolingDown: RULES_REFUSAL_TEXT.cooling,
+    OverCap: RULES_REFUSAL_TEXT.cap,
+    Locked: RULES_REFUSAL_TEXT.locked,
+    Refused: RULES_REFUSAL_TEXT.rule,
+    Unbound: 'This token was prepared with another config’s rules than the one it launched from: it cannot trade.',
+  },
 };
 
 export interface ProgramErrorInfo {
@@ -178,7 +195,7 @@ const sentence = (text: string): string => {
   return /[.!?]$/.test(capital) ? capital : `${capital}.`;
 };
 
-const PROGRAM_IDS_BY_NAME: Readonly<Record<ProgramName, PublicKey>> = { token: a.TOKEN_PROGRAM, swap: a.SWAP_PROGRAM, bridge: a.BRIDGE_PROGRAM, launch: a.LAUNCH_PROGRAM, kit: a.KIT_PROGRAM, taxHook: a.TAX_HOOK_PROGRAM, halfLife: a.HALF_LIFE_PROGRAM, companion: a.COMPANION_PROGRAM, lotteryHook: a.LOTTERY_HOOK_PROGRAM, hookTimelock: a.HOOK_TIMELOCK_PROGRAM, hookVault: a.HOOK_VAULT_PROGRAM };
+const PROGRAM_IDS_BY_NAME: Readonly<Record<ProgramName, PublicKey>> = { token: a.TOKEN_PROGRAM, swap: a.SWAP_PROGRAM, bridge: a.BRIDGE_PROGRAM, launch: a.LAUNCH_PROGRAM, kit: a.KIT_PROGRAM, taxHook: a.TAX_HOOK_PROGRAM, halfLife: a.HALF_LIFE_PROGRAM, companion: a.COMPANION_PROGRAM, lotteryHook: a.LOTTERY_HOOK_PROGRAM, hookTimelock: a.HOOK_TIMELOCK_PROGRAM, hookVault: a.HOOK_VAULT_PROGRAM, lossCoverHook: a.LOSS_COVER_HOOK_PROGRAM, lossCoverScript: a.LOSS_COVER_SCRIPT_PROGRAM, rulesHook: a.RULES_ENGINE_PROGRAM, router: a.ROUTER_PROGRAM };
 
 /** The error `code` of `program` (its SDK name or its id), explained. */
 export function explainProgramError(program: ProgramName | string | PublicKey, code: number): ProgramErrorInfo {

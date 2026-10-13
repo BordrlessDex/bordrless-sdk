@@ -34,6 +34,22 @@ export const PROGRAM_IDS = {
    * permissionless crank under the companion's buyback guards. Not deployed yet (2026-10-09).
    */
   hookVault: '5cojoUStG7WFhHJiSncCUEwTqDuhDLKu4a9BqTbF8jzG',
+  /**
+   * The Loss cover hook (programs/loss_cover_hook, docs/loss-cover.md §2; the site says Lossback):
+   * a Lossback coin's token hook, which keeps each holding's average entry price, the cover it was
+   * paid and the round it was last recorded in. Keypair generated 2026-10-12.
+   */
+  lossCoverHook: '6KMdXC3Fxovp3pnUsdQuUbderPzZtTA4t6R1jacYJWQr',
+  /**
+   * The Loss cover script (programs/loss_cover_script, docs/loss-cover.md §3): the companion script
+   * of a Lossback coin, which names the holders under water and what each gets; the companion pays.
+   */
+  lossCoverScript: '9mRXU9gpWY3B13AyuCCtNjHnKt1pUFBQ6vJDLTwgakhm',
+  /**
+   * The router (programs/bordrless_router, docs/router.md, 2026-10-13): an app's integrator fee on
+   * any DEX swap, at most 1% of the quote side, 20% of it to the DEX treasury.
+   */
+  router: '7M5GTuzhByzBbrJURzLtbBrFjcsC8aHu816qWTXAYD85',
 } as const;
 
 /**
@@ -71,6 +87,78 @@ export const LOTTERY_HOOK = {
 
 /** The creator fees (basis points) a lottery coin can launch with: those with a `LaunchConfig` in `LOTTERY_HOOK.launchConfigs`. */
 export const lotteryFeeChoices = (): number[] => Object.keys(LOTTERY_HOOK.launchConfigs).map(Number).filter((bps) => bps > 0);
+
+/**
+ * The Loss cover hook's fixed facts (programs/loss_cover_hook, docs/loss-cover.md §2; the site
+ * says Lossback): the flags a `LaunchConfig` names for it (`BEFORE_TRANSFER | BEFORE_BURN |
+ * WRITES_HOOK_DATA`, the lottery hook's), the token program's signer of its callbacks
+ * (`["hook-authority", hook]` under the token program), its own `["hook-authority"]` (which signs
+ * the token program's `write_hook_data` in `record_payout`) with its bump, and the `LaunchConfig`s
+ * a Lossback coin launches from, one per creator fee, made by `pnpm admin loss-cover-configs`
+ * (which prints the lines to paste here); the backend lays
+ * `LOSS_COVER_LAUNCH_CONFIGS` over it.
+ */
+export const LOSS_COVER_HOOK = {
+  program: PROGRAM_IDS.lossCoverHook,
+  flags: 145,
+  tokenHookSigner: 'A2WKjdKC4PurtabNwhvKJvWdxKXLvt79qrzre7GE8XTe',
+  hookAuthority: 'J7duBVXCMbN1BLp4mt7myzVvRsvXRPU3BAhFyksDSPAm',
+  hookAuthorityBump: 252,
+  readme: 'https://github.com/BordrlessDex/bordrless-programs/tree/main/programs/loss_cover_hook',
+  // Made 2026-10-12 22:26 UTC by `pnpm admin loss-cover-configs --send` (5xsib), no token rules, the Loss cover hook with flags 145.
+  launchConfigs: {
+    50: 'DCNLF3jvZvo6SMTa9dG8y2E7CgB7VZr2C5tQrs83HR84',
+    100: '8E1UWZ8PXYrWvfBNRxVSzceR4ywLmHQYAXvWZ4JkUhQZ',
+    200: '8PLEsXW4hbEfYXgtRWxZhe7nTvjeYR1XdY5ehKj8z3Xr',
+  } as Readonly<Partial<Record<number, string>>>,
+} as const;
+
+/**
+ * The rules engine's program id (`programs/rules_hook`, its keypair `keys/mainnet/rules_hook-keypair.json`):
+ * BUILT, NOT DEPLOYED YET (2026-10-12). The SDK builds `bind` and `prepare` for it; the lane opens
+ * only when `RULES_HOOK_PROGRAM` below is set to it, after the deploy lands.
+ */
+export const RULES_HOOK_PROGRAM_ID_MAINNET = 'AfDhsethmkoimbyoSWnRfLtjFXZteRNtbFMioR9qWMjD';
+
+/**
+ * The rules engine (`programs/rules_hook`, docs/rules-lane.md): Bordrless's one token hook that
+ * runs a composed rule set bound to a launch config (`RuleSet` at `["rules", config]` under it).
+ * The lane's switch: a placeholder, the system program's id, until the engine is deployed, so
+ * nothing can name it as a hook (the launch program refuses the protocol's own programs), every
+ * check that compares a hook with it is false and the API answers `rules_closed`. Set to
+ * `RULES_HOOK_PROGRAM_ID_MAINNET` once the deploy lands; `RULES_HOOK.flags` are per rule set
+ * (`rulesFlagsOf`), never fixed.
+ */
+export const RULES_HOOK_PROGRAM: string = RULES_HOOK_PROGRAM_ID_MAINNET;
+
+/** The engine's fixed facts, as the other hooks have them; `deployed` tells the site and the API whether the lane is live on chain (false while the id is the placeholder, the system program's). */
+export const RULES_HOOK = {
+  program: RULES_HOOK_PROGRAM,
+  deployed: (RULES_HOOK_PROGRAM as string) !== '11111111111111111111111111111111',
+  /** `RuleSet` seed under the engine, with the launch config. */
+  ruleSetSeed: 'rules',
+  /** The per-mint state seed, the template's. */
+  stateSeed: 'state',
+  /** The engine's id once deployed (`RULES_HOOK_PROGRAM_ID_MAINNET`), and its PDAs: the token program's signer of its callbacks, and its `["hook-authority"]` (signs `write_hook_data` in `record_payout`). */
+  programId: RULES_HOOK_PROGRAM_ID_MAINNET,
+  tokenHookSigner: 'FaU6drNBY2nayBkXiirtk5c29Hw3rqXMtv2K1La5V4cG',
+  hookAuthority: '9SydDjwfgWaG8akwwsEpTpRpdoVZCtMYSeiqf6EkMdkK',
+  hookAuthorityBump: 254,
+  /** The accounts' sizes: the `RuleSet` and the per-mint state. */
+  ruleSetLen: 447,
+  stateLen: 628,
+  readme: 'https://github.com/BordrlessDex/bordrless-programs/tree/main/programs/rules_hook',
+} as const;
+
+/** The Loss cover script's fixed facts (programs/loss_cover_script, docs/loss-cover.md §3): its program and the size of the state `create_script_v2` must ask for. */
+export const LOSS_COVER_SCRIPT = {
+  program: PROGRAM_IDS.lossCoverScript,
+  stateLen: 128,
+  readme: 'https://github.com/BordrlessDex/bordrless-programs/tree/main/programs/loss_cover_script',
+} as const;
+
+/** The creator fees (basis points) a Lossback coin can launch with: those with a `LaunchConfig` in `LOSS_COVER_HOOK.launchConfigs` (the backend's env adds to them). */
+export const lossCoverFeeChoices = (): number[] => Object.keys(LOSS_COVER_HOOK.launchConfigs).map(Number).filter((bps) => bps > 0);
 
 /**
  * Half-Life, Bordrless's own token hook (programs/half_life/README.md): the `LaunchConfig` the
@@ -184,6 +272,8 @@ export const FIXED_ADDRESSES = {
   kitHookAuthority: '2repKA1JgDkBo4AffscVee342dcBcH6c2yfpUTRrAiEN',
   /** `["__event_authority"]` under the companion program. */
   companionEventAuthority: '7QuoYRuD9MHzX5EN7qqj62iwNPVqfy74RzmwJ524cgDt',
+  /** `["payout-authority"]` under the companion program (bump 251): the one signer of a hook's `record_payout` (docs/loss-cover.md §1); it signs nothing else. */
+  companionPayoutAuthority: '8XJcBCYmYyggTQBNvK3RausfyRMpmtjJTjKd53W3StkG',
 } as const;
 
 /**

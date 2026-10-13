@@ -25,6 +25,13 @@ export const IDL = {
   lotteryHook: require('../idl/lottery_hook.json') as Idl,
   hookTimelock: require('../idl/hook_timelock.json') as Idl,
   hookVault: require('../idl/hook_vault.json') as Idl,
+  /** The Loss cover hook and script (docs/loss-cover.md; the site says Lossback). */
+  lossCoverHook: require('../idl/loss_cover_hook.json') as Idl,
+  lossCoverScript: require('../idl/loss_cover_script.json') as Idl,
+  /** The rules engine (programs/rules_hook, docs/rules-lane.md): built, not deployed yet (`RULES_ENGINE_PROGRAM`). */
+  rulesHook: require('../idl/rules_hook.json') as Idl,
+  /** The router: an integrator fee on any DEX swap (docs/router.md). */
+  router: require('../idl/bordrless_router.json') as Idl,
 };
 
 function coder(idl: Idl): Coder {
@@ -44,6 +51,10 @@ export const CODERS = {
   lotteryHook: coder(IDL.lotteryHook),
   hookTimelock: coder(IDL.hookTimelock),
   hookVault: coder(IDL.hookVault),
+  lossCoverHook: coder(IDL.lossCoverHook),
+  lossCoverScript: coder(IDL.lossCoverScript),
+  rulesHook: coder(IDL.rulesHook),
+  router: coder(IDL.router),
 };
 
 export type ProgramName = keyof typeof CODERS;
