@@ -108,6 +108,11 @@ const EXPLANATIONS: Partial<Record<ProgramName, Readonly<Record<string, string>>
     QuoteCutAccountsMissing: 'This coin’s hook takes a SOL cut on every trade: the trade needs four more accounts (update the SDK, or resolve the pool’s registry).',
     QuoteCutWrongAccount: 'One of the SOL cut’s accounts is not this trade’s (the hook, your holding of the token, the hook’s state, the launchpad’s signer).',
     QuoteCutBadAnswer: 'The coin’s hook answered something other than a rate: its trades fail until its author fixes it.',
+    InvalidPartnerShare: 'A partner’s share is 1% to 100% of the creator fee, and with the author’s share at most 100% in all.',
+    InvalidPartner: 'Name the partner’s wallet: the default key can’t be paid.',
+    PartnerAccountsMissing: 'This coin pays a partner: the claim needs the partner’s account and its holding of bridged SOL (update the SDK, or pass `partner`).',
+    NoPartnerShare: 'This coin pays no partner, so there is nothing to distribute: its creator claims its fees.',
+    PartnerOnCompanion: 'A coin whose creator fee runs through a program (a companion) can’t launch from a partner config. Share your part with payees instead.',
   },
   companion: {
     PotTooSmall: 'The pot is below the game’s minimum: the draw waits for more fees.',

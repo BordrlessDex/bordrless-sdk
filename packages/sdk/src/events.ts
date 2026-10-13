@@ -318,6 +318,38 @@ export interface AuthorFeesPaidEvent {
   ts: number;
 }
 
+/** launch `PartnerConfigured`: a partner config (`create_partner_config`, docs/partner-fee.md), after its `LaunchConfigCreated`: every launch from it pays `partner` `partnerShareBps` of its creator fee. */
+export interface PartnerConfiguredEvent {
+  kind: 'launch.PartnerConfigured';
+  config: string;
+  partner: string;
+  partnerShareBps: number;
+  ts: number;
+}
+
+/** launch `LaunchPartner`: a launch made from a partner config, after its `LaunchCreated`. */
+export interface LaunchPartnerEvent {
+  kind: 'launch.LaunchPartner';
+  launch: string;
+  mint: string;
+  config: string;
+  partnerShareBps: number;
+  ts: number;
+}
+
+/** launch `PartnerFeesPaid`: a partner's part of a claim of a launch's creator fees, whoever claimed. `paidTotal` counts every launch of the config. */
+export interface PartnerFeesPaidEvent {
+  kind: 'launch.PartnerFeesPaid';
+  launch: string;
+  mint: string;
+  config: string;
+  partner: string;
+  amount: bigint;
+  paidTotal: bigint;
+  slot: bigint;
+  ts: number;
+}
+
 /** kit `KitInstalled`: in the `create_launch` transaction of a launch with kit rules. */
 export interface KitInstalledEvent {
   kind: 'kit.KitInstalled';
@@ -375,6 +407,9 @@ export type TypedEvent =
   | LaunchConfigCreatedEvent
   | ConfigListedEvent
   | AuthorFeesPaidEvent
+  | PartnerConfiguredEvent
+  | LaunchPartnerEvent
+  | PartnerFeesPaidEvent
   | KitInstalledEvent
   | KitGraduatedEvent
   | RewardsClaimedEvent
@@ -486,6 +521,12 @@ export function typedEvent(ev: DecodedEvent): TypedEvent | null {
       return { kind: 'launch.ConfigListed', config: s(d.config), author: s(d.author), authorShareBps: n(d.authorShareBps), ts: n(d.ts) };
     case 'launch.AuthorFeesPaid':
       return { kind: 'launch.AuthorFeesPaid', launch: s(d.launch), mint: s(d.mint), config: s(d.config), author: s(d.author), amount: b(d.amount), paidTotal: b(d.paidTotal), slot: b(d.slot), ts: n(d.ts) };
+    case 'launch.PartnerConfigured':
+      return { kind: 'launch.PartnerConfigured', config: s(d.config), partner: s(d.partner), partnerShareBps: n(d.partnerShareBps), ts: n(d.ts) };
+    case 'launch.LaunchPartner':
+      return { kind: 'launch.LaunchPartner', launch: s(d.launch), mint: s(d.mint), config: s(d.config), partnerShareBps: n(d.partnerShareBps), ts: n(d.ts) };
+    case 'launch.PartnerFeesPaid':
+      return { kind: 'launch.PartnerFeesPaid', launch: s(d.launch), mint: s(d.mint), config: s(d.config), partner: s(d.partner), amount: b(d.amount), paidTotal: b(d.paidTotal), slot: b(d.slot), ts: n(d.ts) };
     case 'kit.KitInstalled':
       return {
         kind: 'kit.KitInstalled',

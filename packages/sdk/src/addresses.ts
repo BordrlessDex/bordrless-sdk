@@ -168,6 +168,8 @@ export function launchHookExtras(mint: PublicKey, quoteMint: PublicKey): Account
 
 /** The launchpad's signer of `hook`'s `quote_cut`: `PDA(["quote-cut", hook], launchpad)` (`docs/quote-cut.md`). */
 export const quoteCutSignerAddress = (hook: PublicKey): PublicKey => pda([enc('quote-cut'), hook.toBuffer()], LAUNCH_PROGRAM);
+/** A partner config's partner account (`docs/partner-fee.md`): `PDA(["partner", config], LAUNCH_PROGRAM)`. */
+export const partnerFeeAddress = (config: PublicKey): PublicKey => pda([enc('partner'), config.toBuffer()], LAUNCH_PROGRAM);
 /** A custom hook's state the launchpad passes, writable, to its `quote_cut`: `PDA(["state", mint], hook)` (the Workshop template's `hookStateAddress`). */
 export const quoteCutStateAddress = (hook: PublicKey, mint: PublicKey): PublicKey => pda([enc('state'), mint.toBuffer()], hook);
 

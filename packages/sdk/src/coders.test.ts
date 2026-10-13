@@ -240,7 +240,7 @@ describe('errors are explained by the program that failed (codes overlap)', () =
     expect(explainProgramError('launch', 2006)).toMatchObject({ name: 'ConstraintSeeds' });
     expect(explainProgramError('kit', 6999).name).toBeNull();
     expect(explainProgramError('swap', 6037)).toMatchObject({ name: 'NotBridgedSol', message: "the pool's quote is not bridged SOL" });
-    expect([PROGRAM_ERRORS.kit.size, PROGRAM_ERRORS.launch.size, PROGRAM_ERRORS.swap.size, PROGRAM_ERRORS.token.size, PROGRAM_ERRORS.bridge.size, PROGRAM_ERRORS.taxHook.size]).toEqual([29, 50, 38, 27, 14, 6]);
+    expect([PROGRAM_ERRORS.kit.size, PROGRAM_ERRORS.launch.size, PROGRAM_ERRORS.swap.size, PROGRAM_ERRORS.token.size, PROGRAM_ERRORS.bridge.size, PROGRAM_ERRORS.taxHook.size]).toEqual([29, 55, 38, 27, 14, 6]);
   });
 
   it('explains the companion\'s game errors and the lottery hook\'s, read from the logs of a failed step', () => {

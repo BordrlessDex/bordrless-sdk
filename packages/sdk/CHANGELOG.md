@@ -4,6 +4,33 @@ The public package is `@bordrless/sdk` on npm, published from the public reposit
 BordrlessDex/bordrless-sdk together with `@bordrless/shared` (shared first; the SDK depends on the
 same version of it). The monorepo is where both are written.
 
+## 0.11.0 (13 Oct 2026)
+
+The launchpad's partner fee, live on mainnet (verified build `614760c7…` of bordrless-programs
+`9e644e7`; bordrless-programs `docs/partner-fee.md`). The launchpad's largest creator fee is now
+1,000 bps (10%, `Config.max_creator_fee_bps`).
+
+### The partner fee
+
+- `buildCreatePartnerConfig(creator, args, partner, partnerShareBps, { authorShareBps?, cut?, hookTimelocked? })`
+  (or `launch.createPartnerConfig`): a launch config whose every launch, whoever makes it, pays
+  `partner` `partnerShareBps` of its creator fee (1 to 10,000 bps of it, `MAX_PARTNER_SHARE_BPS`)
+  as bridged SOL on every claim, Meteora-style. It may list an author's share too (at most 10,000 in
+  all with the partner's) and carry a custom hook's SOL cut. Fixed for ever. The partner's holding
+  of bridged SOL must exist before its coins' fees are claimed.
+- `launch.distributeFees(mint, quoteMint, config, creator, partner, author?)`: anyone pays a partner
+  launch's creator fees out to every party at once, each to its own fixed holding (no signer but the
+  fee payer).
+- `launch.claimCreatorFees(..., author, partner)` and `launch.claimAuthorFees(..., partner)` take the
+  partner's accounts (`launch.partnerAccounts`); a launch that pays a partner refuses a claim without
+  them (`PartnerAccountsMissing`). `partnerOf(connection, launch)` reads them.
+- `feeSplit(amount, authorShareBps, partnerShareBps)` splits a claim as the program does.
+- `partnerFeeAddress`, `decodePartnerFee` (`PartnerFeeAccount`), `Launch.partnerShareBps`,
+  `LaunchConfigAccount.partnerShareBps`; the events `PartnerConfigured`, `LaunchPartner`,
+  `PartnerFeesPaid`; the errors `InvalidPartnerShare`, `InvalidPartner`, `PartnerAccountsMissing`,
+  `NoPartnerShare`, `PartnerOnCompanion` (a companion coin can't launch from a partner config); the
+  launchpad's IDL.
+
 ## 0.10.0 (13 Oct 2026)
 
 Everything since 0.9.0. The programs it mirrors are live on mainnet: the rules engine (`rules_hook`,

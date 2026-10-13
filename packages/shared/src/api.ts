@@ -298,6 +298,10 @@ export interface ConfigInspection {
   halfLife?: boolean;
   /** A listed config's author share of the creator fee (bps of it), paid on a launch by anyone but its author; 0 for a plain config. */
   authorShareBps: number;
+  /** A partner config's partner share of the creator fee (bps of it, docs/partner-fee.md), paid on every launch whoever makes it; 0 or absent for any other config. */
+  partnerShareBps?: number;
+  /** The partner it pays (its holding of bridged SOL receives the share); null without one. */
+  partner?: Address | null;
   /** The hook was built and deployed by Studio: the launch prepares it for the mint itself (its standard `prepare`). */
   studioHook?: boolean;
   /**

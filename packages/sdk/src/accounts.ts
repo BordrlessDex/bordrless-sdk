@@ -7,7 +7,7 @@
 import BN from 'bn.js';
 import { PublicKey, type AccountInfo, type Connection } from '@solana/web3.js';
 import { KIT_MODULES, decodeKitHookData, kitMintFlags, type KitHookData, type KitRewards, type LaunchRules, type LaunchRulesInput, type RuleBounds } from '@bordrless/shared';
-import { KIT_PROGRAM, launchAddress } from './addresses.ts';
+import { KIT_PROGRAM, launchAddress, partnerFeeAddress } from './addresses.ts';
 import { CODERS, type ProgramName } from './coders.ts';
 
 const big = (v: unknown): bigint => (v instanceof BN ? BigInt(v.toString(10)) : typeof v === 'bigint' ? v : BigInt(v as number));
@@ -240,6 +240,13 @@ export interface Launch {
   quoteCut?: QuoteCutCaps | null;
   /** SOL the hook's cut has taken so far (`reserved[4..12]`; part of `creatorFeesAccrued`). */
   quoteCutAccrued?: bigint;
+  /**
+   * The partner's share of the creator fee, bps of it (`docs/partner-fee.md` in bordrless-programs;
+   * `Launch.reserved[14..16]`), from a partner config; 0 for none. Every claim of such a launch passes
+   * the partner's accounts (`partnerOf` reads the partner), and anyone may `distributeFees` it.
+   * Absent from launches decoded by older code.
+   */
+  partnerShareBps?: number;
 }
 
 /** A custom hook's SOL cut caps, in basis points of a buy's SOL in and a sell's SOL out (each at most `QUOTE_CUT_MAX_BPS`). */
@@ -298,6 +305,36 @@ export interface LaunchConfigAccount {
   hookTimelocked: boolean;
   /** The custom hook's SOL cut caps (`create_quote_cut_config`, `reserved[1..5]`); null for none. Absent from configs decoded by older code. */
   quoteCut?: QuoteCutCaps | null;
+  /** The partner's share of the creator fee (`create_partner_config`, `reserved[5..7]`), bps of it; 0 for none. The partner is in its `PartnerFee` (`decodePartnerFee`). Absent from configs decoded by older code. */
+  partnerShareBps?: number;
+}
+
+/**
+ * A partner config's partner (`create_partner_config`, `docs/partner-fee.md` in bordrless-programs),
+ * at `partnerFeeAddress(config)`: the wallet paid `shareBps` of the creator fee of every launch made
+ * from the config, whoever launches, as bridged SOL to its holding, on every claim. Fixed for ever;
+ * only `paidTotal` (every launch of the config) moves.
+ */
+export interface PartnerFeeAccount {
+  version: number;
+  bump: number;
+  config: PublicKey;
+  partner: PublicKey;
+  shareBps: number;
+  paidTotal: bigint;
+}
+
+/** The most a partner may take of a launch's creator fee: all of it (with the author's share, at most all in all). */
+export const MAX_PARTNER_SHARE_BPS = 10_000;
+
+/**
+ * How a claim of `amount` splits, as the launchpad's `fee_split` does: the author's and the
+ * partner's shares of it, each rounded down; the creator gets the rest.
+ */
+export function feeSplit(amount: bigint, authorShareBps: number, partnerShareBps: number): { creator: bigint; author: bigint; partner: bigint } {
+  const author = (amount * BigInt(authorShareBps)) / 10_000n;
+  const partner = (amount * BigInt(partnerShareBps)) / 10_000n;
+  return { creator: amount - author - partner, author, partner };
 }
 
 /** A `LaunchConfig` account is 176 bytes. */
@@ -560,6 +597,20 @@ export const decodeLaunch = (data: Buffer): Launch => {
     authorFeesPaid: big(r.authorFeesPaid),
     quoteCut: r.customHook != null ? quoteCutCapsOf(r.reserved as number[], 0) : null,
     quoteCutAccrued: Buffer.from((r.reserved as number[]).slice(4, 12)).readBigUInt64LE(0),
+    partnerShareBps: u16At(r.reserved as number[], 14),
+  };
+};
+
+/** A partner config's `PartnerFee` (`docs/partner-fee.md`). */
+export const decodePartnerFee = (data: Buffer): PartnerFeeAccount => {
+  const r = decode('launch', 'partnerFee', data);
+  return {
+    version: Number(r.version),
+    bump: Number(r.bump),
+    config: key(r.config),
+    partner: key(r.partner),
+    shareBps: Number(r.shareBps),
+    paidTotal: big(r.paidTotal),
   };
 };
 
@@ -578,6 +629,7 @@ export const decodeLaunchConfigAccount = (data: Buffer): LaunchConfigAccount => 
     authorShareBps: Number(r.authorShareBps),
     hookTimelocked: r.customHook != null && Number((r.reserved as number[] | Uint8Array)[0]) === LAUNCH_CONFIG_TIMELOCKED_HOOK,
     quoteCut: r.customHook != null ? quoteCutCapsOf(r.reserved as number[] | Uint8Array, 1) : null,
+    partnerShareBps: u16At(r.reserved as number[] | Uint8Array, 5),
   };
 };
 
@@ -752,6 +804,17 @@ export function isVerifiedKitToken(mintKey: PublicKey, mint: Mint, launch: Launc
 export async function fetchAccount<T>(connection: Connection, address: PublicKey, decoder: (data: Buffer) => T): Promise<T | null> {
   const info = await connection.getAccountInfo(address, 'confirmed');
   return info ? decoder(info.data) : null;
+}
+
+/**
+ * The partner a launch pays (`docs/partner-fee.md`), for its claims (`claimCreatorFees`,
+ * `claimAuthorFees`, `distributeFees`): `{ config, partner }`, or null when the launch pays none.
+ */
+export async function partnerOf(connection: Connection, launch: Pick<Launch, 'config' | 'partnerShareBps'>): Promise<{ config: PublicKey; partner: PublicKey } | null> {
+  if (!launch.partnerShareBps) return null;
+  const pf = await fetchAccount(connection, partnerFeeAddress(launch.config), decodePartnerFee);
+  if (!pf) throw new Error(`launch config ${launch.config.toBase58()} pays a partner but its partner account is missing`);
+  return { config: launch.config, partner: pf.partner };
 }
 
 /** Decodes one of many fetched accounts; null for a missing one. */

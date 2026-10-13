@@ -292,3 +292,22 @@ export function buildCreateConfig(creator: PublicKey, args: CreateConfigArgs, ke
 export function buildCreateListedConfig(creator: PublicKey, args: CreateConfigArgs, authorShareBps: number, keypair: Keypair = Keypair.generate()): BuiltConfig {
   return { keypair, address: keypair.publicKey, instruction: launch.createListedConfig(creator, keypair.publicKey, args, authorShareBps) };
 }
+
+/**
+ * `create_partner_config` with a fresh keypair (docs/partner-fee.md in bordrless-programs): a config
+ * whose every launch, whoever makes it, pays `partner` `partnerShareBps` of its creator fee (1 to
+ * 10,000 bps of it) in bridged SOL on every claim. `options` may list an author's share too, or add a
+ * custom hook's SOL cut. Fixed for ever. The partner's holding of bridged SOL must exist before its
+ * coins' fees are claimed (`token.createHolding(payer, BRIDGED_SOL_MINT, partner)`). A companion coin
+ * can't launch from it (`PartnerOnCompanion`).
+ */
+export function buildCreatePartnerConfig(
+  creator: PublicKey,
+  args: CreateConfigArgs,
+  partner: PublicKey,
+  partnerShareBps: number,
+  options: Parameters<typeof launch.createPartnerConfig>[5] = {},
+  keypair: Keypair = Keypair.generate(),
+): BuiltConfig {
+  return { keypair, address: keypair.publicKey, instruction: launch.createPartnerConfig(creator, keypair.publicKey, args, partner, partnerShareBps, options) };
+}
