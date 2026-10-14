@@ -8,6 +8,10 @@
  * a composed config with it (`POST /v1/workshop/register`: the config must be on chain, the rules
  * engine's, its set bound, listed with a creator fee and made by this wallet; six a day; no fee).
  * The item is `kind: 'hook'`, `lane: 'rules'`, approved at once, its words read from its rules.
+ *
+ * The rules lane is off the site (the owner, 2026-10-13: "Compose a hook" is shown nowhere on
+ * bordrless.app): these calls stay for the deployed engine, but a builder's hook goes through the
+ * Workshop's code lane (the README's "Hooks, companions and pairs from your own terminal").
  */
 import { randomBytes } from 'node:crypto';
 import anchor from '@anchor-lang/core';

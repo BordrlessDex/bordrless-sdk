@@ -35,6 +35,7 @@ import {
   SHARE_STREAM_SECS,
   TOKEN_SUPPLY,
   buyLockedUntil,
+  curveFillBuy,
   curveParams,
   decodeKitHookData,
   devBuyMaxLamports,
@@ -106,6 +107,16 @@ interface Vectors {
     protocolShareBps: number;
     params: Params;
     expected: { creatorFee: Int; holderFee: Int; burn: Int; holderFeeOn: boolean; received: Int; lpFee: Int; protocolFee: Int; netIn: Int; amountOut: Int | null; delivered: Int | null; failure: string | null };
+  }[];
+  /** Since 2026-10-13: buys past the end of the curve, filled (`curveFillBuy`); a file without it predates the fill. */
+  fills?: {
+    name: string;
+    reserves: RawReserves;
+    amountIn: Int;
+    lpFeeBps: number;
+    protocolShareBps: number;
+    params: Params;
+    expected: { amountUsed: Int; swap: { creatorFee: Int; holderFee: Int; burn: Int; holderFeeOn: boolean; received: Int; lpFee: Int; protocolFee: Int; netIn: Int; amountOut: Int | null; delivered: Int | null; failure: string | null } } | null;
   }[];
   maxWallet: { supply: Int; maxWalletBps: number; balance: Int; expected: { cap: Int; left: Int } }[];
   devBuyMax: {
@@ -184,7 +195,7 @@ describe('launch-fees.json: the vectors file', () => {
 
 describe.skipIf(STALE)('launch-fees.json: the TypeScript mirror computes exactly what the Rust reference does', () => {
   it('holds every section, each with cases', () => {
-    for (const section of ['presets', 'hookFees', 'burns', 'swaps', 'maxWallet', 'devBuyMax', 'earlyLock', 'rewards'] as const) expect(V[section]!.length).toBeGreaterThan(0);
+    for (const section of ['presets', 'hookFees', 'burns', 'swaps', 'fills', 'maxWallet', 'devBuyMax', 'earlyLock', 'rewards'] as const) expect(V[section]!.length).toBeGreaterThan(0);
   });
 
   it('shares the constants', () => {
@@ -243,6 +254,38 @@ describe.skipIf(STALE)('launch-fees.json: the TypeScript mirror computes exactly
         };
       },
       (c, i) => `swaps[${i}] ${c.name}, ${c.side} ${c.amountIn} at lp ${c.lpFeeBps} share ${c.protocolShareBps}`,
+    );
+    expect(bad).toEqual([]);
+  });
+
+  it('fills a buy past the end of the curve as the program does (curveFillBuy, §3.1): the smallest input that sells it out, and the swap of that', () => {
+    const cases = V.fills ?? [];
+    expect(cases.filter((c) => c.expected !== null).length).toBeGreaterThan(50);
+    expect(cases.filter((c) => c.expected === null).length).toBeGreaterThan(10);
+    const bad = mismatches(
+      cases,
+      (c): Record<string, [unknown, unknown]> => {
+        const r = reserves(c.reserves);
+        const p = params(c.params);
+        const fill = curveFillBuy(r, big(c.amountIn), c.lpFeeBps, c.protocolShareBps, p);
+        if (c.expected === null) return { fill: [fill, null] };
+        const q = quoteLaunchSwap(r, 'buy', fill ?? 0n, c.lpFeeBps, c.protocolShareBps, p, true);
+        const e = c.expected.swap;
+        return {
+          fill: [fill, big(c.expected.amountUsed)],
+          creatorFee: [q.creatorFee, big(e.creatorFee)],
+          holderFee: [q.holderFee, big(e.holderFee)],
+          burn: [q.burn, big(e.burn)],
+          received: [q.received, big(e.received)],
+          lpFee: [q.lpFee, big(e.lpFee)],
+          protocolFee: [q.protocolFee, big(e.protocolFee)],
+          netIn: [q.netIn, big(e.netIn)],
+          amountOut: [q.amountOut, optBig(e.amountOut)],
+          delivered: [q.delivered, optBig(e.delivered)],
+          failure: [q.failure, e.failure],
+        };
+      },
+      (c, i) => `fills[${i}] ${c.name}, ${c.amountIn} at lp ${c.lpFeeBps} share ${c.protocolShareBps}`,
     );
     expect(bad).toEqual([]);
   });

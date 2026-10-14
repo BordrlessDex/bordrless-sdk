@@ -39,8 +39,9 @@
  * while the code on chain stays that build. Nothing is deployed, no key of Bordrless's is involved,
  * no author share, nothing on the Workshop's shelves; the item's page is public once matched.
  */
-import type { Address, PreparedTx } from './api.ts';
-import { AUTHOR_SHARE_BPS, type StudioFile } from './studio.ts';
+import type { Address, Amount, PreparedTx } from './api.ts';
+import type { KeeperLaunchTerms } from './keeper.ts';
+import { AUTHOR_SHARE_BPS, type StudioFile, type StudioSimQuoteCut } from './studio.ts';
 
 export type WorkshopKind = 'hook' | 'companion' | 'pair';
 export const WORKSHOP_KINDS: readonly WorkshopKind[] = ['hook', 'companion', 'pair'];
@@ -121,10 +122,43 @@ export const WORKSHOP_LIMITS = {
 export const WORKSHOP_PATH = /^src\/[a-z0-9_]+(\/[a-z0-9_]+)*\.rs$/;
 export const workshopPathOk = (path: string): boolean => WORKSHOP_PATH.test(path);
 
-/** The longest each part of the AI's reading may be. */
-export const WORKSHOP_READING_LIMITS = { title: 48, does: 160, totalText: 80, description: 600, watch: 5, watchText: 140 } as const;
+/**
+ * The longest each part of the AI's reading may be; `findings` the most findings it keeps, each title
+ * and detail at most `findingTitle` and `findingDetail` characters; `rules` the most rules it keeps,
+ * each condition and line at most `ruleWhen` and `ruleText` characters.
+ */
+export const WORKSHOP_READING_LIMITS = { title: 48, does: 160, totalText: 80, description: 600, watch: 5, watchText: 140, findings: 12, findingTitle: 120, findingDetail: 400, rules: 8, ruleWhen: 60, ruleText: 100 } as const;
 
 export type WorkshopWatchSeverity = 'high' | 'medium' | 'low';
+
+/** What a rule of a custom hook runs on: a buy, a sell, both alike (`trade`), a plain transfer between wallets, or (a companion, a pair's script half) a step of its script. */
+export type WorkshopRuleOn = 'buy' | 'sell' | 'trade' | 'transfer' | 'step';
+export const WORKSHOP_RULE_ON: readonly WorkshopRuleOn[] = ['buy', 'sell', 'trade', 'transfer', 'step'];
+/** A side's label where a rule's own is empty ("Buys: free"), and the order a card lists sides in. */
+export const WORKSHOP_RULE_ON_WORDS: Readonly<Record<WorkshopRuleOn, string>> = { buy: 'Buys', sell: 'Sells', trade: 'Buys and sells', transfer: 'Transfers', step: 'Each step' };
+
+/** Where what a rule takes or spends goes: its pot, the creator fee, holders, burned, a wallet, or nowhere (it moves nothing: it refuses a transfer, or only records). */
+export type WorkshopRuleTo = 'pot' | 'creator' | 'holders' | 'burn' | 'wallet' | 'none';
+export const WORKSHOP_RULE_TO: readonly WorkshopRuleTo[] = ['pot', 'creator', 'holders', 'burn', 'wallet', 'none'];
+
+/**
+ * One rule the code applies, as the reading lists it (2026-10-13: a Workshop item, a launch's config
+ * and a token page show a custom hook's rules the way a project page shows its own), a plain, exact
+ * statement with no caveats (those are the reading's watch notes and findings): what it runs on;
+ * `when`, the row's label, who or when it applies to ("Under 5M tokens", "5M–10M tokens",
+ * "Transfers", "Every 5 minutes"; '' when it applies to all); how much (`bps`: of the amount it
+ * applies to, a trade's for a hook and the pot for a companion's step; 0 for a tier that pays
+ * nothing; null when it is not a fixed rate); where it goes; and `text`, the statement after the
+ * label ("0% hook tax", "3% on buys and sells, to the pot", "free"). A tiered rule is one row per
+ * tier, each with its thresholds, the 0% tier included.
+ */
+export interface WorkshopReadingRule {
+  on: WorkshopRuleOn;
+  when: string;
+  bps: number | null;
+  to: WorkshopRuleTo;
+  text: string;
+}
 
 /**
  * What Bordrless's AI wrote about a submission from its source: a title, what it does in one
@@ -132,6 +166,11 @@ export type WorkshopWatchSeverity = 'high' | 'medium' | 'low';
  * its amount, null when the code reads it from an account it doesn't bound; for a companion, the most
  * of its pot one step spends), a plain description, and what a launcher should watch for. Read by
  * AI from the code, not an audit.
+ *
+ * The reading is the Workshop's one AI pass over the code (the owner, 2026-10-13: no separate
+ * security review): it also judges it, `verdict` (`pass`: nothing above low; `warn`: a medium
+ * finding; `fail`: a high or critical one) with its `findings` of harmful or deceptive logic. Both
+ * are absent from readings written before.
  */
 export interface WorkshopReading {
   title: string;
@@ -141,9 +180,23 @@ export interface WorkshopReading {
   watch: { severity: WorkshopWatchSeverity; text: string }[];
   /** Unix seconds. */
   at: number;
+  verdict?: WorkshopVerdict;
+  /** The most severe first, at most `WORKSHOP_READING_LIMITS.findings`; empty when there is nothing. */
+  findings?: WorkshopFinding[];
+  /**
+   * Each rule the code applies, in the order it applies them, at most `WORKSHOP_READING_LIMITS.rules`
+   * (2026-10-13); for a companion, or a pair's script half, what each step does with the pot. Absent
+   * from readings written before: the site then shows `does` and `total`.
+   */
+  rules?: WorkshopReadingRule[];
+  /** The largest cut the trading test measured (bps of one transfer) when this reading was written, so the reading's figures were held to it; null when the test had not run; absent from readings written before 2026-10-13. */
+  measuredBps?: number | null;
 }
 
-/** One automatic check, as the item's page shows it. */
+/** The reading's judgement of the code: `pass` (nothing above low), `warn` (a medium finding), `fail` (a high or critical one). */
+export type WorkshopVerdict = 'pass' | 'warn' | 'fail';
+
+/** One automatic check, as the item's page shows it. `review` was the separate security review by AI, gone since 2026-10-13 (the reading judges the code): no server sends it now. */
 export interface WorkshopCheck {
   id: 'rules' | 'review' | 'build' | 'test' | 'reading';
   label: string;
@@ -152,7 +205,7 @@ export interface WorkshopCheck {
   detail: string | null;
 }
 
-/** A finding of the security review. */
+/** A finding of the reading (of the security review, on items checked before 2026-10-13). */
 export interface WorkshopFinding {
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
   title: string;
@@ -214,6 +267,13 @@ export interface WorkshopItem {
    * reading-lane item (it pays nobody). Absent from older servers: `AUTHOR_SHARE_BPS`.
    */
   authorShareBps?: number;
+  /**
+   * What a launch with its script takes from its keeper.json (a companion's, a pair's companion
+   * half's; `keeperLaunchTerms`, 2026-10-13): how often a step runs and whether it pays wallets. The
+   * launch page sets both from here, never as the launcher's choice. Null for a hook; absent from
+   * older servers.
+   */
+  keeper?: KeeperLaunchTerms | null;
 }
 
 /** What a reading-lane item's match compared, and who can change the program (`WorkshopDetail.match`). */
@@ -228,7 +288,7 @@ export interface WorkshopMatch {
   immutable: boolean | null;
 }
 
-/** A half's security review, as the item's page shows it. */
+/** The verdict and findings of the item's reading (the one AI pass, 2026-10-13), as the item's page shows them; on an item checked before, its half's security review by AI. */
 export interface WorkshopReviewSummary {
   verdict: 'pass' | 'warn' | 'fail';
   summary: string;
@@ -264,12 +324,14 @@ export interface WorkshopDetail extends WorkshopItem {
   hookFlags: number;
   /** The checks: a hook's or a companion's, or a pair's hook half's (its rules, review, build, trading test) with the reading, which is one for the item. */
   checks: WorkshopCheck[];
-  /** A pair's companion script half: its rules, review and build (no trading test; the reading is in `checks`). Empty for a hook or a companion. Absent from older servers. */
+  /** A pair's companion script half: its rules and build (no trading test; the reading is in `checks`). Empty for a hook or a companion. Absent from older servers. */
   scriptChecks?: WorkshopCheck[];
+  /** The reading's verdict and findings (the reading is one for an item, a pair's both halves); on an item checked before 2026-10-13 without them, its hook's (or companion's) security review by AI. */
   review: WorkshopReviewSummary | null;
-  /** A pair's companion script review. Absent from older servers. */
+  /** A pair checked before 2026-10-13: its companion script's security review by AI. Null since (the reading covers both halves). Absent from older servers. */
   scriptReview?: WorkshopReviewSummary | null;
-  test: { pass: boolean; reasons: string[]; cutMaxBps: number | null; notes: string[] } | null;
+  /** The trading test; `quoteCut` its SOL cut (a hook with a hook.json), absent from older servers. */
+  test: { pass: boolean; reasons: string[]; cutMaxBps: number | null; notes: string[]; quoteCut?: StudioSimQuoteCut | null } | null;
   build: WorkshopBuildSummary | null;
   /** A pair's companion script build. Absent from older servers. */
   scriptBuild?: WorkshopBuildSummary | null;
@@ -286,7 +348,47 @@ export interface WorkshopDetail extends WorkshopItem {
   approvedBy?: 'auto' | 'operator' | null;
   /** A reading-lane item: the hashes compared and who can change the program; null for a Workshop-lane item. Absent from older servers. */
   match?: WorkshopMatch | null;
+  /** What it has done so far, summed over every coin launched with it (`WorkshopFigures`); null when it can't be read. Absent from older servers. */
+  figures?: WorkshopFigures | null;
 }
+
+/**
+ * What a Workshop custom hook or companion has done, from the indexer and the chain (2026-10-13):
+ * one coin's on its token page (`LaunchDetail.workshopFigures`), every coin's summed on its Workshop
+ * page (`WorkshopDetail.figures`). Lamports and token base units as decimal strings. A figure that
+ * doesn't apply (no hook half, no companion half) or can't be read is null; one that applies on coins
+ * where nothing has happened yet is '0'.
+ */
+export interface WorkshopFigures {
+  /** The coins these figures cover (launches with it; one on a token page). */
+  coins: number;
+  /** SOL its hook's SOL cut took (quote_cut, docs/workshop.md "A hook's SOL cut"), lamports; null without one. */
+  solTaken: Amount | null;
+  /** Tokens its hook's cuts took (the deltas it answered on transfers), base units: one coin's only (several coins' tokens don't add up), null otherwise. */
+  tokensTaken: Amount | null;
+  /** SOL its companion's pot received from the creator fee (`PotFunded`), lamports. */
+  potIn: Amount | null;
+  /** SOL its companion paid out from the pot to holders and wallets (`ScriptPayout`, `ScriptWalletPayout`), lamports. */
+  paidOut: Amount | null;
+  /** The wallets it paid, each once. */
+  paid: number | null;
+  /** SOL in its pot now (its pots', summed), lamports. */
+  pot: Amount | null;
+  /** The transfers its hook's cuts applied to (a `Transferred` event with a delta above 0), over every coin; null without a hook half, or when it can't be read. Absent from older servers. */
+  cuts?: number | null;
+  /** Its hook's token cuts coin by coin, the newest first, at most `WORKSHOP_FIGURES_COINS` (the rest are counted in `coins`); empty without a hook half or before any launch. Absent from older servers. */
+  byCoin?: WorkshopCoinFigure[];
+}
+
+/** One coin's share of an item's figures (`WorkshopFigures.byCoin`): what its hook's cuts took of it, base units; null when it can't be read. */
+export interface WorkshopCoinFigure {
+  mint: string;
+  symbol: string;
+  tokensTaken: Amount | null;
+}
+
+/** The coins an item's figures list one by one (`WorkshopFigures.byCoin`); the card says "+N more" for the rest. */
+export const WORKSHOP_FIGURES_COINS = 5;
 
 export interface WorkshopListResponse {
   items: WorkshopItem[];

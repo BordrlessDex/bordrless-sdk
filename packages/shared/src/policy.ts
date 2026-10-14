@@ -1279,9 +1279,11 @@ export function curveOutput(r: Reserves, side: Side, netIn: bigint): bigint {
  * then the creator and holder fees from what is left and Bordrless's share of them held back from the
  * delivery. A launch pool's LP fee never stays in the pool (its LP is locked for ever). A sell takes
  * its input out of the kit's eligible count before `after_swap` reads it (every seller is a holder:
- * the pool and the launch never sell). An ordinary pool's flat rate is `quoteSwap`.
+ * the pool and the launch never sell). An ordinary pool's flat rate is `quoteSwap`. With `fill`
+ * (§3.1: the swap of a buy the launchpad's hook filled, `curveFillBuy`), a buy past the end of the
+ * curve takes every token the pool has left instead of failing, as the DEX runs it.
  */
-export function quoteLaunchSwap(r: Reserves, side: Side, amountIn: bigint, lpFeeBps: number, protocolShareBps: number, p: LaunchFeeParams): LaunchSwap {
+export function quoteLaunchSwap(r: Reserves, side: Side, amountIn: bigint, lpFeeBps: number, protocolShareBps: number, p: LaunchFeeParams, fill = false): LaunchSwap {
   const before = launchBeforeSwap(side, amountIn, p);
   const received = amountIn - before.creatorFee - before.holderFee - before.burn;
   const eligibleAtFees = side === 'sell' ? (p.eligible > amountIn ? p.eligible - amountIn : 0n) : p.eligible;
@@ -1293,9 +1295,11 @@ export function quoteLaunchSwap(r: Reserves, side: Side, amountIn: bigint, lpFee
   const netIn = received - buyLpFee - inputProtocolFee;
   const failed = (failure: 'fees_exceed_input' | 'no_output' | 'insufficient_liquidity', protocolFee = inputProtocolFee, carried: Partial<LaunchSwap> = {}): LaunchSwap => ({ ...before, holderFeeOn, received, lpFee: buyLpFee, protocolFee, netIn, amountOut: null, delivered: null, failure, ...carried });
   if (received <= 0n || netIn <= 0n) return failed('fees_exceed_input');
-  const out = curveOutput(r, side, netIn);
-  if (out <= 0n) return failed('no_output');
-  if (out > (side === 'buy' ? r.baseReserve : r.quoteReserve)) return failed('insufficient_liquidity');
+  const past = curveOutput(r, side, netIn);
+  if (past <= 0n) return failed('no_output');
+  const real = side === 'buy' ? r.baseReserve : r.quoteReserve;
+  if (past > real && !(fill && side === 'buy')) return failed('insufficient_liquidity');
+  const out = past > real ? real : past;
   if (side === 'buy') {
     const after = launchAfterSwap('buy', out, p);
     return { ...before, burn: after.burn, holderFeeOn, received, lpFee: buyLpFee, protocolFee: inputProtocolFee, netIn, amountOut: out, delivered: out - after.burn, failure: null };
@@ -1335,6 +1339,60 @@ export function buyGraduates(r: Reserves, q: LaunchSwap, graduationQuote: bigint
  */
 export function curveMaxBuyIn(r: Reserves, lpFeeBps: number, protocolShareBps: number, p: LaunchFeeParams): bigint {
   return maxBuyWithin(r, lpFeeBps, protocolShareBps, p, U64_MAX);
+}
+
+/**
+ * A custom hook's SOL cut of `amount` at `bps` (docs/quote-cut.md; the Rust `quote_cut_fee`):
+ * rounded down, and dropped when it and `taken` (the creator and holder fees) would not stay below
+ * `amount`.
+ */
+export function quoteCutFee(amount: bigint, bps: number, taken: bigint): bigint {
+  const fee = mulDivFloor(amount, BigInt(bps), BPS);
+  return taken + fee < amount ? fee : 0n;
+}
+
+/**
+ * What a buy of `amountIn` on a launch pool puts into the curve under the share model (§3.1, §5.4;
+ * the Rust `launch_buy_net_in`): the input less the hook's creator and holder fees and its custom
+ * hook's SOL cut at `quoteCutBps` (what reaches the vault), less the LP fee on that and Bordrless's
+ * share of the cuts; null when the fees take it all.
+ */
+export function launchBuyNetIn(amountIn: bigint, lpFeeBps: number, protocolShareBps: number, p: LaunchFeeParams, quoteCutBps = 0): bigint | null {
+  const cut = launchBeforeSwap('buy', amountIn, p);
+  const taken = cut.creatorFee + cut.holderFee;
+  const cuts = taken + quoteCutFee(amountIn, quoteCutBps, taken);
+  const received = amountIn - cuts;
+  if (received <= 0n) return null;
+  const net = received - feeAmount(received, lpFeeBps) - protocolShare(cuts, protocolShareBps);
+  return net > 0n ? net : null;
+}
+
+/**
+ * §3.1's fill (the Rust `launch_fill`, as the launchpad's `before_swap` answers it): the smallest
+ * input, at most `amountIn`, whose buy reaches the end of the curve (what it puts into the curve
+ * buys every token the pool has left), so the DEX takes that much, sells the last token and leaves
+ * the rest of the input with the trader; null for a buy short of the end, the ordinary buy. The
+ * same bisection on the exact fees as the program's, so the figure is the chain's. A custom hook's
+ * SOL cut (`quoteCutBps`) is not known off chain: the chain's fill is then a little above this one.
+ */
+export function curveFillBuy(r: Reserves, amountIn: bigint, lpFeeBps: number, protocolShareBps: number, p: LaunchFeeParams, quoteCutBps = 0): bigint | null {
+  const left = r.baseReserve;
+  if (left <= 0n || amountIn <= 0n) return null;
+  // The whole input into the curve, fees aside, buys the most it can: short of the end, no fill.
+  if (curveOutput(r, 'buy', amountIn) < left) return null;
+  const reaches = (a: bigint): boolean => {
+    const net = launchBuyNetIn(a, lpFeeBps, protocolShareBps, p, quoteCutBps);
+    return net !== null && curveOutput(r, 'buy', net) >= left;
+  };
+  if (!reaches(amountIn)) return null;
+  let lo = 0n;
+  let hi = amountIn;
+  while (hi - lo > 1n) {
+    const mid = lo + (hi - lo) / 2n;
+    if (reaches(mid)) hi = mid;
+    else lo = mid;
+  }
+  return hi;
 }
 
 /** `1 - Π(1 - fee_i)` in basis points, rounded up so the figure never understates. */

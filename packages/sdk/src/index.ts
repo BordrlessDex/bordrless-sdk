@@ -20,6 +20,7 @@ export * from './gameKinds.ts';
 export * from './lotteryHook.ts';
 export * from './lossCover.ts';
 export * from './keeper.ts';
+export * from './hookDeclaration.ts';
 export * from './orao.ts';
 export * from './authority.ts';
 export * from './timelock.ts';

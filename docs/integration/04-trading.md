@@ -127,7 +127,23 @@ If no buyer carries it, anyone can send `launch.graduate(...)` on its own later.
 checks that `pool.quoteReserve >= launch.graduationQuote` or `pool.baseReserve == 0`, and that
 the pool is still a curve.
 
-A buy larger than what's left on the curve fails with `InsufficientLiquidity`.
+**A buy larger than what's left on a launch's curve is filled** (since 14 Oct 2026): the program
+uses the smallest part of the input that sells the curve out, takes every token left and leaves the
+rest of the input in the buyer's bridged-SOL holding; `graduate` can follow in the same transaction.
+
+- `Swapped.amountIn` is the part used; the instruction's `amount_in` is only what was offered.
+- Append `bridge.unwrapSolAbove(wallet, bridgedBefore)` after such a buy to return the rest as SOL
+  (it refuses to unwrap nothing, so add it only where the buy may pass the end).
+- `minAmountOut` is held pro rata (`delivered >= min * used / offered`): give the least you accept
+  for the whole input at the quoted rate. A minimum from a quote that pretends the curve goes on
+  fails as `Slippage` (6017).
+- The fill is the launchpad's and only for a swap your transaction sends the DEX itself. A program
+  that calls the DEX (your router program, a companion) gets none, and a curve another program opens
+  never fills (`BadFill`, 6038): there a buy past the end still fails with `InsufficientLiquidity`.
+- Give the transaction about 275,000 compute units: a filled buy with its wrap and holdings is
+  above the 200,000 default.
+- `curveFillBuy` in `@bordrless/shared` gives the part used off chain; `swap/quote` answers it as
+  `amountUsed`.
 `curveMaxBuyIn(pool, lpFeeBps, protocolShareBps, feeParams)` gives the largest buy the curve can
 still fill.
 

@@ -39,7 +39,7 @@ protocol lookup table, so **always include the loaded addresses** in the key lis
 | --- | --- |
 | `pool`, `trader`, `recipient` | The pool; who signed; whose holding received the output |
 | `direction` | 1 buy (quote in, token out), 0 sell |
-| `amountIn` | What left the trader's wallet, in the input token |
+| `amountIn` | What left the trader's wallet, in the input token (for a buy that filled the end of a launch's curve, the part used, not what was offered) |
 | `burnIn`, `cutsIn`, `receivedIn` | From the input: burned, taken by hooks for someone, and what reached the pool |
 | `lpFee` | LP fee kept by the pool, in the input token. **0 on launch pools**: their LP fee is Bordrless's and is inside `protocolFee` |
 | `protocolFee` | Bordrless's take, **always in the quote (SOL)**. On a launch pool: the LP fee (at `lpFeeBps`) plus 25% of the hooks' cuts |

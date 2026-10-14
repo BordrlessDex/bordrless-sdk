@@ -763,7 +763,11 @@ export const launch = {
    * the quote); the token's hook slice (the kit's, or a custom hook's) goes on the base side (a
    * buy's output, a sell's input); the pool hook gets its four extras whatever the rules, and, on a
    * launch whose custom hook takes a SOL cut (`keys.quoteCutHook`), the cut's four for `trader`.
-   * `minAmountOut` is checked against what the recipient's holding gains.
+   * `minAmountOut` is checked against what the recipient's holding gains. A buy past the end of
+   * the curve is filled (docs/hooks-v2.md §3.1): the program uses the smallest part of `amountIn`
+   * that sells the curve out (`curveFillBuy` in `@bordrless/shared` says it), leaves the rest in
+   * the trader's quote holding, graduates in the same transaction when `graduate` follows, and
+   * holds `minAmountOut` to pro rata, so give the least you accept for the whole `amountIn`.
    */
   swap(keys: LaunchKeys, trader: PublicKey, recipient: PublicKey, direction: 0 | 1, amountIn: bigint, minAmountOut: bigint): TransactionInstruction {
     const buy = direction === 1;

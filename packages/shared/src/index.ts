@@ -1,5 +1,6 @@
 export * from './api.ts';
 export * from './explorer.ts';
+export * from './hookDeclaration.ts';
 export * from './keeper.ts';
 export * from './policy.ts';
 export * from './programs.ts';

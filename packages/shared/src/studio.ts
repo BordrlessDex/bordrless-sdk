@@ -280,14 +280,15 @@ export interface ReviewFinding {
 }
 
 /**
- * `POST /v1/studio/projects/:id/review`: the static checks, then the automated security review (two
- * independent model runs, the worse kept). Every run of a source (and the hook flags read from it,
- * `detectHookFlags`) is kept: the review shown is the worst of them, its findings merged, and a
- * source that failed once stays failed (only a change to the source clears it). Automated checks,
- * not an audit.
+ * `POST /v1/studio/projects/:id/review`: the template's rules, a scan with no model, recorded for the
+ * source (`verdict` `pass` when every check passes, else `fail`; no findings; `runs` 0). Since
+ * 2026-10-13 the Workshop's one AI pass over the code is its reading (`WorkshopReading.verdict` and
+ * `findings`), never a separate security review. A record written before is the security review by
+ * AI as it was (two model runs, the worse kept; `runs` 1 or more, `findings` and `summary` its own),
+ * still read as it is. Automated checks, not an audit.
  */
 export interface StudioReview {
-  /** `fail`: a static check failed or a critical/high finding; deploy is refused. The worst of every run of this source and these flags. */
+  /** `fail`: a static check failed (on a record from before 2026-10-13, or a critical/high finding of the AI's); a deploy is refused. */
   verdict: 'pass' | 'warn' | 'fail';
   checks: StaticCheck[];
   findings: ReviewFinding[];
@@ -297,7 +298,7 @@ export interface StudioReview {
   sourceHash: string;
   /** The hook flags the source was reviewed with, read from the source itself (`detectHookFlags`). Absent on reviews made before flags were recorded. */
   hookFlags?: number;
-  /** How many review runs of this source and these flags the verdict and findings merge. */
+  /** How many model runs the verdict and findings merge: 0 for the template's rules alone (since 2026-10-13); 1 or more on a security review by AI from before. */
   runs?: number;
   at: number;
 }
@@ -340,6 +341,29 @@ export interface StudioSim {
   notes: string[];
   /** A game hook's scenarios (the jackpot's or the streak's, docs/games-handover.md phase 2 item 4): absent on a hook that is not a game's, or on builds from before them. */
   game?: StudioSimGame | null;
+  /** A hook's SOL cut (its hook.json; docs/workshop.md "A hook's SOL cut"), as the trading test measured it on a config made with its caps: absent on a hook without one, or on builds from before it. */
+  quoteCut?: StudioSimQuoteCut | null;
+}
+
+/**
+ * The trading test's SOL cut: the launch made from `create_quote_cut_config` with the hook's declared
+ * caps, every buy and sell by the test wallets asked by the launchpad (the creator's own trades are
+ * exempt), and each cut taken checked against the caps and the hook's answer (`QuoteCutTaken`).
+ */
+export interface StudioSimQuoteCut {
+  /** The caps the config was made with, bps. */
+  maxBuyBps: number;
+  maxSellBps: number;
+  /** The largest cut taken, bps of a buy's SOL in and of a sell's SOL out (rounded up). */
+  buyMaxBps: number;
+  sellMaxBps: number;
+  /** The largest rate the hook answered, before the cap. */
+  answeredMaxBps: number;
+  /** Trades the launchpad asked the hook on, and those it took SOL on. */
+  asked: number;
+  taken: number;
+  /** The SOL it took in all, lamports as a decimal string. */
+  takenLamports: string;
 }
 
 /** The simulator's game scenarios on a game hook: the header and the marks or weights checked against a plain model of the rules, and the fairness of the payouts the rules would make. */

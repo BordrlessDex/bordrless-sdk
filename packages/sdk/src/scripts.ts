@@ -39,13 +39,14 @@
  *
  * Held to the program's client by `vectors/scripts.json` (bordrless-programs' `script_vectors`).
  *
- * Coming, not built (docs/loss-cover.md §1): a script's `companion_step` will answer a
- * `PayoutAnswer` in its return data (up to 16 `{ account, lamports, tag }` entries naming holdings
- * among the step's extra accounts), which the companion pays from the pot and records through the
- * hook's `record_payout`. Its encoder (`encodePayoutAnswer`, `PAYOUT_ANSWER_VERSION`,
- * `MAX_PAYOUTS_PER_STEP`) lands in this module, `companion.createScriptV2` and `decodePayoutTerms`
- * in companion.ts with `payoutTermsAddress` and `payoutAuthorityAddress` in addresses.ts, their
- * vectors in `vectors/payouts.json`, and a `set_payout_answer` helper in the script template.
+ * The payout path (docs/loss-cover.md §1, live with Lossback): a script made with
+ * `companion.createScriptV2` (companion.ts; its terms at `payoutTermsAddress`, addresses.ts) may
+ * answer a `PayoutAnswer` in its return data (up to 16 `{ account, lamports, tag }` entries naming
+ * holdings among the step's extra accounts), which the companion pays from the pot within the terms
+ * and records through the hook's `record_payout`, signed by `PAYOUT_AUTHORITY`. The encoders and
+ * decoders (`encodePayoutAnswer`, `encodeWalletPayoutAnswer`, `decodePayoutTerms`, `PAYOUT_LIMITS`)
+ * are lossCover.ts's, held to `vectors/payouts.json`; `companion.payoutAccounts` is what such a
+ * step carries first.
  */
 import { PublicKey, type AccountInfo, type Connection } from '@solana/web3.js';
 import { scriptInitDataLength } from '@bordrless/shared';

@@ -30,6 +30,7 @@ import {
   SCALE,
   SHARE_STREAM_SECS,
   TOKEN_SUPPLY,
+  U64_MAX,
   buyGraduates,
   buyLockedUntil,
   checkLaunchRules,
@@ -45,6 +46,7 @@ import {
   splitTakesFirstBuy,
   compoundFeeBps,
   creatorAndHolderFees,
+  curveFillBuy,
   curveImpactBps,
   curveMaxBuyIn,
   curveOutput,
@@ -68,6 +70,7 @@ import {
   kitSynced,
   launchAfterSwap,
   launchBeforeSwap,
+  launchBuyNetIn,
   launchRulesAt,
   launchSwapToReserve,
   lpForDeposit,
@@ -81,6 +84,7 @@ import {
   presetOf,
   protocolShare,
   protocolShareBps,
+  quoteCutFee,
   quoteLaunchSwap,
   quoteSwap,
   quoteValue,
@@ -616,6 +620,41 @@ describe('v2 max wallet', () => {
     expect(buyGraduates(last, quoteLaunchSwap(last, 'buy', 1_000_000n, 30, 100, rules), 10n ** 18n)).toBe(false);
     expect(buyGraduates(OPEN, quoteLaunchSwap(OPEN, 'buy', max + 1n, 30, 100, rules), 0n)).toBe(false);
   });
+
+  it('fills a buy past the end of the curve with the smallest input that sells it out (§3.1)', () => {
+    // The policy's curve with 5M tokens left.
+    const SOL = 1_000_000_000n;
+    const ending = { ...OPEN, baseReserve: 5_000_000_000_000n, quoteReserve: 55_875_000_000n };
+    const rules = fees({ creatorFeeBps: 100, holderFeeBuyBps: 100, eligible: 1n, minEligible: 1n });
+    const net = (a: bigint): bigint => launchBuyNetIn(a, 30, 2_500, rules)!;
+    const out = (n: bigint): bigint => curveOutput(ending, 'buy', n);
+    // Short of the end: no fill. Past it: the fill reaches the end, a lamport less does not.
+    expect(curveFillBuy(ending, 100_000_000n, 30, 2_500, rules)).toBeNull();
+    const fill = curveFillBuy(ending, 100n * SOL, 30, 2_500, rules)!;
+    expect(fill).not.toBeNull();
+    expect(fill < 100n * SOL).toBe(true);
+    expect(out(net(fill)) >= ending.baseReserve).toBe(true);
+    expect(out(net(fill - 1n)) < ending.baseReserve).toBe(true);
+    expect(curveFillBuy(ending, fill, 30, 2_500, rules)).toBe(fill);
+    expect(curveFillBuy(ending, fill + 12_345n, 30, 2_500, rules)).toBe(fill);
+    expect(curveFillBuy(ending, fill - 1n, 30, 2_500, rules)).toBeNull();
+    expect(curveFillBuy(ending, U64_MAX, 30, 2_500, rules)).toBe(fill);
+    // A SOL cut on top needs more input for the same tokens; nothing to fill on an empty curve.
+    expect(curveFillBuy(ending, 100n * SOL, 30, 2_500, rules, 200)! > fill).toBe(true);
+    expect(curveFillBuy({ ...ending, baseReserve: 0n }, U64_MAX, 30, 2_500, rules)).toBeNull();
+    // The swap of the fill takes every token left, no more; without the fill the same buy lands only when its curve output is the reserve exactly, and a lamport past the end is refused plain. The max buy (the last input the curve fills without going past the end) is a lamport or so from the fill.
+    const q = quoteLaunchSwap(ending, 'buy', fill, 30, 2_500, rules, true);
+    expect([q.failure, q.amountOut, q.netIn]).toEqual([null, ending.baseReserve, net(fill)]);
+    const plain = quoteLaunchSwap(ending, 'buy', fill, 30, 2_500, rules);
+    expect(plain.failure === 'insufficient_liquidity' || (plain.failure === null && out(net(fill)) === ending.baseReserve)).toBe(true);
+    expect(quoteLaunchSwap(ending, 'buy', fill + 1_000_000n, 30, 2_500, rules).failure).toBe('insufficient_liquidity');
+    expect(quoteLaunchSwap(ending, 'buy', fill + 1_000_000n, 30, 2_500, rules, true).amountOut).toBe(ending.baseReserve);
+    const max = curveMaxBuyIn(ending, 30, 2_500, rules);
+    expect(max >= fill - 1n && max - fill < 100n).toBe(true);
+    // The cut's own rule: rounded down, dropped when it and the fees would not stay below the amount.
+    expect([quoteCutFee(1_000_000_000n, 200, 0n), quoteCutFee(49n, 200, 0n), quoteCutFee(100n, 1_000, 90n), quoteCutFee(100n, 1_000, 89n)]).toEqual([20_000_000n, 0n, 0n, 10n]);
+  });
+
 
   it('caps the creator first buy with its own fees, no holder fee, at the opening reserves (§8.2)', () => {
     const curve = curveParams(TOKEN_SUPPLY, CURVE_BPS, 28_125_000_000n)!;

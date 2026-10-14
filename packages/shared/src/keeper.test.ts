@@ -4,7 +4,7 @@
  * sentence; the canonical text the approval hashes; the declaration in plain words.
  */
 import { describe, expect, it } from 'vitest';
-import { KEEPER_FILE, KEEPER_LIMITS, canonicalKeeperJson, isBase58Key, keeperDeclarationOf, keeperDetails, keeperPerStep, keeperWords, parseKeeperDeclaration, type KeeperDeclaration } from './keeper.ts';
+import { DEFAULT_STEP_SECS, KEEPER_FILE, KEEPER_LIMITS, canonicalKeeperJson, isBase58Key, keeperDeclarationOf, keeperDetails, keeperLaunchTerms, keeperPerStep, keeperStepSecs, keeperWords, parseKeeperDeclaration, type KeeperDeclaration } from './keeper.ts';
 
 /**
  * Whale Bait (F:\whale-bait, REPORT.md): every holder at 1 base unit and under 20,000,000 tokens
@@ -128,7 +128,7 @@ describe('keeper.json', () => {
     expect(problemOf(`{"version":1,"x":"${'a'.repeat(KEEPER_LIMITS.bytes)}"}`)).toBe('keeper.json is at most 4,096 bytes; this one is 4,116.');
     expect(problemOf([])).toBe('keeper.json: the file is one object.');
     expect(problemOf({ ...whale(), version: 2 })).toBe('keeper.json: version is 1, the only one there is.');
-    expect(problemOf({ ...whale(), extra: true })).toBe('keeper.json: the file has no field "extra" (it takes version, holdings, swapAccounts, hookAccounts, payouts, roundSecs, wallets).');
+    expect(problemOf({ ...whale(), extra: true })).toBe('keeper.json: the file has no field "extra" (it takes version, holdings, swapAccounts, hookAccounts, payouts, roundSecs, wallets, stepSecs, stateLen, initData).');
     expect(problemOf({ ...whale(), holdings: undefined })).toBe('keeper.json: holdings is required: which holdings each step brings.');
     expect(problemOf({ ...whale(), swapAccounts: 'yes' })).toBe('keeper.json: swapAccounts is true or false.');
     expect(problemOf({ ...whale(), hookAccounts: 1 })).toBe('keeper.json: hookAccounts is true or false.');
@@ -205,5 +205,27 @@ describe('keeper.json', () => {
     expect(problemOf(filter({ mask: 1 }))).toBe('keeper.json: holdings.hookData has no field "mask" (it takes offset, width, compare, against).');
     expect(declarationOf(JSON.stringify(filter({ against: { const: '0' } }))).holdings!.hookData?.against).toEqual({ const: '0' });
     expect(declarationOf(JSON.stringify(filter({ against: { epoch: { secs: 300 } } }))).holdings!.hookData?.against).toEqual({ epoch: { secs: 300, fieldUnitSecs: null } });
+  });
+
+  it('takes how often a step runs from the builder (stepSecs, 10 s to a day), left out of the normal form when absent', () => {
+    const fast = declarationOf(JSON.stringify({ ...whale(), stepSecs: 10 }));
+    expect(fast.stepSecs).toBe(10);
+    expect(canonicalKeeperJson(fast)).toContain('"stepSecs":10');
+    // A declaration without it hashes as it did before the field.
+    expect(canonicalKeeperJson(declarationOf(WHALE_BAIT_KEEPER_JSON))).not.toContain('stepSecs');
+    expect(problemOf({ ...whale(), stepSecs: 5 })).toBe('keeper.json: stepSecs is how often a step runs: a whole number of seconds from 10 to 86,400 (a day).');
+    expect(problemOf({ ...whale(), stepSecs: 30.5 })).toMatch(/^keeper.json: stepSecs is how often a step runs/);
+    expect(keeperDetails(fast)).toContain('A step runs every 10 seconds.');
+  });
+
+  it('works out a step: the declared one, else a thirtieth of a fixed round within the bounds, else a minute', () => {
+    expect(keeperStepSecs({ stepSecs: 45, roundSecs: 300 })).toBe(45);
+    expect(keeperStepSecs({ roundSecs: 300 })).toBe(10);
+    expect(keeperStepSecs({ roundSecs: 120 })).toBe(10);
+    expect(keeperStepSecs({ roundSecs: 3_600 })).toBe(120);
+    expect(keeperStepSecs({ roundSecs: { state: { offset: 41, width: 4 } } })).toBe(DEFAULT_STEP_SECS);
+    expect(keeperStepSecs(null)).toBe(DEFAULT_STEP_SECS);
+    expect(keeperLaunchTerms(declarationOf(WHALE_BAIT_KEEPER_JSON))).toEqual({ stepSecs: DEFAULT_STEP_SECS, wallets: false, stateLen: 1_024, initData: '', payouts: false });
+    expect(keeperLaunchTerms({ ...declarationOf(WHALE_BAIT_KEEPER_JSON), roundSecs: 300, wallets: ['11111111111111111111111111111111'] })).toEqual({ stepSecs: 10, wallets: true, stateLen: 1_024, initData: '', payouts: false });
   });
 });

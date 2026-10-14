@@ -81,6 +81,15 @@ graduated by the same signer with `swap.finalizeCurve`. A pool you open pays the
 cut its hook takes; the share model (the LP fee and a quarter of the cuts to Bordrless) applies only
 to the curves the launchpad opens.
 
+A buy past the end of a **launch's** curve is filled ([docs/hooks-v2.md](https://github.com/BordrlessDex/bordrless-programs/blob/main/docs/hooks-v2.md) §3.1): the
+launchpad's `before_swap` ends its answer with the part of the input to use, the DEX uses that much,
+takes every token the curve has left and leaves the rest with the trader, holding `minAmountOut` to
+pro rata, so a buy of more than the curve has left buys the rest and graduates it; `curveFillBuy`
+in `@bordrless/shared` says the part a launch would use, and a quote's `amountUsed` carries it. A
+curve your own program opens is not filled: the DEX refuses a fill from any hook but the
+launchpad's (`BadFill`), since a hook could otherwise keep a buyer's whole input for the last
+tokens; a buy past its end fails as it always has.
+
 ```ts
 import { PublicKey } from '@solana/web3.js';
 import { POOL_HOOK_FLAGS } from '@bordrless/shared';
@@ -162,7 +171,9 @@ upgrade it, and no reading (a Workshop hook shows Bordrless's reading of it inst
    instruction like it). The registry must not depend on who sends or receives: the launch passes
    one slice for every transfer.
 4. **Make the config** (`buildCreateConfig`; `buildCreateListedConfig` with an author share, which
-   pays you half the creator fee of every launch someone else makes from it) and share its key.
+   pays you half the creator fee of every launch someone else makes from it) and share its key. A
+   Workshop hook's builder can make it here too: once a launch uses it, the Workshop adopts it and
+   offers the hook on the launch page.
 5. **Paste the key** into the launch page. It reads the config, shows every rule and the hook,
    checks who can upgrade the hook and the registry for the mint, and launches with it.
 
@@ -425,6 +436,32 @@ for (const b of postTokenBalances) console.log(b.account, b.owner, b.uiTokenAmou
   (the backend's `/v1/tx/:signature/balances`, behind the site's key); 404 for a signature with no
   confirmed transaction, 400 for a malformed one.
 
+**A buy past the end of a launch's curve is filled** (the DEX and launchpad upgrade of 14 Oct
+2026; [docs/hooks-v2.md](https://github.com/BordrlessDex/bordrless-programs/blob/main/docs/hooks-v2.md) §3.1). Nothing changes for a buy the curve can fill, a
+sell or a graduated pool: the same instruction, accounts, fees, output and `Swapped` event. A buy of
+more than the curve has left, which failed with `InsufficientLiquidity` before, now lands: the
+program uses the smallest part of the input that sells the curve out, takes every token left and
+leaves the rest of the input in the trader's holding of bridged SOL, and `graduate` can follow in
+the same transaction. For a terminal that sends such a buy:
+
+- `Swapped.amount_in` is the part used, so a trade read from the event or from the balances is
+  right; the instruction's `amount_in` is only what was offered.
+- The rest stays as bridged SOL unless the transaction unwraps it: append
+  `bridge.unwrapSolAbove(user, bridgedBefore)` after the swap, as the site does (it refuses to
+  unwrap nothing, so add it only where the buy may pass the end), or unwrap later.
+- `min_amount_out` is held pro rata (`delivered >= min * used / offered`): give the least you accept
+  for the whole input at the rate you quoted. A minimum computed from a quote that pretends the
+  curve goes on past its end fails as `Slippage` (6017) where it failed as `InsufficientLiquidity`
+  (6016) before.
+- `swap/quote` says `amountUsed`, the part a buy would use (null when all of it), with the
+  figures of that part; `curveFillBuy` in `@bordrless/shared` computes it off chain.
+- Only a swap your transaction sends the DEX itself is filled. A program that calls the DEX (your
+  own router program, Bordrless's router, a companion) gets no fill: its buy past the end fails
+  with `InsufficientLiquidity` as before, so such a program never pays for SOL it didn't use.
+- Give a filled buy room: its transaction (wrap, holdings and the swap) takes about 255,000 to
+  275,000 compute units, above the 200,000 default. An ordinary buy costs about 900 more than
+  before the upgrade.
+
 ## Hooks, companions and pairs from your own terminal
 
 What a builder can make for a launch on Bordrless, in two layers. A **hook** is your program and
@@ -435,30 +472,39 @@ companion program holds the launch's creator fee in a pot and calls your script 
 the launch's accounts (the mint, the launch, the companion, the pool, your state, then whatever the
 sender passes), your script reads what it likes (its hook's data in the holdings, the pool, its
 state) and acts as the creator address, and the companion program executes within hard bounds:
-it trades on the launch pool, buys back, burns, and refuses a step that spends more than the pot,
-touches the dev bag, takes lamports or breaks custody (payouts to holders are coming, below).
-Bordrless's program is never upgraded for a builder's program, only for a new kind of action. A
-**pair** is the two together: the hook records at transfer time, the script reads the record and
-pays.
+it trades on the launch pool, buys back, burns, pays holders or wallets from the pot within the
+terms the launch fixed when the script answers a payout ("Paying through the companion", below),
+and refuses a step that spends more than the pot, touches the dev bag, takes lamports or breaks
+custody. Bordrless's program is never upgraded for a builder's program, only for a new kind of
+action. A **pair** is the two together, a hook on the trades and a companion on the pot: the hook
+can take a cut, keep a score or fund the pot; the companion pays from the pot, filled by the
+creator fee, by the hook, or both.
 
 Two lanes, and the chain takes both:
 
 | | The Workshop (https://bordrless.app/workshop) | Self-serve |
 | --- | --- | --- |
-| Who deploys | Bordrless, under its upgrade key, after its checks (the static rules, a review by AI, the build, the trading test, a reading); you pay the submission fee and the deploy | You, then you make it immutable: `solana program set-upgrade-authority <program> --final` (`hookFinalCommand()` in @bordrless/shared; `bordrless hook deploy <so> --program-keypair <kp> --immutable` does both) |
-| A hook | Listed; its config pays you half the creator fee of launches others make with it (`AUTHOR_SHARE_BPS`) | A config you make and share; `buildCreateListedConfig` can still pay you a share, but the config is then not offered on the site |
-| A script | Approved on chain by Bordrless (`Approval`, `inspectScriptProgram`); its author paid the same half by the companion program | No approval needed once the companion upgrade of 2026-10-12 evening is live: an immutable script runs unreviewed, with no author's share |
-| What the site shows | Bordrless's reading of it (what it does, the most it takes, what to watch) on the launch and token pages | A custom hook written by its creator, with who can upgrade it; no reading: not read by Bordrless. A launch whose creator fee goes to a program of your own (not the companion program) is allowed by the chain but hidden on the site |
+| Who deploys | Bordrless, under its upgrade key, after its checks (the template's rules, the build, a hook's trading test, and one reading by AI that states its rules and judges it); approved by itself once the rules, the build and the trading test pass; you pay the submission fee and the deploy | You, then you make it immutable: `solana program set-upgrade-authority <program> --final` (`hookFinalCommand()` in @bordrless/shared; `bordrless hook deploy <so> --program-keypair <kp> --immutable` does both) |
+| A hook | Listed; its config pays you half the creator fee of launches others make with it (`AUTHOR_SHARE_BPS`), or nothing, as you choose at the submission | A config you make and share; `buildCreateListedConfig` can still pay you a share. On a Workshop hook of yours such a config is adopted once a launch uses it; on any other hook it is not offered on the site |
+| A script | Approved on chain by Bordrless (`Approval`, `inspectScriptProgram`); its author paid the same half (or nothing) by the companion program | No approval needed: an immutable script runs unreviewed, with no author's share |
+| What the site shows | Bordrless's reading of it (its rules as exact rows, the most it takes, what to watch, what it found) on the launch and token pages | A custom hook written by its creator, with who can upgrade it; no reading: not read by Bordrless, unless you submit its source with the program's address ("The reading lane", below). A launch whose creator fee goes to a program of your own (not the companion program) is allowed by the chain but hidden on the site |
 
 Test first, on your machine, against the live programs copied from mainnet (`solana program dump
 -u mainnet-beta <PROGRAM_ID> <file>.so`, in LiteSVM or `solana-test-validator`); the briefs on
-https://bordrless.app/sdk/build hold the templates, the rules and the test plan. Every call below
-is in `packages/sdk/src/terminal.test.ts`, built and read against a fake chain.
+https://bordrless.app/sdk/build hold the templates, the rules and the test plan. The trading test
+itself is `studio-sim` (`programs/tests` in the monorepo: `cargo build --release -p
+bordrless-program-tests --bin studio-sim`; `tools/studio-builder/sim/run.mjs` shows the flags it
+runs with, `--so`, `--program-id`, `--flags auto`, `--programs <dir>`): with the monorepo checked
+out you can run the same test on your binary before submitting. Every call below is in
+`packages/sdk/src/terminal.test.ts`, built and read against a fake chain; the payout calls in
+`lossCover.test.ts` and `payees.test.ts`.
 
 **1. A trade hook** on the Workshop template (`tools/studio-builder/template`; the hook brief has
 its Cargo.toml for a local build): `cargo build-sbf --tools-version v1.57 --arch v3`. Then either
-submit `src/**.rs` on the Workshop (the launch prepares a Workshop hook for each new mint itself,
-and your listed config is made from its page), or:
+submit `src/**.rs` on the Workshop, with `hook.json` beside them for a SOL cut (the launch prepares
+a Workshop hook for each new mint itself; your listed config is made from its page, with the
+creator fee of your choice, or here with `buildCreateListedConfig` and adopted once a launch uses
+it), or:
 
 ```ts
 import { Keypair } from '@solana/web3.js';
@@ -491,9 +537,10 @@ passed, none signing; the state is yours, made by the companion (`scriptStateAdd
 10,240 bytes). The companion refuses a step that overspends the pot (`ScriptOverspent`), takes
 the dev bag (`ScriptTookDevBag`), takes lamports (`ScriptTookLamports`) or breaks custody
 (`ScriptBrokeCustody`), and an early one (`ScriptNotDue`). Build it with `anchor build`. Then
-either submit it on the Workshop (Bordrless deploys it and approves its code on chain; launchers
-pick it on the launch page), or, once the companion upgrade of 2026-10-12 evening is live, deploy
-it yourself and make it immutable, and launch with it:
+either submit it on the Workshop with its `keeper.json` (Bordrless deploys it and approves its
+code on chain; launchers pick it on the launch page, which takes the step's interval from the
+declaration, sends no init data and asks the launcher for nothing), or deploy it yourself and make
+it immutable, and launch with it:
 
 ```ts
 import { COMPANION_DEFAULTS, companion, inspectScriptProgram, scriptInitDataBytes } from '@bordrless/sdk';
@@ -516,12 +563,18 @@ c))` claims the fees (the author's half first, when there is one), and once `scr
 holds, `companion.scriptStep(me, keys, s.program, extras)` runs a step, `extras` being what your
 `companion_step` documents after its six accounts (a trade: the launch pool's swap accounts, as
 `launch.swap(keys, creator, creator, 1, lamports, minOut)` names them); the sender is paid
-`SCRIPT_LIMITS.bounty` from the pot. Bordrless's keeper steps every launched script.
+`SCRIPT_LIMITS.bounty` from the pot. Bordrless's keeper steps every launched script, with what its
+`keeper.json` asks for (below). A launch from the site asks for the state `keeper.json` says (`stateLen`, 1,024 bytes when it
+says none) and gives `companion_init` its `initData` (hex; nothing when it says none).
 
-**3. A pair** is submitted as one Workshop item (both sources; one approval bound to both builds,
-one deploy, one config that requires the script: the launch page locks the hook to it). On chain
-it is the two above: a plain config on the hook (`buildCreateConfig`, never listed: a companion
-refuses an author share) and `companion.createScript` with the script in the same setup, the
+**3. A pair** is submitted as one Workshop item (both sources, `keeper.json` beside the script's
+and `hook.json` beside the hook's when they apply; one approval bound to both builds, one deploy,
+one config that requires the script: the launch page locks the hook to it). Whale Bait, the first:
+the hook cuts whale trades in tokens into the creator address's holding of the token, the script
+sells them into the pot and pays the holders under 20M tokens once an epoch. On chain it is the
+two above: a plain config on the hook (`buildCreateConfig`, never listed: a companion refuses an
+author share, so the pair's builder is paid by the companion program alone) and
+`companion.createScript` with the script in the same setup, the
 launch wrapping `launch.createLaunch(companionCreatorAddress(mint), ..., { launchConfig,
 customHook })` in `companion.launch`. Every step that moves the token then carries the hook's
 slice (`launchKeys(..., config.hookAccounts)`). Which companion a config requires
@@ -543,14 +596,20 @@ together for a program.
 A script that pays holders needs their holdings among its step's accounts, and the sender of a step
 chooses those. You never run a keeper: put **`keeper.json`** at the root of the script's source,
 beside `src/` (where Cargo.toml sits), and submit it with the source. The Workshop checks it, the
-review reads it beside your code, the approval binds it, and Bordrless's keeper then brings what it
-says to every step of every launch with your script. The schema (version 1, in
+reading reads it beside your code, the approval binds it, and Bordrless's keeper then brings what it
+says to every step of every launch with your script; without one a step brings the pool's swap
+accounts alone, so a companion that pays holders pays nobody. The schema (version 1, in
 docs/scripts.md "What a script may ask the keeper for"): which holdings (`minBalance`,
 `maxBalance` in base units or a field of your state; a filter on a field of their 64 bytes of hook
 data against a constant, `"poolPrice"` or the current epoch), where each is paid (`owner`, the
 owner's wallet; `ownerQuoteHolding`, the owner's bridged-SOL holding; `none`), how many a step
-brings with the launch pool's swap accounts and without them, and whether it carries them. Anyone
-can still send a step with any accounts: check every holding and payee in the script itself.
+brings with the launch pool's swap accounts and without them, and whether it carries them
+(`swapAccounts`), the token's hook accounts (`hookAccounts`) or the companion's payout accounts
+(`payouts`, the payout path below); `stepSecs`, how often a step runs (10 s to a day; the launch
+takes it from here, never from the launcher: without it a thirtieth of a fixed `roundSecs`, else a
+minute, `keeperStepSecs`); and `wallets`, up to 12 addresses or keys in your state a step brings
+for wallet answers. Anyone can still send a step with any accounts: check every holding and payee
+in the script itself.
 
 ```ts
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -564,75 +623,102 @@ if (!checked.ok) throw new Error(checked.problem);   // the sentence the Worksho
 console.log(checked.words);                           // what its page will say: "Each step brings up to 3 holders ..."
 ```
 
-### Compose a hook: rules, no program
+### A hook that takes SOL: quote_cut and hook.json
 
-The third way (docs/rules-lane.md): most custom hooks are a few conditions over a holding's state
-and a few actions on the transfer. Write exactly that as data, bind it to a launch config, and
-Bordrless's one rules engine (`rules_hook`) runs it; the site reads the bytes back word for word,
-with no review, no build and no trading test, and lists it with no submission fee. A rule set is at
-most 6 rules; each runs `on` some sides (sell, buy, send, receive, burn), `when` up to three
-conditions all hold, `unless` one holds, and `then` takes a cut (1 to 1,500 bps of the amount, the
-cuts of a side at most 1,500 in all, burned or paid to the creator or a named wallet), refuses the
-operation with a reason, counts, or marks the holding. No oracle: a dollar threshold is fixed in SOL
-when the set is composed, and the sentence says the SOL figure.
+A token hook only sees token transfers, so a cut it takes is in the token. Since the launchpad of
+13 Oct 2026 a custom hook can also take SOL on every trade of its coin: it implements `quote_cut`,
+which the launchpad calls (signing with `quoteCutSignerAddress(hook)`) on a coin whose config was
+made with `launch.createQuoteCutConfig`, and takes the rate it answers (a `u16` of basis points, the
+instruction's return value: `-> Result<u16>` in Anchor), at most the config's cap, from the trade's
+SOL into the creator fee. In the Workshop you don't make that config: put **`hook.json`** beside the
+hook's `src/` with its caps, and the Workshop makes the config with them once it is approved
+(docs/workshop.md "A hook's SOL cut"). A hook with `quote_cut` must have one; a `hook.json` without
+`quote_cut` is refused. The trading test runs the cut at the caps (every cut must be
+min(answer, cap) of the SOL the launchpad passed), and the reading reads the caps beside the code.
 
 ```ts
-import { buildCreateComposedConfig, rules, workshop } from '@bordrless/sdk';
+import { writeFileSync } from 'node:fs';
+import { HOOK_JSON_EXAMPLE, checkHookJson } from '@bordrless/sdk';
 
-const set = rules
-  .compose({ keeps: ['entry'], destination: 'burn' })
-  .rule({ on: ['sell'], when: [rules.gain.gt(0)], then: rules.cut(500) })
-  .build();                                       // throws the engine’s own refusal, by code (RulesError.code)
-const words = rules.render(set);                  // { sentences, mostTakes, flags, watch, keeps }
-// words.sentences: ["Takes 5% of every sell by a holder in profit, burned.", "Holders under water sell free."]
-// words.mostTakes.text: "5% of a sell; nothing from buys or transfers"; words.flags: 209
-
-const made = buildCreateComposedConfig(me, { label: 'Loss shield', creatorFeeBps: 100, listed: true }, set);
-// made.instructions: create_listed_config (half the creator fee to you on launches by others) then bind,
-// in ONE transaction signed by me and made.keypair; made.address is the key to paste under "Custom config".
-// Once it landed, list it on the Workshop's shelves as the wallet that made it (six a day, no fee):
-const session = await workshop.signIn(me, signMessage);          // the Workshop's sign-in message: a message, never a transaction
-const item = await workshop.registerComposed(made.address, session); // lane: 'rules', approved at once, its words read from its rules
+writeFileSync('my_hook/hook.json', HOOK_JSON_EXAMPLE);   // up to 8% of a buy's SOL, nothing on sells
+const checked = checkHookJson(HOOK_JSON_EXAMPLE);
+if (!checked.ok) throw new Error(checked.problem);      // the sentence the Workshop would refuse it with
+console.log(checked.words, checked.details[0]);          // what its page will say, and what a trader pays with Bordrless's 25% on top
 ```
 
-The values a rule can see (`rules.amount`, `amountShare`, `balanceBefore`, `balanceAfter`,
-`shareAfter`, `tradePrice`, `spotPrice`, `gain`, `loss`, `valueBefore`, `valueAfter`,
-`sinceReceived`, `sinceSent`, `age`, `firstAfterLaunch`, `sinceLaunch`, `counter`,
-`flag(k)`, and `graduated`, `hasEntry` with their negations), the actions (`rules.cut(bps)`,
-`rules.refuse('cooling' | 'cap' | 'locked' | 'rule')`, `rules.count('add' | 'reset')`,
-`rules.mark(k, set)`) and every bound are docs/rules-lane.md §1; what the engine keeps per holding
-(`keeps: ['entry' | 'times' | 'count']`) must cover what the conditions read. Reading what is
-there: `decodeRuleSetAccount(data)` at `ruleSetAddress(config)`, `decodeRulesState(data)` at
-`rulesStateAddress(mint)`, `decodeRulesHolding(hookData)` (the 64 bytes, the Loss cover script's
-fields at the same offsets, so Lossback runs unchanged on a composed hook). `rulesHook.prepare(me,
-mint, config)` prepares the engine for a mint of your own; the launch does it for its own.
+### Paying through the companion: payouts
 
-When the lane cannot say it (randomness, a call into a program, a second cut destination, a price
-feed: §1.4), `rules.toStarter(set)` writes the Workshop template's `src/lib.rs` with the same rules
-spelled out in Rust (`rules::decide` on plain numbers), so the code lane starts from a familiar
-file. Every call here is in `packages/sdk/src/rules.test.ts`, against the shared vectors
-(`packages/shared/vectors/rules.json`) the engine's own tests read. The engine is not deployed
-yet: `RULES_HOOK.deployed` says so, and `RULES_HOOK_PROGRAM` is a placeholder until it is.
+A script may also let the companion program pay (docs/loss-cover.md §1; Lossback's path, live). A
+script made with `companion.createScriptV2` has payout terms, `PayoutTerms` at
+`payoutTermsAddress(mint)`: the most one step pays of the pot, the most one holding (or wallet)
+gets of a step's budget, the most a window pays of the pot, and the window (10 s to a day;
+`PAYOUT_LIMITS`, `payoutTermsValid`). Its `companion_step` then answers, as return data, a
+`PayoutAnswer` (`encodePayoutAnswer`: version 1, up to 16 entries, each the index of a holding
+among the step's extra accounts, lamports and a tag); the companion checks every entry against the
+terms, pays each holding's owner SOL from the pot and has the token's hook record it
+(`record_payout`, signed by `PAYOUT_AUTHORITY`; the hook needs `WRITES_HOOK_DATA` and that
+instruction, the pair brief on https://bordrless.app/sdk/build spells it out), one bad entry
+failing the whole step. With `companion.allowWalletPayouts(mint)` sent before the launch it may
+answer wallets instead (`encodeWalletPayoutAnswer`, version 2). The step's extras start with
+`companion.payoutAccounts(mint, hook)`, then each holding (writable) with its owner (writable):
+`keeper.json` `{ "payouts": true, "payTo": "owner" }` has Bordrless's keeper bring exactly that.
 
-**Coming, not built:** the payout answer (docs/loss-cover.md §1): a `companion_step` will answer
-a `PayoutAnswer` (up to 16 holdings among its extra accounts, with lamports and a tag) that the
-companion pays from the pot within bounds and records through the hook. Its encoder lands in
-`scripts.ts`, `companion.createScriptV2` and `decodePayoutTerms` in `companion.ts`.
+```ts
+import type { PublicKey } from '@solana/web3.js';
+import { COMPANION_DEFAULTS, PAYOUT_LIMITS, companion, decodePayoutTerms, encodePayoutAnswer, launchKeysOf, payoutTermsAddress } from '@bordrless/sdk';
 
-## Risk labels, timelocks, strategies and vaults (0.8.0 and later)
+// The setup: the script made with create_script_v2, so it has payout terms (bps of the pot, of a step's budget, of
+// the pot per window; the window in seconds).
+const terms = { stepBps: 1_000, holdingBps: 10_000, windowBps: 2_500, windowSecs: 86_400 };
+const setup = [
+  companion.create(me, me, mint, { split: { buybackBps: 0, holdersBps: 0, beneficiaryBps: 10_000 }, ...COMPANION_DEFAULTS, fund }),
+  companion.createScriptV2(me, mint, { split, potBps, program: script, interval: 15, stateLen: 128, initData: new Uint8Array() }, terms),
+  // companion.allowWalletPayouts(mint): the script may then answer wallets too (encodeWalletPayoutAnswer).
+];
 
-- `hookRiskLabel(connection, program, { mint })`: who can change a hook (immutable, timelocked N days,
-  Bordrless-managed, author-upgradeable), whether its code is audited or Studio-attested, and any other
-  programs it calls. Show it next to every custom-hook token.
-- `timelock`: put your own hook or strategy's upgrade authority behind a public delay (at least 3
-  days, only ever lengthened), propose code by hash, execute after the delay, or finalize to immutable.
-- `strategy`: a companion game whose payouts your program decides, within the companion's caps.
-- `vault`: route a hook's cut to slots that burn, sell for SOL to a fixed wallet, or buy and burn
-  another token, fixed before launch.
-- The `bordrless` CLI (`npx bordrless --help`): build, deploy (immutable or timelocked), register,
-  propose and execute.
+// A step that answers payouts: the companion's payout accounts first, then each holding (writable) with its owner.
+const w = (pubkey: PublicKey) => ({ pubkey, isSigner: false, isWritable: true });
+const extras = [...companion.payoutAccounts(mint, hook), ...candidates.flatMap((c) => [w(c.holding), w(c.owner)])];
+const step = companion.scriptStep(me, launchKeysOf(l), script, extras);
 
-Design: [docs/phase3a.md](https://github.com/BordrlessDex/bordrless-programs/blob/main/docs/phase3a.md).
+// What the script's companion_step returns (set_return_data in Rust): version 1, up to
+// PAYOUT_LIMITS.maxPayoutsPerStep entries, each the index of a holding among the extras, lamports and a tag.
+const answer = encodePayoutAnswer({ version: 1, entries: [{ account: 7, lamports: 50_000_000n, tag: 12 }] });
+const read = decodePayoutTerms((await connection.getAccountInfo(payoutTermsAddress(mint)))!.data); // paidTotal, walletsAllowed, …
+```
+
+The launch page makes the terms (`create_script_v2`) only for a Workshop script whose `keeper.json`
+names wallets, with the site's own limits; a pair on this path otherwise launches through the SDK,
+as above.
+
+### The reading lane: Bordrless's words on a program you deployed
+
+A program you deployed yourself (either lane above) is shown as not read by Bordrless. To have
+Bordrless's reading on it, submit its source with the program's address on
+https://bordrless.app/workshop/submit: the same submission fee and the same checks as its kind (a
+hook: the rules, the build, the trading test, the reading; a companion: the rules, the build, the
+reading), then Bordrless's build of your source is compared with the code on chain. Equal, the
+item is `matched` and the reading, its rules and its verdict show wherever the program is used
+(the launch page's config readout, the token page), as long as the code on chain stays that build;
+a redeploy needs the new source sent as a fix. Nothing is deployed, no key of Bordrless's is
+involved, no share is paid, and the item is never on the Workshop's shelves. The build is of your
+source on Bordrless's template with your own program id in `declare_id!`, so it can only match a
+program built from that same source (`WorkshopSubmitRequest.program`, `WorkshopItem.lane`,
+`WorkshopDetail.match` in @bordrless/shared).
+
+### Write it so the reading can state it
+
+The reading (one AI pass, `apps/server/src/workshop/reader.ts`) states a hook's rules as exact
+rows ("Under 5M tokens: 0% hook tax", "5M–10M tokens: 3% of the tokens on buys and sells, to the
+pot", "Transfers: free") and a companion's steps ("Every 5 minutes: the pot pays holders under 20M
+tokens"), which the Workshop card, the launch page and the token page show (`WorkshopReading.rules`,
+`WorkshopReadingRule` in @bordrless/shared); a rate read from an account the code does not bound has
+no fixed rate. Write every rate, threshold and period as a named constant, one tier per constant,
+and keep the hook data layout in a comment with offsets: the trading test's largest cut is held
+against the reading, and a reading that said less is written again. The reading also judges the
+code (a verdict with findings, shown on the item's page); it never holds the approval, which is
+automatic once the rules, the build and the trading test pass. A reading by AI and a test, not an
+audit.
 
 ## Where to read more
 
@@ -649,5 +735,4 @@ timelocked or upgradeable only by Bordrless, or created directly through `token.
 for any pair (`swap.createPool`), curves a program of yours opens as its hook (`swap.createPool`
 with `hookAuthority(program)`, `swap.finalizeCurve`) and bridged assets (`bridge.register`) need
 nobody's permission. Companions (`bordrless_companion`) are live on mainnet too, with games,
-Snowball and scripts; immutable scripts with no approval run once the companion upgrade of
-2026-10-12 evening is live.
+Snowball, scripts, payouts and payees; an immutable script runs with no approval.

@@ -4,7 +4,8 @@
  * read is null, never zero.
  */
 import type { RulesReadout } from './rules.ts';
-import type { WorkshopReading } from './workshop.ts';
+import type { KeeperLaunchTerms } from './keeper.ts';
+import type { WorkshopFigures, WorkshopReading } from './workshop.ts';
 
 export type Address = string;
 /** Base units, as a decimal string. */
@@ -169,8 +170,10 @@ export interface QuoteCutInfo {
  * Bordrless's checks, like "it takes 2% of every sell by a wallet over $1,000"): the item (its page
  * is /workshop/<id>), the AI's reading of its source (what it does, the most it takes, what to
  * watch), the largest cut of one transfer the trading test measured (a hook; null for a companion,
- * which has no trading test) and the security review's verdict (`pass`: no finding above low;
- * `warn`: passed with notes; `fail`: only in the reading lane, where the words are shown anyway).
+ * which has no trading test) and the reading's verdict (`pass`: no finding above low; `warn`: a
+ * medium finding; `fail`: a high or critical one, shown as it is: in the reading lane the words
+ * show anyway, and an item the owner approved with it says so). The reading is the Workshop's one AI
+ * pass since 2026-10-13; an item read before without a verdict keeps its security review's.
  * Served for an item that is approved and deployed (the Workshop lane), or matched (the reading
  * lane, docs/workshop.md "The reading lane": the builder deployed the program themselves, and the
  * words show while the code on chain stays the build Bordrless checked). A composed hook
@@ -192,7 +195,7 @@ export interface HookReading {
   approvedBy?: 'auto' | 'operator' | null;
   /** `workshop`: Bordrless deployed it under its own key; `reading`: its builder deployed it, and Bordrless read the source that matches it; `rules`: composed from Bordrless rules and run by the rules engine. Absent from older servers: `workshop`. */
   lane?: 'workshop' | 'reading' | 'rules';
-  /** With a `fail` verdict: the titles of the review's first findings (the most severe first), for the site to say what failed. Absent otherwise. */
+  /** With a `fail` verdict: the titles of the reading's first findings (the most severe first), for the site to say what failed. Absent otherwise. */
   findings?: string[];
 }
 
@@ -271,6 +274,8 @@ export interface LaunchConfigData {
     risk?: HookRiskStatus | null;
     /** As `CustomHookInfo.rules`: a composed hook's rule set, read from the `RuleSet` bound to this config; null for any other hook or an unbound one. Absent from older servers. */
     rules?: RulesReadout | null;
+    /** As `CustomHookInfo.quoteCut`: the SOL cut's caps of a config made with `create_quote_cut_config` (`takenLamports` '0': a config has taken nothing); null for any other config. Absent from older servers. */
+    quoteCut?: QuoteCutInfo | null;
   } | null;
   label: string;
 }
@@ -347,8 +352,10 @@ export type RequiredCompanion =
       reading?: WorkshopReading | null;
       /** A companion script has no trading test: never a measured cut. */
       measuredCutBps?: null;
-      /** The script half's security review verdict, as `HookReading.verdict`. Absent from older servers. */
-      verdict?: 'pass' | 'warn' | null;
+      /** The pair's verdict (its reading's, one for both halves), as `HookReading.verdict`. Absent from older servers. */
+      verdict?: 'pass' | 'warn' | 'fail' | null;
+      /** What a launch with the pair's script takes from its keeper.json (`WorkshopItem.keeper`): how often a step runs, whether it pays wallets. Absent for a preset and from older servers. */
+      keeper?: KeeperLaunchTerms | null;
     };
 
 /** Live figures of a launch's token rules; each null when the launch lacks the rule or it is not tracked. */
@@ -492,6 +499,12 @@ export interface LaunchDetail extends LaunchSummary {
   holderVault: Address | null;
   /** The program that is this launch's creator (docs/companions.md), read live; null for a launch whose creator is a wallet. */
   companion: CompanionSummary | null;
+  /**
+   * What its Workshop custom hook or companion has done on this coin (`WorkshopFigures`, `coins` 1):
+   * its hook's cuts, its companion's pot in and out. Null for a coin with neither from the Workshop,
+   * or when they can't be read; absent from older servers.
+   */
+  workshopFigures?: WorkshopFigures | null;
 }
 
 /** `GET /v1/launches?sort=`: newest first by default; `rewards24h` most paid to holders in 24 h first; `fees` lowest buy-then-sell fee first. */
@@ -644,6 +657,14 @@ export interface SwapQuote {
   graduates: boolean;
   /** The most that can be bought before the curve is empty, or null off the curve. */
   maxAmountIn: Amount | null;
+  /**
+   * A buy past the end of the curve (docs/hooks-v2.md §3.1): the part of `amountIn` the swap uses,
+   * the smallest input that sells the curve out; the rest never leaves the wallet (the backend
+   * unwraps it back to SOL in the same transaction). The figures are of this part: `amountOut`,
+   * the fees, `effectivePrice`, `tradeUsd`; `minAmountOut` is for the whole `amountIn` at the same
+   * rate, as the program holds a filled buy to it pro rata. Null when the whole input is used.
+   */
+  amountUsed?: Amount | null;
   elevatedFee: boolean;
   quoteUsd: number | null;
   tradeUsd: number | null;
@@ -956,7 +977,7 @@ export interface ScriptSummary {
   reviewed?: boolean;
   /** Bordrless's reading of the Workshop item it came from (`HookReading.reading`); null for a script outside the Workshop. Absent from older servers. */
   reading?: WorkshopReading | null;
-  /** The security review's verdict of that item (`HookReading.verdict`; `fail` only in the reading lane); null for a script outside the Workshop. Absent from older servers. */
+  /** The verdict of that item's reading (`HookReading.verdict`); null for a script outside the Workshop. Absent from older servers. */
   verdict?: 'pass' | 'warn' | 'fail' | null;
   /**
    * `reading` when the script was deployed by its builder (immutable, outside the Workshop) and a

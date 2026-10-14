@@ -62,6 +62,7 @@ const EXPLANATIONS: Partial<Record<ProgramName, Readonly<Record<string, string>>
   swap: {
     Slippage: 'The price moved more than your slippage allows. Try again or raise the slippage.',
     InsufficientLiquidity: 'The pool cannot fill this trade. Try a smaller amount.',
+    BadFill: 'The pool hook answered a fill the DEX does not take: zero, above the input, or not for a buy on a curve.',
     FeeExceedsInput: 'The amount is too small for the fees. Try a larger amount.',
     FeeExceedsOutput: 'The amount is too small: the fees would take everything it gets back. Try a larger amount.',
     NothingReceived: 'Nothing reached the pool. Try a larger amount.',

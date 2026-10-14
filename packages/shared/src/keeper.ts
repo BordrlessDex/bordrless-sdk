@@ -138,6 +138,21 @@ export interface KeeperDeclaration {
    * of the normal form, so a declaration approved before wallets existed hashes as it did.
    */
   wallets?: KeeperWallet[];
+  /**
+   * How often its step runs, seconds (`SCRIPT_BOUNDS.minInterval` to `maxInterval`, 10 s to a day;
+   * 2026-10-13): the launch's script interval, set from the item, never by the launcher. Absent: the
+   * default `keeperStepSecs` works out. Left out of the normal form when absent, so a declaration
+   * approved before it hashes as it did.
+   */
+  stepSecs?: number;
+  /**
+   * The state the companion makes for the script, bytes (0 to `SCRIPT_BOUNDS.maxStateLen`;
+   * 2026-10-13): what a site launch asks for. Absent: `KEEPER_DEFAULT_STATE_LEN`. Left out of the
+   * normal form when absent.
+   */
+  stateLen?: number;
+  /** What `companion_init` gets at a site launch, hex (at most `SCRIPT_BOUNDS.maxInitLen` bytes). Absent: nothing. Left out of the normal form when absent. */
+  initData?: string;
 }
 
 export type KeeperParse = { ok: true; declaration: KeeperDeclaration } | { ok: false; problem: string };
@@ -302,7 +317,7 @@ function holdingsOf(v: unknown, swapAccounts: boolean, payouts: boolean): Keeper
 /** The declaration in a parsed JSON value, held to the schema and its bounds: its normal form, or why not, in one sentence. */
 export function keeperDeclarationOf(value: unknown): KeeperParse {
   try {
-    const root = fieldsOf(value, 'the file', ['version', 'holdings', 'swapAccounts', 'hookAccounts', 'payouts', 'roundSecs', 'wallets'], 'one object');
+    const root = fieldsOf(value, 'the file', ['version', 'holdings', 'swapAccounts', 'hookAccounts', 'payouts', 'roundSecs', 'wallets', 'stepSecs', 'stateLen', 'initData'], 'one object');
     if (root.version !== KEEPER_VERSION) fail(`version is ${KEEPER_VERSION}, the only one there is.`);
     const wallets = walletsOf(root.wallets, 'wallets');
     // A script that pays wallets alone brings no holdings.
@@ -313,12 +328,72 @@ export function keeperDeclarationOf(value: unknown): KeeperParse {
     const payouts = flagOf(root.payouts, 'payouts', false);
     const holdings = noHoldings ? null : holdingsOf(root.holdings, swapAccounts, payouts);
     const roundSecs = root.roundSecs === undefined || root.roundSecs === null ? null : secondsOf(root.roundSecs, 'roundSecs');
-    return { ok: true, declaration: { version: 1, holdings, swapAccounts, hookAccounts, payouts, roundSecs, ...(wallets.length > 0 ? { wallets } : {}) } };
+    const stepSecs = root.stepSecs === undefined || root.stepSecs === null ? null : stepSecsOf(root.stepSecs);
+    const stateLen = root.stateLen === undefined || root.stateLen === null ? null : stateLenOf(root.stateLen);
+    const initData = root.initData === undefined || root.initData === null ? null : initDataOf(root.initData);
+    return { ok: true, declaration: { version: 1, holdings, swapAccounts, hookAccounts, payouts, roundSecs, ...(wallets.length > 0 ? { wallets } : {}), ...(stepSecs !== null ? { stepSecs } : {}), ...(stateLen !== null ? { stateLen } : {}), ...(initData !== null ? { initData } : {}) } };
   } catch (error) {
     if (error instanceof KeeperProblem) return { ok: false, problem: error.message };
     throw error;
   }
 }
+
+/** `stateLen`: a whole number of bytes, 0 to the companion's most. */
+function stateLenOf(v: unknown): number {
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > SCRIPT_BOUNDS.maxStateLen) return fail(`stateLen is the state the companion makes for the script: a whole number of bytes from 0 to ${group(SCRIPT_BOUNDS.maxStateLen)}.`);
+  return v;
+}
+
+/** `initData`: hex, an even number of digits, at most the companion's most bytes; kept lower-case. */
+function initDataOf(v: unknown): string {
+  if (typeof v !== 'string' || !/^([0-9a-fA-F]{2})*$/.test(v) || v.length / 2 > SCRIPT_BOUNDS.maxInitLen) return fail(`initData is what companion_init gets, as hex: an even number of hex digits, at most ${SCRIPT_BOUNDS.maxInitLen} bytes.`);
+  return v.toLowerCase();
+}
+
+/** `stepSecs`: a whole number of seconds within the companion's step bounds. */
+function stepSecsOf(v: unknown): number {
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < SCRIPT_BOUNDS.minInterval || v > SCRIPT_BOUNDS.maxInterval) {
+    return fail(`stepSecs is how often a step runs: a whole number of seconds from ${SCRIPT_BOUNDS.minInterval} to ${group(SCRIPT_BOUNDS.maxInterval)} (a day).`);
+  }
+  return v;
+}
+
+/** A step a minute: how often a script steps when its declaration names no round (or there is none), as the launch page started every custom hook before. */
+export const DEFAULT_STEP_SECS = 60;
+/** Steps a round, by default: a round of 300 s steps every 10 s, so 30 steps bring 30 times `perStep` holdings each round (90 for Whale Bait's 3). */
+export const STEPS_PER_ROUND = 30;
+
+/**
+ * How often a script's step runs (the launch's script interval, 2026-10-13: the builder's, never the
+ * launcher's): its declaration's `stepSecs`; else, with a round of a fixed length, a thirtieth of
+ * it (`STEPS_PER_ROUND`, within the companion's bounds), so the keeper reaches thirty steps' worth
+ * of holdings every round; else a step a minute (`DEFAULT_STEP_SECS`), also for a script with no
+ * declaration.
+ */
+export function keeperStepSecs(d: Pick<KeeperDeclaration, 'stepSecs' | 'roundSecs'> | null | undefined): number {
+  if (d?.stepSecs !== undefined) return d.stepSecs;
+  const round = d?.roundSecs;
+  if (typeof round === 'number') return Math.min(SCRIPT_BOUNDS.maxInterval, Math.max(SCRIPT_BOUNDS.minInterval, Math.floor(round / STEPS_PER_ROUND)));
+  return DEFAULT_STEP_SECS;
+}
+
+/** What a launch takes from a script's declaration (the launch page's, 2026-10-13): how often a step runs, and whether its script pays wallets (its launch then allows wallet payouts, within the payout terms the site fixes). */
+export interface KeeperLaunchTerms {
+  stepSecs: number;
+  wallets: boolean;
+  /** The state the companion makes for it, bytes (`stateLen`; `KEEPER_DEFAULT_STATE_LEN` when the declaration says none). */
+  stateLen: number;
+  /** What `companion_init` gets, hex ('' for nothing). */
+  initData: string;
+  /** It pays holders through the companion's payout path (`payouts`): a launch makes its payout terms. */
+  payouts: boolean;
+}
+
+/** The state a site launch asks for when keeper.json says nothing: room for most scripts' state (rent about 0.008 SOL, the launcher's), harmless to one that keeps none. */
+export const KEEPER_DEFAULT_STATE_LEN = 1_024;
+
+/** A declaration's launch terms; a script with none steps every `DEFAULT_STEP_SECS`, pays no wallet, gets `KEEPER_DEFAULT_STATE_LEN` bytes of state and no init data. */
+export const keeperLaunchTerms = (d: KeeperDeclaration | null | undefined): KeeperLaunchTerms => ({ stepSecs: keeperStepSecs(d), wallets: (d?.wallets?.length ?? 0) > 0, stateLen: d?.stateLen ?? KEEPER_DEFAULT_STATE_LEN, initData: d?.initData ?? '', payouts: d?.payouts === true });
 
 /** Bytes of a text in UTF-8 (a lone surrogate counts as its replacement character, 3). */
 export function utf8Length(text: string): number {
@@ -454,6 +529,7 @@ export function keeperDetails(d: KeeperDeclaration): string[] {
     const e = f.against.epoch;
     out.push(`An epoch is ${typeof e.secs === 'number' ? `${e.secs} seconds` : `${field(e.secs.state)} in seconds`}${e.fieldUnitSecs ? `; the hook data counts units of ${e.fieldUnitSecs} seconds` : ''}.`);
   }
+  if (d.stepSecs !== undefined) out.push(`A step runs every ${d.stepSecs} seconds.`);
   if (d.roundSecs !== null) out.push(`A round of the keeper’s (what it says once a round: a wait, nobody to bring) is ${typeof d.roundSecs === 'number' ? `${d.roundSecs} seconds` : `${field(d.roundSecs.state)} in seconds`}.`);
   return out;
 }

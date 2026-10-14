@@ -4,6 +4,81 @@ The public package is `@bordrless/sdk` on npm, published from the public reposit
 BordrlessDex/bordrless-sdk together with `@bordrless/shared` (shared first; the SDK depends on the
 same version of it). The monorepo is where both are written.
 
+## 0.12.0 (14 Oct 2026)
+
+Everything since 0.11.0. The DEX and the launchpad of the curve fill are live on mainnet (verified
+builds `98ae8d06…` and `ec650216…` of bordrless-programs `99b5ed6`). After the audit, a fill is
+taken only for a swap the transaction sends the DEX itself, and only on a launch pool's curve: a
+program that calls the DEX (the router, a companion, your own) and a curve another program opens
+behave exactly as before, failing past the end with `InsufficientLiquidity`.
+
+What changed for builders on 13 Oct 2026 after 0.10.0 was written up. Every type and constant
+below is `@bordrless/shared`'s unless said otherwise; the README's walkthrough was rewritten to
+match (below).
+
+- **A buy past the end of the curve is filled** (the DEX and launchpad upgrade of 13 Oct 2026,
+  docs/hooks-v2.md §3.1, §5.4). A buy larger than what a launch's curve has left no longer fails
+  with `InsufficientLiquidity`: the launchpad's `before_swap` answers the fill, the smallest part
+  of the input that sells the curve out, the DEX uses that much (its fees of that part), takes
+  every token left and leaves the rest of the input in the trader's quote holding, and `graduate`
+  can follow in the same transaction. `curveFillBuy(reserves, amountIn, lpFeeBps,
+  protocolShareBps, params, quoteCutBps?)` is the program's bisection (null short of the end);
+  `quoteLaunchSwap(…, fill)` is the swap of the fill; `launchBuyNetIn` and `quoteCutFee` are the
+  pieces. `SwapQuote.amountUsed` (`swap/quote`, `swap/prepare`) says the part used, the figures
+  being of it, and `minAmountOut` is for the whole `amountIn` at the fill's rate: the program
+  holds a filled buy's minimum to pro rata, so a terminal gives the least it accepts for the
+  whole input. The site's prepared transaction wraps the whole amount and unwraps what was not
+  used back to SOL. The pool hook protocol (`bordrless-hook`, declared last so no other hook's
+  build moves): `answer_bytes` / `set_answer` / `read_filled_answer`, nine bytes after a
+  `before_swap` answer, taken by the DEX where the pool's flags let the hook cut the input
+  (`BEFORE_SWAP_RETURNS_DELTA`); a plain answer is byte for byte what it was, so a hook built
+  before needs no change. The DEX's new error `BadFill` (`swap`, 6038): a fill of zero, above the
+  input, for a sell or on a pool that is not a curve.
+
+- **One reading, automatic approval.** The Workshop's separate security review by AI is gone: the
+  reading (`WorkshopReading`) is the one AI pass and carries a `verdict` and `findings`;
+  `WorkshopCheck.id` `review` is no longer sent. An item is approved by itself once the template's
+  rules, the build and a hook's trading test pass (`WorkshopDetail.approvedBy` `'auto'`); the
+  verdict and findings are shown with it and never hold it.
+- **The reading's rules.** `WorkshopReading.rules` (`WorkshopReadingRule`: `on`, `when`, `bps`,
+  `to`, `text`; `WORKSHOP_RULE_ON`, `WORKSHOP_RULE_TO`, `WORKSHOP_RULE_ON_WORDS`,
+  `WORKSHOP_READING_LIMITS.rules`), the exact rows the site shows for a custom hook ("Under 5M
+  tokens: 0% hook tax", "Every 5 minutes: the pot pays holders under 20M tokens"), and
+  `measuredBps`, the trading test's largest cut the reading was held to (a reading that said less
+  is written again). `WorkshopFigures` (`WorkshopDetail.figures`): SOL and tokens its hook took,
+  the pot's in and out, the holders paid.
+- **keeper.json `stepSecs`.** How often a script's step runs is the builder's, in the declaration
+  (`KeeperDeclaration.stepSecs`, 10 s to a day; without it a thirtieth of a fixed `roundSecs`, else
+  a minute: `keeperStepSecs`, `DEFAULT_STEP_SECS`, `STEPS_PER_ROUND`). `keeperLaunchTerms` and
+  `KeeperLaunchTerms` (`stepSecs`, `wallets`) are what a launch takes from it, served on
+  `WorkshopItem.keeper`; the launch page asks the launcher for nothing.
+- **hook.json's trading test.** The builder worker runs a hook's SOL cut at its declared caps:
+  `StudioSim.quoteCut` (`StudioSimQuoteCut`: the most taken of a buy and of a sell, the hook's
+  largest answer, the trades asked and taken, the SOL taken) on `WorkshopDetail.test.quoteCut`; a
+  cut that is not min(answer, cap) of the SOL the launchpad passed fails the test.
+- **The builder's share.** `WorkshopSubmitRequest.authorShareBps`, `WorkshopItem.authorShareBps`,
+  `WorkshopConfigPrepareRequest.authorShareBps`, `WORKSHOP_AUTHOR_SHARES_BPS` (`AUTHOR_SHARE_BPS` or
+  0): a builder takes half the creator fee of others' launches or nothing, chosen at the submission
+  (a hook's again at its config step). A pair's config pays no author; its builder is paid by the
+  companion program.
+- **Adopted configs.** A listed config a hook's builder made with the SDK (`buildCreateListedConfig`)
+  and launched with is adopted by the Workshop as the item's `config`, so the hook is offered on the
+  launch page; every launch made with the hook counts on the item, by its program.
+- **Pairs, as the owner put it:** a hook on the trades and a companion on the pot, as one; the hook
+  can take a cut, keep a score or fund the pot, the companion pays from the pot, filled by the
+  creator fee or by the hook (Whale Bait). A pair's fix sends both halves in one drop.
+- **Compose a hook is off the site** (the owner, 2026-10-13). `rules.ts`, `buildCreateComposedConfig`
+  and `workshop.registerComposed` stay in the package for the deployed engine, but the site offers
+  no composed hook and the README's section is gone.
+- **The payout path is built**, not coming: `companion.createScriptV2`, `companion.payoutAccounts`,
+  `encodePayoutAnswer`, `decodePayoutTerms`, `PAYOUT_LIMITS` (in `lossCover.ts` since 0.10.0's
+  Lossback). The README's "Paying through the companion" section says how a pair uses it, and
+  `scripts.ts`'s doc string no longer calls it unbuilt.
+- **The README**: the walkthrough (the local build, the simulator, the submission with its fee, the
+  checks, the automatic approval, the deploy, the config made on the page or with the SDK, the
+  launch), the reading lane for a program you deployed, what the reading states and how to write
+  for it, and the pair patterns. The /sdk pages and the briefs on /sdk/build say the same.
+
 ## 0.11.0 (13 Oct 2026)
 
 The launchpad's partner fee, live on mainnet (verified build `614760c7…` of bordrless-programs
@@ -112,6 +187,13 @@ build `708a6083…` of bordrless-programs `212f6ba`), and the router (`7M5GTuzh�
   creator trading to itself); without them a trade fails with `QuoteCutAccountsMissing`. The launch
   IDL gains `create_quote_cut_config`, the events `QuoteCutConfigured`, `LaunchQuoteCut` and
   `QuoteCutTaken` (logged, not self-CPI) and the errors 6046 to 6049.
+- **A Workshop hook's SOL cut: `hook.json`** (docs/workshop.md "A hook's SOL cut"): a hook with
+  `quote_cut` says its caps beside `src/` (`{"version":1,"quoteCut":{"maxBuyBps":1..1000,
+  "maxSellBps":0..1000}}`), and the Workshop makes its config with them. `checkHookJson` (the
+  Workshop's own check), `hookJson`, `HOOK_JSON_EXAMPLE`; from @bordrless/shared (`hookDeclaration.ts`):
+  `HOOK_FILE`, `HOOK_DECLARATION_LIMITS`, `parseHookDeclaration`, `hookDeclarationOf`,
+  `hookDeclarationOfFiles`, `canonicalHookJson`, `quoteCutWords`, `quoteCutDetails`,
+  `quoteCutPaidBps`, `HookDeclaration`, `HookQuoteCut`.
 
 ## 0.9.0 (prepared; npm has 0.8.0 until it is published)
 
