@@ -609,7 +609,9 @@ brings with the launch pool's swap accounts and without them, and whether it car
 takes it from here, never from the launcher: without it a thirtieth of a fixed `roundSecs`, else a
 minute, `keeperStepSecs`); and `wallets`, up to 12 addresses or keys in your state a step brings
 for wallet answers. Anyone can still send a step with any accounts: check every holding and payee
-in the script itself.
+in the script itself. Only a holder answer reaches your hook’s `record_payout`; a wallet answer
+emits `ScriptWalletPayout` with your tag and writes nothing on any holding, so a script that pays
+wallets keeps what it has paid in its own state.
 
 ```ts
 import { readFileSync, writeFileSync } from 'node:fs';

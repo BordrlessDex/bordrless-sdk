@@ -114,7 +114,7 @@ need.
 | launch | `LaunchCreated`, `Graduated`, `CreatorFeesClaimed`, `LaunchConfigCreated`, `ConfigListed`, `AuthorFeesPaid`, `PartnerConfigured`, `LaunchPartner`, `PartnerFeesPaid`, `ConfigSet` |
 | kit | `KitInstalled`, `KitGraduated`, `RewardsClaimed`, `RewardsShared` |
 | bridge | `WrapperRegistered`, `Wrapped`, `Unwrapped`, `ConfigSet` |
-| companion | `CompanionCreated`, `CompanionLaunched`, `DevBought`, `DevReleased`, `FeesClaimed`, `BoughtBack`, `BuybackWaited`, `SharedWithHolders`, `BeneficiaryPaid`, `StrandedBurned`; games: `GameCreated`, `GameKindSet`, `PotFunded`, `PotToBuyback`, `PotRetired`, `HookStatusSet`; lottery: `DrawCommitted`, `DrawRequested`, `DrawRevealed`, `PrizePaid`, `RolledOver`; jackpot: `JackpotPaid`, `JackpotUnfunded`, `JackpotForfeited`; streak: `EpochClosed`, `EpochEnded`, `ShareClaimed` |
+| companion | `CompanionCreated`, `CompanionLaunched`, `DevBought`, `DevReleased`, `FeesClaimed`, `BoughtBack`, `BuybackWaited`, `SharedWithHolders`, `BeneficiaryPaid`, `StrandedBurned`; games: `GameCreated`, `GameKindSet`, `PotFunded`, `PotToBuyback`, `PotRetired`, `HookStatusSet`; lottery: `DrawCommitted`, `DrawRequested`, `DrawRevealed`, `PrizePaid`, `RolledOver`; jackpot: `JackpotPaid`, `JackpotUnfunded`, `JackpotForfeited`; streak: `EpochClosed`, `EpochEnded`, `ShareClaimed`; scripts: `ScriptCreated`, `ScriptStepped`, `ScriptPayout`, `ScriptWalletPayout`, `WalletPayoutsAllowed`; payees: `PayeesSet`, `PayeePaid` |
 | lottery hook | `Prepared`, `Entered` |
 
 `typedEvent` types the ones an indexer needs (`token.Transferred`, `token.HookDataWritten`,
@@ -155,6 +155,8 @@ Worth a row each:
 | `JackpotPaid`, `JackpotUnfunded`, `JackpotForfeited` | A jackpot round settled: paid to `winner`, closed unpaid with the pot short, or forfeited (`reason`) |
 | `EpochClosed`, `ShareClaimed`, `EpochEnded` | A streak epoch's pot fixed (`epochPot`, `total`), each holder's share paid, and what rolled over |
 | `PotRetired`, `PotToBuyback`, `StrandedBurned` | A pot sent to the buyback (dormant, or its hook blocked) or burned; nobody is paid |
+| `ScriptStepped`, `ScriptPayout`, `ScriptWalletPayout` | A Workshop script's step, and what it paid from the pot in SOL: `ScriptPayout` to a holding's `owner` (the coin's hook records it), `ScriptWalletPayout` to any wallet `to` (nothing is written on a holding). Both carry the script's `tag`, `paidTotal` and `potAfter`. A script may also pay holders itself inside its step, with neither event (Whale Bait): those are the token program's `Transferred` out of the companion's creator address in a transaction with `ScriptStepped`, other than of the coin itself or to its pool |
+| `PayeesSet`, `PayeePaid` | A companion's payees (up to 10 wallets sharing the launcher's part), and what each was paid in SOL and is still `owed` |
 | lottery hook `Entered` | A holding registered for a round (`weight` tickets from `start`) |
 
 **A game coin's hook data is ticket bookkeeping.** A game hook keeps, in each holding's 64 bytes
