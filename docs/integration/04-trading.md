@@ -52,6 +52,35 @@ const tx = buildV0Transaction(wallet, ixs, (await connection.getLatestBlockhash(
 // 3. Have the wallet sign and send it (`signAndSendTransaction`).
 ```
 
+## Coins whose hook takes a SOL cut
+
+Some coins' custom hooks take a cut of a trade's SOL (a Workshop hook on a config made with
+`create_quote_cut_config`, up to 10% a side; [quote-cut.md](https://github.com/BordrlessDex/bordrless-programs/blob/main/docs/quote-cut.md)).
+`launch.quoteCut` (decoded from `Launch.reserved[0..4]`) is non-null on such a coin. **Every trade
+of it passes four more accounts** after the launch pool's usual four hook extras, or the launchpad
+refuses it with `QuoteCutAccountsMissing` (6047):
+
+| # | Account | Writable |
+| --- | --- | --- |
+| 1 | the custom hook program (`launch.customHook`) | no |
+| 2 | the trader's holding of the token, `holding(mint, trader)` (the swap's signer, not the recipient) | no |
+| 3 | the hook's state, `PDA(["state", mint], hook)` | yes |
+| 4 | the launchpad's signer for the hook, `PDA(["quote-cut", hook], launchpad)` | no |
+
+`launch.swap` adds them for you; `quoteCutExtras(hook, mint, trader)` returns them for your own
+builder. They are also in the pool's registry (`hook_accounts_address(launchpad, pool)`, entries 9
+to 12), so a client that resolves the registry instead of hardcoding four extras gets them without
+special cases. Passing someone else's holding or a read-only state fails as `QuoteCutWrongAccount`.
+
+**If your on-chain program calls the DEX** (a router, an aggregator, a bot), the trader is the
+account that signs the DEX's `swap`, which may be your program's address: pass the four accounts
+for that trader through to the DEX in the same order. Coins without a SOL cut need nothing extra,
+so a program that only passes four extras will trade most coins and fail every trade of these.
+
+**Quotes:** the hook decides its rate at trade time, so `quoteLaunchSwap` can't include it; simulate
+for the exact figure. The trader pays about 1.25 times the cut (Bordrless's 25% share applies to
+it as to the creator fee). Show the coin's caps (`launch.quoteCut`) before the trade.
+
 ## A sell
 
 Same shape, direction 0, the token amount in, and unwrap after:
@@ -185,6 +214,8 @@ The ones users meet:
 | `EarlyLocked` (kit) | Tokens bought in the first seconds stay until `launch.earlyUnlockAt` | Show the unlock time |
 | `FurnaceNotLit` (Half-Life) | The launch's last step hasn't landed yet; buys work | Retry in a few seconds |
 | `Paused` | The DEX or the launchpad is paused | Trading is paused |
+| `QuoteCutAccountsMissing` (6047) | The coin's hook takes a SOL cut and the trade left out its four accounts | A builder bug: add `quoteCutExtras` ([above](#coins-whose-hook-takes-a-sol-cut)) |
+| `QuoteCutWrongAccount` | One of those four is wrong (another wallet's holding, the state read-only) | A builder bug: pass the signer's own holding |
 | An error whose `programId` is the token's custom hook (`launch.customHook`) | The hook refused the transfer | Name the hook. A sell that always fails while buys work is the honeypot pattern ([Hooks](05-hooks-and-risk.md#which-hook-a-token-runs)) |
 
 ## Ordinary pools

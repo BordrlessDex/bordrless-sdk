@@ -48,7 +48,8 @@ For a terminal that lists, prices and trades Bordrless tokens:
    ([One token's page](02-reading-tokens.md#one-tokens-page)).
 3. **Quote and simulate** every swap: `quoteLaunchSwap` is exact for launch rules; simulate any
    token with a custom hook ([Quoting exactly](04-trading.md#quoting-exactly)).
-4. **Build and send**: wrap or unwrap SOL in the same transaction, pass the hook's accounts, use a
+4. **Build and send**: wrap or unwrap SOL in the same transaction, pass the hook's accounts (four
+   more on a coin whose hook takes a SOL cut, [Trading](04-trading.md#coins-whose-hook-takes-a-sol-cut)), use a
    v0 transaction with the protocol lookup table, set a compute-unit limit from the simulation, and
    let the wallet sign and send ([A buy, end to end](04-trading.md#a-buy-end-to-end),
    [Fees and compute](04-trading.md#fees-and-compute), [Sending](04-trading.md#sending)).

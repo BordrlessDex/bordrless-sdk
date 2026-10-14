@@ -16,6 +16,9 @@ the Rust `anchor-client`) can decode the accounts and events and encode the inst
 - **Instructions:** 8-byte discriminator, then Borsh arguments. Account order is the IDL's, and
   optional accounts that are absent are passed as the program's own id. Hook accounts follow as
   remaining accounts: see `swap` in `bordrless_swap` (`in_hook_accounts`, `out_hook_accounts`).
+  A launch whose hook takes a SOL cut (`Launch.reserved[0..4]` non-zero) needs four more after
+  the launch pool's four extras; resolve the pool's registry rather than hardcoding four
+  ([Trading](04-trading.md#coins-whose-hook-takes-a-sol-cut)).
 - **Events:** inner instructions to the program's event authority whose data is
   `e445a52e51cb9a1d`, then the event discriminator, then Borsh
   ([Indexing trades](03-indexing-trades.md)).
