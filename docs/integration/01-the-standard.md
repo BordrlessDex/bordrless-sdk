@@ -64,11 +64,12 @@ to its pool and keeps everything about the token's market:
   (0 on the curve, 1 graduated);
 - the curve: `virtualQuote`, `virtualBase`, `curveTokens` (750,000,000), `reserveTokens`
   (250,000,000), `graduationQuote`;
-- fees: `lpFeeBps` (0.3%), `creatorFeeBps` (0–2%), and the sniper fee `sniperStartBps` (80%) falling
+- fees: `lpFeeBps` (0.3%), `creatorFeeBps` (0–10%; the site offers up to 2%), and the sniper fee `sniperStartBps` (80%) falling
   linearly to `lpFeeBps` over `sniperWindowSecs` (30 s) after `createdAt`;
 - the token rules (`rules`, `modules`), an optional `customHook`, and the `config` (`LaunchConfig`)
   it was made from, if any, with `authorShareBps` when that config pays its author part of the
-  creator fee;
+  creator fee, and `partnerShareBps` when it pays a partner part of it (a partner config: every
+  claim passes the partner's accounts, `partnerOf`, and anyone may `launch.distributeFees`);
 - `creator`, who is paid the creator fee: a wallet, or a companion program's address
   ([Companions](02-reading-tokens.md#creators-that-are-programs-companions));
 - display totals: `creatorFeesAccrued`, `holderFeesAccrued`, `burnedOnTrades`.

@@ -191,6 +191,50 @@ Bordrless takes 25% of what a launch's rules collect on each swap (the creator f
 rewards, and any cut your hook takes), in SOL; a config can never change that. A hook that takes
 nothing and refuses nothing costs the trader nothing beyond the pool fee.
 
+## Earning from launches and trades: partner configs, the router, payees
+
+Three ways for an app, a service or a team to be paid by Bordrless's programs, all in SOL, none
+needing a hook of your own (13 Oct 2026, live on mainnet).
+
+**A partner config** (`docs/partner-fee.md` in bordrless-programs; 0.11.0). A launch config that
+names your wallet and its share of the creator fee, 1% to 100% of it (what is left after
+Bordrless's quarter), fixed for ever, Meteora-style. Every coin launched from it, whoever launches
+it (your own site through the SDK, or the launch page with `?config=<address>`), pays you that
+share of every claim. It can carry any custom hook the launchpad accepts and an author's share too (at most 100%
+in all). Anyone may pay a coin's fees out at any time, every party at once to its own holding, so
+you collect whenever you like. The launchpad allows a creator fee of up to 10%. A companion coin
+can't launch from a partner config (`PartnerOnCompanion`): share a companion's part with payees.
+
+```ts
+import { BRIDGED_SOL_MINT, NO_LAUNCH_RULES, buildCreatePartnerConfig, decodeLaunch, launch, launchAddress, partnerOf, token } from '@bordrless/sdk';
+
+// Once: a 1% creator fee, all of it (after Bordrless's share) to your wallet.
+const made = buildCreatePartnerConfig(me, { rules: NO_LAUNCH_RULES, creatorFeeBps: 100, customHook: null, customHookFlags: 0, label: 'mine' }, partnerWallet, 10_000);
+// send token.createHolding(me, BRIDGED_SOL_MINT, partnerWallet) and made.instruction (signed by me and made.keypair);
+// every launch then passes made.address as its launch config (createLaunch's options.launchConfig).
+
+// Collect, whenever: anyone may send it; each party is paid to its own fixed holding.
+const l = decodeLaunch((await connection.getAccountInfo(launchAddress(mint)))!.data);
+const p = await partnerOf(connection, l);
+const ix = launch.distributeFees(mint, BRIDGED_SOL_MINT, p!.config, l.creator, p!.partner);
+```
+
+A coin that pays a partner passes the partner's accounts on every claim: `launch.claimCreatorFees(…,
+author, partner)` and `launch.claimAuthorFees(…, partner)` (`partnerOf` reads them; without them the
+claim fails with `PartnerAccountsMissing`). `feeSplit(amount, authorShareBps, partnerShareBps)` is the
+program's split.
+
+**The router** (`docs/router.md`; 0.10.0). An app that routes swaps (a terminal, a wallet, a bot)
+adds its own fee of 1 to 100 bps to any swap on any Bordrless pool: build the swap as usual, then
+`router.swap(trader, integratorQuote, treasuryQuote, dexSwap, feeBps, minQuoteAfterFee)`. A fifth of
+the fee goes to Bordrless, the rest to your holding of the pool's quote.
+
+**Payees** (`docs/payees-and-wallet-payouts.md`; 0.10.0). A companion coin's launcher shares their
+part of the fees with up to 10 wallets, each a fixed share, set before the launch:
+`companion.setPayees(payer, mint, [{ wallet, bps }])`; the keeper pays them with every withdraw. A
+script companion may also pay any wallet SOL within its terms, once `companion.allowWalletPayouts`
+is set before the launch.
+
 ## Companions: a launch whose creator is a program
 
 A companion creates a launch and signs as its creator (`companionCreatorAddress(mint)`), so every

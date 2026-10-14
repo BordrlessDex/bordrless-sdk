@@ -111,7 +111,7 @@ need.
 | --- | --- |
 | token | `MintCreated`, `Minted`, `Burned`, `Transferred` (with each hook cut), `HoldingCreated`, `HoldingClosed`, `HookDataWritten`, `HookSet`, `AuthoritySet`, `DelegateSet`, `FrozenSet`, `MetadataUpdated` |
 | swap (DEX) | `PoolCreated`, `Swapped`, `LiquidityAdded`, `LiquidityRemoved`, `CurveFinalized`, `ProtocolFeesCollected`, `ConfigSet` |
-| launch | `LaunchCreated`, `Graduated`, `CreatorFeesClaimed`, `LaunchConfigCreated`, `ConfigListed`, `AuthorFeesPaid`, `ConfigSet` |
+| launch | `LaunchCreated`, `Graduated`, `CreatorFeesClaimed`, `LaunchConfigCreated`, `ConfigListed`, `AuthorFeesPaid`, `PartnerConfigured`, `LaunchPartner`, `PartnerFeesPaid`, `ConfigSet` |
 | kit | `KitInstalled`, `KitGraduated`, `RewardsClaimed`, `RewardsShared` |
 | bridge | `WrapperRegistered`, `Wrapped`, `Unwrapped`, `ConfigSet` |
 | companion | `CompanionCreated`, `CompanionLaunched`, `DevBought`, `DevReleased`, `FeesClaimed`, `BoughtBack`, `BuybackWaited`, `SharedWithHolders`, `BeneficiaryPaid`, `StrandedBurned`; games: `GameCreated`, `GameKindSet`, `PotFunded`, `PotToBuyback`, `PotRetired`, `HookStatusSet`; lottery: `DrawCommitted`, `DrawRequested`, `DrawRevealed`, `PrizePaid`, `RolledOver`; jackpot: `JackpotPaid`, `JackpotUnfunded`, `JackpotForfeited`; streak: `EpochClosed`, `EpochEnded`, `ShareClaimed` |
@@ -119,7 +119,9 @@ need.
 
 `typedEvent` types the ones an indexer needs (`token.Transferred`, `token.HookDataWritten`,
 `swap.Swapped`, `swap.ProtocolFeesCollected`, `launch.LaunchCreated`, `launch.LaunchConfigCreated`,
-`launch.ConfigListed`, `launch.AuthorFeesPaid`, and the kit's four). Every other event is still in
+`launch.ConfigListed`, `launch.AuthorFeesPaid`, `launch.PartnerConfigured`, `launch.LaunchPartner`,
+`launch.PartnerFeesPaid`, and the kit's four). A `PartnerFeesPaid`'s `paidTotal` counts every launch
+of its config: a coin's own total is the sum of its `amount`s. Every other event is still in
 `eventsOf`'s output as `{ program, name, data }`, with keys as base58 strings and integers as
 decimal strings.
 

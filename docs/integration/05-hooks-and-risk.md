@@ -110,7 +110,8 @@ Fixed at launch, in `launch.rules` (`modules` says which are on: 1 holder reward
 | Early-buyer lock | `launch.earlyWindowEnd`, `launch.earlyUnlockAt` | Tokens bought before `earlyWindowEnd` can't move before `earlyUnlockAt`: `EarlyLocked` |
 
 All of these are taken by the program and included in `quoteLaunchSwap`
-([Trading](04-trading.md)). Creator fee + holder rewards + burn is at most 3% per side.
+([Trading](04-trading.md)). Creator fee + holder rewards + burn is at most 10% per side (the
+launchpad's bound since 13 Oct 2026; 3% before, and the site's own choices stay within 3%).
 
 **Holder rewards** are paid in bridged SOL. What a holder can claim:
 `rewardsClaimable(kitRewardsOf(kitConfig), vaultAmount, now, holding.amount, kitHookDataOf(holding), kitExcludes(kitConfig, owner)).payable`
