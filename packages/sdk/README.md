@@ -557,7 +557,8 @@ const setup = [
   companion.create(me, me, mint, { split: { buybackBps: 0, holdersBps: 0, beneficiaryBps: 10_000 }, ...COMPANION_DEFAULTS, fund }),
   companion.createScript(me, mint, { split, potBps: 7_000, program: script, interval: 60, stateLen: 128, initData: scriptInitDataBytes('0102') }),
 ];
-// then companion.launch(...) as for any companion (the API does all three: POST launch/prepare with
+// then companion.launchScript(...): companion.launch's arguments with the script's address appended, which a
+// script companion needs while native launches are on (else MissingAccount) (the API does all three: POST launch/prepare with
 // companion: { split, script: { potBps, program, interval, initData, stateLen } }).
 ```
 

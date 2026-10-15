@@ -224,6 +224,13 @@ export interface CustomHookAccounts {
  */
 export const MAX_CUSTOM_HOOK_EXTRAS = 4;
 
+/**
+ * The most registry extras a script companion's launch takes while native launches are on: `companion.launchScript` appends
+ * the script's address (33 bytes on the wire), which leaves room for one extra fewer than `MAX_CUSTOM_HOOK_EXTRAS`
+ * (re-audit R-5; measured in transactions.test.ts at the longest metadata).
+ */
+export const MAX_SCRIPT_LAUNCH_HOOK_EXTRAS = MAX_CUSTOM_HOOK_EXTRAS - 1;
+
 /** The custom hook's slice for a DEX instruction (`custom_hook_slice`): `[program, token signer for it, ...extras]`. */
 export const customHookSlice = (hook: CustomHookAccounts): AccountMeta[] => tokenHookSlice(customHookTokenHook(hook));
 

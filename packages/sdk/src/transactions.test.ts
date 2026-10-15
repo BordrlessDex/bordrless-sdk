@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { Keypair, PublicKey } from '@solana/web3.js';
 import * as a from './addresses.ts';
 import { NO_LAUNCH_RULES, type LaunchRulesData } from './accounts.ts';
-import { MAX_CUSTOM_HOOK_EXTRAS, kitTokenHook } from './hooks.ts';
+import { MAX_CUSTOM_HOOK_EXTRAS, MAX_SCRIPT_LAUNCH_HOOK_EXTRAS, kitTokenHook } from './hooks.ts';
 import { companion, type GameArgs } from './companion.ts';
 import { lotteryHook } from './lotteryHook.ts';
 import { bridge, kit, launch, launchKeys, setComputeUnitLimit, setComputeUnitPrice, token } from './instructions.ts';
@@ -123,6 +123,20 @@ describe('v0 transactions with the protocol lookup table reproduce the measured 
     const withHook = bytes({ launchConfig: k(), customHook: { program: k(), extras: extras(MAX_CUSTOM_HOOK_EXTRAS) } });
     expect(withHook).toBe(1_213);
     expect(withHook).toBeLessThanOrEqual(PACKET_DATA_SIZE);
+  });
+
+  it('a script companion\'s launch (the script address appended) fits at the longest metadata with MAX_SCRIPT_LAUNCH_HOOK_EXTRAS registry extras, not one more (re-audit R-5)', () => {
+    const launcher = k();
+    const longest = { name: 'N'.repeat(32), symbol: 'S'.repeat(10), uri: 'ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi', creatorFeeBps: 50, virtualQuote: 28_125_000_000n, rules: NO_LAUNCH_RULES };
+    const bytes = (n: number): number => {
+      const mint = k();
+      const extras = Array.from({ length: n }, () => ({ pubkey: k(), isSigner: false, isWritable: true }));
+      const inner = launch.createLaunch(a.companionCreatorAddress(mint), mint, k(), SOL, 30, longest, { launchConfig: k(), customHook: { program: k(), extras } });
+      return measure(launcher, [companion.launchScript(launcher, mint, inner, longest)], [table]).bytes;
+    };
+    expect(MAX_SCRIPT_LAUNCH_HOOK_EXTRAS).toBe(MAX_CUSTOM_HOOK_EXTRAS - 1);
+    expect(bytes(MAX_SCRIPT_LAUNCH_HOOK_EXTRAS)).toBeLessThanOrEqual(PACKET_DATA_SIZE);
+    expect(bytes(MAX_SCRIPT_LAUNCH_HOOK_EXTRAS + 1)).toBeGreaterThan(PACKET_DATA_SIZE);
   });
 
   it('a lottery coin: its setup, its launch through the companion and every game step fit, at the sizes companion_game.rs measured', () => {

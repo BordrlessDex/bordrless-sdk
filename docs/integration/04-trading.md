@@ -271,8 +271,14 @@ native launch's swap with `router.swap` throws: use `router.swapV2`. **Escape ha
 **The old `swap` keeps working** on a native pool, with the same accounts, through a bridged-SOL
 buffer in the old quote vault. A **sell** is paid from the buffer as far as it goes and **the rest as
 SOL to the trader's wallet**, which must be writable (the SDK passes it writable; a fee payer always
-is): it never fails for an empty buffer, but part of the proceeds can arrive as SOL rather than
-bridged SOL (`Swapped.deliveredOut` counts both). `remove_liquidity` does the same for the provider.
+is), but only when the swap is a **top-level instruction** (not a CPI from your program or the
+router's old `swap`), the trader **owns the delivery holding** (not a delegate), and the coin's
+**launch is native** too (a held or half-migrated coin's fees go to bridged holdings, which only the
+buffer pays). Otherwise a sell the buffer can't cover fails with `BufferShort`, nothing moved. Part
+of the proceeds can arrive as SOL rather than bridged SOL (`Swapped.deliveredOut` counts both).
+`remove_liquidity` does the same for the provider (top level, the provider owning the quote
+holding). `launch.swap` builds `swap_v2` for every native pool, held coins included: pass
+`launchKeysOf(launch, hook, { poolNative: pool.quoteNative })`.
 An old-path **buy** on a native launch pool pays the launch's fees in SOL from the pool, so on a
 fresh native launch pool with no SOL yet it fails with `LamportsShort` until a `swap_v2` trade.
 Move to `swap_v2`.

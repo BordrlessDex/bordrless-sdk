@@ -274,6 +274,12 @@ describe('the high-level builders pick the path per launch', () => {
     const l = { mint: k(7), quoteMint: SOL, lpFeeBps: LP_FEE_BPS, rules: RULES, customHook: null };
     expect(launchKeysOf(l).native).toBeUndefined();
     expect(launchKeysOf({ ...l, isNative: true }).native).toBe(true);
+    // R-3: a held coin (the pool native, the launch bridged) trades swap_v2 with the bridge's accounts.
+    const held = launchKeysOf(l, null, { poolNative: true });
+    expect([held.native, held.poolNative]).toEqual([undefined, true]);
+    expect(launchKeysOf({ ...l, isNative: true }, null, { poolNative: true }).poolNative).toBeUndefined();
+    expect(name(launch.swap(held, k(1), k(1), 0, 10n, 1n))).toBe('swapV2');
+    expect(metas(launch.swap(held, k(1), k(1), 1, 1000n, 1n))).toEqual((vec.launchSwapV2Bridge as V).accounts);
     // The classic path is unchanged for everyone else, and stays reachable on a native launch.
     expect(metas(launch.swapClassic({ ...KEYS, native: true }, k(1), k(1), 1, 10n, 1n))).toEqual(metas(launch.swap(KEYS, k(1), k(1), 1, 10n, 1n)));
   });

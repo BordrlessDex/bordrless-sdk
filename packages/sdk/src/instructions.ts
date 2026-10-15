@@ -629,6 +629,12 @@ export interface LaunchKeys {
    * buy and a sell delivering SOL to the recipient's wallet. `launchKeysOf` sets it from the decoded launch.
    */
   native?: boolean;
+  /**
+   * The launch's pool trades SOL (`Pool.quoteNative`) while the launch itself is bridged: a held or half-migrated coin. `launch.swap`
+   * then builds `swap_v2` with the bridge's accounts, since the classic swap can pay the launchpad's bridged cuts only from the
+   * pool's buffer and fails at a buffer target of 0 (re-audit R-3). Pass `{ poolNative }` to `launchKeysOf`.
+   */
+  poolNative?: boolean;
 }
 
 /** The keys of a launch of `mint` with `rules`. */
@@ -638,11 +644,11 @@ export const launchKeys = (mint: PublicKey, quoteMint: PublicKey, lpFeeBps: numb
  * (`fetchCustomHookAccounts(connection, launch.customHook, launch.mint)`): without them the swap
  * would be built without the token's hook and refused on chain, so this throws.
  */
-export function launchKeysOf(l: Pick<Launch, 'mint' | 'quoteMint' | 'lpFeeBps' | 'rules' | 'customHook'> & Partial<Pick<Launch, 'quoteCut' | 'creator' | 'isNative'>>, customHook: CustomHookAccounts | null = null): LaunchKeys {
+export function launchKeysOf(l: Pick<Launch, 'mint' | 'quoteMint' | 'lpFeeBps' | 'rules' | 'customHook'> & Partial<Pick<Launch, 'quoteCut' | 'creator' | 'isNative'>>, customHook: CustomHookAccounts | null = null, options: { poolNative?: boolean } = {}): LaunchKeys {
   if (l.customHook && !customHook) throw new Error(`the launch's token runs the hook ${l.customHook.toBase58()}: resolve its accounts for the mint first`);
   if (l.customHook && customHook && !customHook.program.equals(l.customHook)) throw new Error('the hook accounts given are another program’s');
   const plain = launchKeys(l.mint, l.quoteMint, l.lpFeeBps, l.rules, l.customHook ? customHook : null);
-  const keys = l.isNative ? { ...plain, native: true } : plain;
+  const keys = l.isNative ? { ...plain, native: true } : options.poolNative ? { ...plain, poolNative: true } : plain;
   return l.customHook && l.quoteCut ? { ...keys, quoteCutHook: l.customHook, ...(l.creator ? { creator: l.creator } : {}) } : keys;
 }
 
@@ -896,13 +902,15 @@ export const launch = {
    * holds `minAmountOut` to pro rata, so give the least you accept for the whole `amountIn`.
    */
   swap(keys: LaunchKeys, trader: PublicKey, recipient: PublicKey, direction: 0 | 1, amountIn: bigint, minAmountOut: bigint): TransactionInstruction {
-    return keys.native ? launch.swapV2(keys, trader, recipient, direction, amountIn, minAmountOut) : launch.swapClassic(keys, trader, recipient, direction, amountIn, minAmountOut);
+    return keys.native || keys.poolNative ? launch.swapV2(keys, trader, recipient, direction, amountIn, minAmountOut) : launch.swapClassic(keys, trader, recipient, direction, amountIn, minAmountOut);
   },
   /**
    * The classic `swap` of a launch pool, whatever its form (`launch.swap` before native SOL): the quote is bridged SOL in holdings,
-   * which on a native pool moves through its buffer. On a native pool a sell is paid from the buffer as far as it goes and the rest
-   * as SOL to the trader's wallet. The escape hatch for callers that wrap SOL themselves; `launch.swap` picks `swap_v2` for a
-   * native launch.
+   * which on a native pool moves through its buffer. On a native launch's pool a sell is paid from the buffer as far as it goes and
+   * the rest as SOL to the trader's wallet, only when sent as a top-level instruction by the delivery holding's owner (a program's
+   * CPI, or a delegate, gets `BufferShort`). On a held coin's pool (the launch bridged) the launchpad's bridged cuts come only from
+   * the buffer, so a sell fails (`BufferShort`) while it is short. The escape hatch for callers that wrap SOL themselves;
+   * `launch.swap` picks `swap_v2` for any native pool.
    */
   swapClassic(keys: LaunchKeys, trader: PublicKey, recipient: PublicKey, direction: 0 | 1, amountIn: bigint, minAmountOut: bigint): TransactionInstruction {
     const buy = direction === 1;

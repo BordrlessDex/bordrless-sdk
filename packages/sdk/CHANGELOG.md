@@ -43,6 +43,17 @@ After the native-SOL audit (bordrless-programs `docs/native-sol-audit.md`):
 - The market maker (`bordrless mm`) trades native markets in plain SOL: no wrap, `swap_v2`, sells
   measured in lamports.
 
+After the re-audit (bordrless-programs `docs/native-sol-reaudit.md`):
+
+- The DEX pays an old-path sell's or withdrawal's shortfall as SOL only to a top-level swap by the
+  delivery holding's owner (R-1); a CPI caller (the router's old `swap`) or a delegate gets
+  `BufferShort`, as before the fallback.
+- `launchKeysOf(launch, hook, { poolNative })` and `LaunchKeys.poolNative`: `launch.swap` builds
+  `swap_v2` with the bridge's accounts for a held or half-migrated coin (pool native, launch
+  bridged), whose classic sells fail at buffer target 0 (R-3). The market maker passes it.
+- `MAX_SCRIPT_LAUNCH_HOOK_EXTRAS` (3): the registry extras a script companion's launch fits with
+  the script's address appended (R-5).
+
 - **IDLs**: the DEX, the launchpad, the kit, the companion, the router and `hook_vault` with their
   native-SOL instructions, events and errors (`BufferShort`, `LamportsShort`, `NotNativePool`, …,
   explained in `explainProgramError`).

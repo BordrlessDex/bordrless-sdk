@@ -11,9 +11,10 @@
  * | companion | `holding(bridged, creator)` | creator PDA lamports above rent(0) | `Companion.nativeSol` |
  * | hook_vault slot | `holding(bridged, slot owner)` | slot owner lamports above rent(0) | `Vault.isNative` |
  *
- * A native pool trades with `swap_v2` (`swap.swapV2`, `launch.swapV2`, or `launch.swap` with `native` keys). The old `swap`
- * keeps working on it through the buffer: a buy's bridged SOL joins the buffer, a sell is paid from it and fails with
- * `BufferShort` when the buffer can't cover it.
+ * A native pool trades with `swap_v2` (`swap.swapV2`, `launch.swapV2`, or `launch.swap` with `native` or `poolNative` keys). The
+ * old `swap` keeps working on it through the buffer: a buy's bridged SOL joins the buffer; a sell is paid from it, and what the
+ * buffer can't cover is paid as SOL to the trader's wallet when the swap is top level, the trader owns the delivery holding and
+ * the launch is native too. Otherwise (a CPI, a delegate, a held coin's bridged cuts) it fails with `BufferShort`.
  *
  * Pool reserves and TVL come from the pool's books (`quoteReserve + protocolFeesQuote`), never from the vault's balance, which
  * on a native pool is only the buffer.
@@ -83,8 +84,9 @@ export const poolLamportsQuote = (pool: Pick<Pool, 'quoteReserve' | 'protocolFee
 export const poolBufferDrift = (pool: Partial<Pick<Pool, 'quoteNative' | 'bufferQuote' | 'bufferTarget'>>): bigint =>
   isNativePool(pool) ? (pool.bufferQuote ?? 0n) - (pool.bufferTarget ?? 0n) : 0n;
 /**
- * The most an old-style (`swap`) sell on a native pool can be paid in bridged SOL: its buffer. A sell that would deliver more
- * (with its quote-side cuts to holdings) fails with `BufferShort`. Unlimited (null) on a bridged pool.
+ * The most an old-style (`swap`) sell on a native pool can be paid in bridged SOL: its buffer. Beyond it, a top-level sell by
+ * the delivery holding's owner gets the rest as SOL to its wallet; a CPI, a delegate's sell, or a held coin's bridged cuts beyond
+ * it fail with `BufferShort`. Unlimited (null) on a bridged pool.
  */
 export const classicSellCapacity = (pool: Partial<Pick<Pool, 'quoteNative' | 'bufferQuote'>>): bigint | null => (isNativePool(pool) ? (pool.bufferQuote ?? 0n) : null);
 

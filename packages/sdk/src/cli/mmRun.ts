@@ -174,10 +174,11 @@ export function quoterOf(market: Market, pool: Pool, kit: KitConfig | null, now:
 }
 
 /**
- * Whether the market trades in plain SOL (`swap_v2`): a native launch (`launch.swap` then builds `swap_v2`), or an ordinary pool
- * whose quote is native. A held coin (its pool native, its launch bridged) still trades the classic swap with bridged SOL.
+ * Whether the market trades in plain SOL (`swap_v2`): any pool whose quote is native, a launch's included. A held coin (its pool
+ * native, its launch bridged) trades `swap_v2` with the bridge's accounts too: the classic swap pays its bridged cuts only from the
+ * pool's buffer and fails at a buffer target of 0 (re-audit R-3).
  */
-export const tradesNative = (m: Pick<Market, 'launch' | 'pool'>): boolean => (m.launch ? m.launch.isNative === true : m.pool.quoteNative === true);
+export const tradesNative = (m: Pick<Market, 'launch' | 'pool'>): boolean => m.pool.quoteNative === true || m.launch?.isNative === true;
 
 /**
  * The instructions of one trade, in the API's order (trade/pool.ts `poolSwapInstructions`,
@@ -195,7 +196,7 @@ export function tradeInstructions(m: Market, owner: PublicKey, side: Side, amoun
   } else if (!native) ixs.push(token.createHolding(owner, quoteMint, owner));
   const direction = side === 'buy' ? 1 : 0;
   if (m.launch) {
-    ixs.push(launchIx.swap(launchKeysOf(m.launch, m.customHook), owner, owner, direction, amountIn, minOut));
+    ixs.push(launchIx.swap(launchKeysOf(m.launch, m.customHook, { poolNative: m.pool.quoteNative === true }), owner, owner, direction, amountIn, minOut));
     return ixs;
   }
   // The base mint's hook as this side's transfer takes it: a buy moves the vault's tokens to the trader, the pool signing; a sell the trader's to the vault.
