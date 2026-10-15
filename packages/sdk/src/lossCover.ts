@@ -685,11 +685,14 @@ export function payoutBountyFor(entries: number | null): bigint {
 
 /**
  * The most a step may pay in all (`step_budget`): `stepBps` of the pot at the step's start, what
- * the window may still pay (`windowBps` of the pot at its first step, less what it paid), and the
- * pot after the script ran less the bounty. The holding cap is `holdingBps` of it.
+ * the window may still pay, and the pot after the script ran less the bounty. The holding cap is
+ * `holdingBps` of it. Since the companion upgrade of 2026-10-15 the window is measured against the
+ * pot as it stands (`potAfterScript + windowPaid`, the pot as if nothing had been paid this window,
+ * so fees arriving mid-window count), never below the pot at the window's first step (`windowPot`).
  */
 export function payoutStepBudget(potBefore: bigint, potAfterScript: bigint, bounty: bigint, windowPot: bigint, windowPaid: bigint, stepBps: number, windowBps: number): bigint {
-  const window = bpsOf(windowPot, windowBps);
+  const live = potAfterScript + windowPaid;
+  const window = bpsOf(live > windowPot ? live : windowPot, windowBps);
   const left = window > windowPaid ? window - windowPaid : 0n;
   const after = potAfterScript > bounty ? potAfterScript - bounty : 0n;
   const step = bpsOf(potBefore, stepBps);

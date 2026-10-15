@@ -37,6 +37,21 @@ describe('payees', () => {
     expect(metas(ix).slice(-3)).toEqual([[a.payeesAddress(mint).toBase58(), false, true], ...p.map((x) => [x.toBase58(), false, true])]);
   });
 
+  it('setPayoutTerms: the authority signs, the terms are written, the arguments round-trip', () => {
+    const authority = Keypair.generate().publicKey;
+    const mint = Keypair.generate().publicKey;
+    const ix = companion.setPayoutTerms(authority, mint, { stepBps: 10_000, holdingBps: 10_000, windowBps: 10_000, windowSecs: 300 });
+    expect(ix.programId.equals(a.COMPANION_PROGRAM)).toBe(true);
+    expect(ix.keys.slice(0, 3).map((k) => [k.pubkey.toBase58(), k.isSigner, k.isWritable])).toEqual([
+      [authority.toBase58(), true, false],
+      [a.companionAddress(mint).toBase58(), false, false],
+      [a.payoutTermsAddress(mint).toBase58(), false, true],
+    ]);
+    expect(ix.data.subarray(0, 8).toString('hex')).toBe('5719f4ddf9200fe5');
+    const decoded = CODERS.companion.instruction.decode(ix.data) as { name: string; data: { payout: { stepBps: number; windowSecs: number } } };
+    expect(decoded.name).toBe('setPayoutTerms');
+    expect([decoded.data.payout.stepBps, decoded.data.payout.windowSecs]).toEqual([10_000, 300]);
+  });
   it('allowWalletPayouts: the mint signs, the terms are written', () => {
     const mint = k();
     const ix = companion.allowWalletPayouts(mint);

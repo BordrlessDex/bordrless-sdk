@@ -681,6 +681,16 @@ export const companion = {
   allowWalletPayouts(mint: PublicKey): TransactionInstruction {
     return build('allowWalletPayouts', {}, [ro(mint, true), ro(a.companionAddress(mint)), rw(a.payoutTermsAddress(mint)), ro(a.scriptAddress(mint))], []);
   },
+  /**
+   * `set_payout_terms` (2026-10-15): a script companion's payout terms replaced after its launch, signed by its
+   * beneficiary (`Companion.beneficiary`, the launcher) or the script approver (`SCRIPT_APPROVER`). Same bounds as
+   * `createScriptV2` (each bps 1 to 10,000, `windowSecs` 10 to 86,400); the current window starts over under the
+   * new terms. Emits `PayoutTermsSet`.
+   */
+  setPayoutTerms(authority: PublicKey, mint: PublicKey, payout: { stepBps: number; holdingBps: number; windowBps: number; windowSecs: number }): TransactionInstruction {
+    const data = { payout: { stepBps: payout.stepBps, holdingBps: payout.holdingBps, windowBps: payout.windowBps, windowSecs: payout.windowSecs } };
+    return build('setPayoutTerms', data, [ro(authority, true), ro(a.companionAddress(mint)), rw(a.payoutTermsAddress(mint))], []);
+  },
   /** `withdraw` before the launch, signed by the mint: the companion address's funding back to the beneficiary (a launch that never happened). */
   refund(sender: PublicKey, mint: PublicKey, beneficiary: PublicKey): TransactionInstruction {
     const ix = companion.withdraw(sender, mint, beneficiary);

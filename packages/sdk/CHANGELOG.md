@@ -4,6 +4,18 @@ The public package is `@bordrless/sdk` on npm, published from the public reposit
 BordrlessDex/bordrless-sdk together with `@bordrless/shared` (shared first; the SDK depends on the
 same version of it). The monorepo is where both are written.
 
+## 0.14.1 (15 Oct 2026): payout terms after launch
+
+For the companion upgrade of 15 Oct 2026 (bordrless-programs `abfc783`, deployed).
+
+- `companion.setPayoutTerms(authority, mint, { stepBps, holdingBps, windowBps, windowSecs })`:
+  `set_payout_terms`, a script companion's payout terms replaced after launch, signed by its
+  beneficiary or the script approver. The window starts over; emits `PayoutTermsSet`.
+- `payoutStepBudget` measures the window as the program now does: `windowBps` of
+  `max(windowPot, potAfterScript + windowPaid)`, less `windowPaid`, so fees arriving mid-window can
+  be paid in it. Never less than before; a script computing the old cap still answers within it.
+- The companion IDL carries the instruction and `NotTermsAuthority` (6094).
+
 ## Unreleased: native SOL (0.14.0)
 
 The off-chain side of moving Bordrless from bridged SOL (`A49oVh…`) to native SOL (bordrless-programs

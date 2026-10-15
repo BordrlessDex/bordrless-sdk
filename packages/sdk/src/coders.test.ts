@@ -251,7 +251,7 @@ describe('errors are explained by the program that failed (codes overlap)', () =
     // v1's codes keep their numbers: v2 only appends.
     expect(explainProgramError('companion', 6011).name).toBe('CustomHookUnsupported');
     // Phase 2 appends three more (the jackpot's and the streak's steps); phase 3a and Snowball more; approvals and script companions (2026-10-12) ten more, 6070 to 6079.
-    expect([PROGRAM_ERRORS.companion.size, PROGRAM_ERRORS.lotteryHook.size]).toEqual([94, 6]);
+    expect([PROGRAM_ERRORS.companion.size, PROGRAM_ERRORS.lotteryHook.size]).toEqual([95, 6]);
     expect([6067, 6069, 6070, 6073, 6078, 6079].map((code) => explainProgramError('companion', code).name)).toEqual(['BadSnowball', 'SnowballNotDue', 'NotApproved', 'ScriptOverspent', 'ScriptBrokeCustody', 'ProgramNotBounded']);
     expect(explainProgramError('companion', 6049).name).toBe('WrongGameKind');
     expect(explainProgramError('companion', 6050)).toMatchObject({ name: 'NoShare', explanation: expect.stringMatching(/forfeits the share/) });

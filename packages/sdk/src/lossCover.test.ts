@@ -365,7 +365,13 @@ describe('the math is the programs’', () => {
   it('the companion’s budget and bounty', () => {
     for (const b of payouts.budget) expect(payoutStepBudget(BigInt(b.potBefore), BigInt(b.potAfterScript), BigInt(b.bounty), BigInt(b.windowPot), BigInt(b.windowPaid), b.stepBps, b.windowBps).toString()).toBe(b.budget);
     expect(payoutStepBudget(1_000n, 1_000n, 20n, 1_000n, 0n, 10_000, 10_000)).toBe(980n);
-    expect(payoutStepBudget(1_000n, 1_000n, 0n, 1_000n, 2_000n, 10_000, 10_000)).toBe(0n);
+    // The window is measured against the pot as if nothing had been paid this window (2026-10-15): 1,000 + 2,000 paid.
+    expect(payoutStepBudget(1_000n, 1_000n, 0n, 1_000n, 2_000n, 10_000, 10_000)).toBe(1_000n);
+    expect(payoutStepBudget(1_000n, 1_000n, 0n, 1_000n, 2_000n, 10_000, 5_000)).toBe(0n);
+    // Fees arriving mid-window: the window opened at 1,000 (25% = 250, all paid), the pot grew to 2,000: 25% of 2,250 less 250.
+    expect(payoutStepBudget(2_000n, 2_000n, 0n, 1_000n, 250n, 10_000, 2_500)).toBe(312n);
+    // Never below the frozen cap: the pot shrank under the window's start.
+    expect(payoutStepBudget(500n, 500n, 0n, 1_000n, 0n, 10_000, 2_500)).toBe(250n);
     expect(payoutStepBudget(10n, 10n, 20n, 10n, 0n, 10_000, 10_000)).toBe(0n);
     expect(payoutBountyFor(null).toString()).toBe(payouts.bounty.none);
     for (const [entries, out] of Object.entries(payouts.bounty)) if (entries !== 'none') expect(payoutBountyFor(Number(entries)).toString(), entries).toBe(out);
