@@ -13,7 +13,7 @@ import vectors from '../vectors/scripts.json' with { type: 'json' };
 import * as a from './addresses.ts';
 import { PROGRAMDATA_HEADER_LEN, executableHash } from './authority.ts';
 import { CODERS, IDL } from './coders.ts';
-import { companion, decodeCompanion } from './companion.ts';
+import { COMPANION_LEN, COMPANION_LEN_V1, companion, decodeCompanion } from './companion.ts';
 import { EVENT_IX_TAG, GAME_EVENT_PROGRAMS, INDEXED_EVENT_PROGRAMS, eventsOf } from './events.ts';
 import type { CustomHookAccounts } from './hooks.ts';
 import type { LaunchKeys } from './instructions.ts';
@@ -180,15 +180,18 @@ describe('the accounts', () => {
   it('reads a companion of mode 2 as a script companion (and 1 as a Snowball)', () => {
     const disc = (IDL.companion as unknown as { accounts: { name: string; discriminator: number[] }[] }).accounts.find((x) => x.name === 'Companion')!.discriminator;
     const size = CODERS.companion.accounts.size('companion');
-    // `mode` is the account's last byte; the rest zeros, as a fresh classic companion's.
-    const of = (mode: number): Buffer => {
-      const b = Buffer.alloc(size);
+    expect(size).toBe(COMPANION_LEN);
+    // `mode` is the last byte of a companion made before `quoteCutClaimed` (2026-10-15), whose 8 bytes follow it since; the rest zeros, as a fresh classic companion's.
+    const of = (mode: number, len = size): Buffer => {
+      const b = Buffer.alloc(len);
       Buffer.from(disc).copy(b);
-      b[size - 1] = mode;
+      b[COMPANION_LEN_V1 - 1] = mode;
       return b;
     };
     const modes = [0, 1, MODE_SCRIPT].map((m) => {
       const c = decodeCompanion(of(m));
+      const old = decodeCompanion(of(m, COMPANION_LEN_V1));
+      expect([old.snowball, old.script, old.quoteCutClaimed, c.quoteCutClaimed]).toEqual([c.snowball, c.script, null, 0n]);
       return [c.snowball, c.script];
     });
     expect(modes).toEqual([

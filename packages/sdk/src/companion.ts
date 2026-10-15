@@ -119,7 +119,16 @@ export interface Companion {
   snowball: boolean;
   /** Script companion (2026-10-12, `mode` `MODE_SCRIPT`): an approved builder's program, its `Script`, decides what its pot does (`scripts.ts`). False for every companion made before; `decodeCompanion` always sets it (optional only so a companion written out by hand need not name it). */
   script?: boolean;
+  /**
+   * 2026-10-15: how much of the launch's hook SOL cut (`Launch.quoteCutAccrued`) this companion's fee claims have taken; what a claim takes beyond it is the hook's and goes whole to the pot's bucket (`FeesClaimed.fromHook`).
+   * null for a companion made before (its 300-byte account has no room for it) until its first claim since grows it. Optional only so a companion written out by hand need not name it.
+   */
+  quoteCutClaimed?: bigint | null;
 }
+
+/** A `Companion` account's size since `quoteCutClaimed` (2026-10-15); one made before is `COMPANION_LEN_V1` until its first fee claim since. */
+export const COMPANION_LEN = 308;
+export const COMPANION_LEN_V1 = 300;
 
 /**
  * The three preset splits (any split summing to 10,000 works; the launch form offers any in 10% steps): buysItself (every creator fee bought back and
@@ -1057,7 +1066,9 @@ const variant = (v: unknown): string => Object.keys(v as object)[0] ?? '';
 
 /** A `Companion` account, by its IDL name `companion` (v2 fields read zero, so null and 0, for a v1 companion). */
 export function decodeCompanion(data: Buffer): Companion {
-  const r = CODERS.companion.accounts.decode('companion', data) as Record<string, unknown>;
+  // A companion made before `quoteCutClaimed` has no bytes for it: decoded with them zeroed, then read as null.
+  const old = data.length === COMPANION_LEN_V1;
+  const r = CODERS.companion.accounts.decode('companion', old ? Buffer.concat([data, Buffer.alloc(COMPANION_LEN - COMPANION_LEN_V1)]) : data) as Record<string, unknown>;
   const s = r.split as Record<string, unknown>;
   const hook = r.gameHook as PublicKey;
   return {
@@ -1094,6 +1105,7 @@ export function decodeCompanion(data: Buffer): Companion {
     snowball: num(r.mode) === 1,
     script: num(r.mode) === MODE_SCRIPT,
     payees: num(r.version) === COMPANION_VERSION_WITH_PAYEES,
+    quoteCutClaimed: old ? null : big((r.quoteCutClaimed as Record<string, unknown>).amount),
   };
 }
 

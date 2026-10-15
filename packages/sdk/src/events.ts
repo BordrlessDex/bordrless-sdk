@@ -79,8 +79,23 @@ export function flatten(value: unknown): unknown {
   return value;
 }
 
+/** The companion's `FeesClaimed` discriminator. */
+const FEES_CLAIMED = Buffer.from([22, 104, 110, 222, 38, 157, 14, 62]);
+/** A `FeesClaimed` before `from_hook` was appended (2026-10-15): discriminator, companion, five amounts, cranker. */
+const FEES_CLAIMED_V1_LEN = 8 + 32 + 5 * 8 + 32;
+
+/**
+ * A payload whose event grew a trailing field since, padded with zeros so the current IDL decodes it: the companion's `FeesClaimed` before `from_hook`
+ * (2026-10-15) reads `fromHook: '0'` (the cut was not told apart then).
+ */
+export function padOldEvent(program: ProgramName, payload: Buffer): Buffer {
+  if (program === 'companion' && payload.length === FEES_CLAIMED_V1_LEN && payload.subarray(0, 8).equals(FEES_CLAIMED)) return Buffer.concat([payload, Buffer.alloc(8)]);
+  return payload;
+}
+
 /** Decodes one self-CPI payload (after the tag) for `program`. */
 export function decodeEventPayload(program: ProgramName, payload: Buffer): { name: string; data: Record<string, unknown> } | null {
+  payload = padOldEvent(program, payload);
   try {
     const ev = CODERS[program].events.decode(payload.toString('base64')) as { name: string; data: unknown } | null;
     // The companion's payout events (`ScriptPayout`, `PayoutTermsSet`; docs/loss-cover.md §1) until its IDL on disk carries them.

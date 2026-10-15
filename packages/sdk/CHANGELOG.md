@@ -4,6 +4,14 @@ The public package is `@bordrless/sdk` on npm, published from the public reposit
 BordrlessDex/bordrless-sdk together with `@bordrless/shared` (shared first; the SDK depends on the
 same version of it). The monorepo is where both are written.
 
+## Unreleased
+
+- The companion's fee claim tells the hook's SOL cut apart (companion upgrade not yet deployed):
+  `FeesClaimed.fromHook` (appended; an event from before decodes with `fromHook: '0'`) and
+  `Companion.quoteCutClaimed` (the account grows from 300 to 308 bytes; `decodeCompanion` reads a
+  300-byte companion with `quoteCutClaimed: null`). `COMPANION_LEN`, `COMPANION_LEN_V1`,
+  `padOldEvent`.
+
 ## 0.12.0 (14 Oct 2026)
 
 Everything since 0.11.0. The DEX and the launchpad of the curve fill are live on mainnet (verified

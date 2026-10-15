@@ -21,6 +21,8 @@ import {
   companion,
   companionStrandedAt,
   decodeCompanion,
+  COMPANION_LEN,
+  COMPANION_LEN_V1,
   decodeGame,
   decodeHookStatus,
   gameArgsProblem,
@@ -236,10 +238,12 @@ describe('the accounts as the programs serialize them', () => {
     expect(data.length).toBe(acc.companionLen);
     const c = decodeCompanion(data);
     expect([c.gameHook?.equals(HOOK), c.potBps, c.pendingPot, c.roundSecs, c.strandedBurnedAt, c.split, c.referencePrice]).toEqual([true, 7_000, 9_876_543_210n, 21_600, 1_792_600_000, { buybackBps: 3_000, holdersBps: 0, beneficiaryBps: 0 }, 340_282_366_920_938_463_463n]);
-    // v1 wrote its last 64 bytes as zeros: no game, no pot, no burn.
-    const v1 = Buffer.concat([data.subarray(0, data.length - 64), Buffer.alloc(64)]);
+    expect(c.quoteCutClaimed).toBe(45_420_000_000n);
+    // v1 wrote its last 64 bytes as zeros: no game, no pot, no burn; and its 300 bytes have no `quoteCutClaimed` (2026-10-15): null.
+    expect(data.length).toBe(COMPANION_LEN);
+    const v1 = Buffer.concat([data.subarray(0, COMPANION_LEN_V1 - 64), Buffer.alloc(64)]);
     const old = decodeCompanion(v1);
-    expect([old.gameHook, old.potBps, old.pendingPot, old.roundSecs, old.strandedBurnedAt, old.pendingBuyback]).toEqual([null, 0, 0n, 0, 0, 13n]);
+    expect([old.gameHook, old.potBps, old.pendingPot, old.roundSecs, old.strandedBurnedAt, old.pendingBuyback, old.quoteCutClaimed]).toEqual([null, 0, 0n, 0, 0, 13n, null]);
   });
 
   it('a LotteryState: the standard’s header first, then the hook’s fields', () => {
