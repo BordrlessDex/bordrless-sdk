@@ -18,6 +18,13 @@ of 0.12.0 keeps its name, signature and behaviour for bridged pools and launches
   `lamportsBase`, `Vault.isNative`, `Companion.nativeSol` (`decodeCompanion` reads 300, 308 and
   309-byte companions; `COMPANION_LEN_NATIVE`). All optional fields, absent from objects older code
   made.
+- **Rent at the cluster's rate**: `loadRent(connection)` reads the Rent sysvar (`rentOfSysvar`, `setRent`) and every reader of
+  SOL above rent (`rentExemptMinimum`, `lamportsAboveRent`, the native balance readers) uses it. Mainnet's rent is 5,080
+  lamports a byte (SIMD-0437, lower steps to come), not the legacy 6,960 the readers assumed, which under-counted every native
+  launch's, companion's and vault slot's SOL; until `loadRent` they keep the legacy rate. `RENT_EXEMPT_EMPTY` is deprecated
+  (the legacy 890,880): use `rentExemptMinimum(0)`.
+- **Launchpad IDL**: `migrate_launch_to_native` and `revert_launch_to_bridged` take `reward_vault` read-only (the kit's id
+  for a kit without holder rewards).
 - **Builders**: `swap.swapV2`, `swapV2WithHooks`, `swapFor` (by the pool's form),
   `createNativePool`, `migratePoolToNative`, `revertPoolToBridged`, `rebalancePool`,
   `setBufferTarget`; `launch.swapV2`, `swapClassic`, `claimCreatorFeesSol`, `claimAuthorFeesSol`,

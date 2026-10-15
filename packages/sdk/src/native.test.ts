@@ -9,6 +9,7 @@ import { PublicKey, type TransactionInstruction } from '@solana/web3.js';
 import { LP_FEE_BPS } from '@bordrless/shared';
 import vectors from '../vectors/native-sol.json' with { type: 'json' };
 import * as a from './addresses.ts';
+import { RENT_SYSVAR } from './timelock.ts';
 import { CODERS, IDL } from './coders.ts';
 import { decodeKitConfig, decodeLaunch, decodeLaunchConfig, decodePool, kitModulesOf, type LaunchRulesData, type Pool } from './accounts.ts';
 import { COMPANION_LEN, COMPANION_LEN_NATIVE, COMPANION_LEN_V1, companion, decodeCompanion } from './companion.ts';
@@ -28,6 +29,11 @@ import {
   poolQuoteBooks,
   poolQuoteStateOf,
   rentExemptMinimum,
+  loadRent,
+  setRent,
+  rentOfSysvar,
+  LEGACY_RENT_LAMPORTS_PER_BYTE,
+  lamportsAboveRent,
   swapSolSide,
   typedNativeEvent,
   vaultSlotSolOf,
@@ -216,6 +222,27 @@ describe('native balances', () => {
     expect(kitRewardVaultOf({ isNative: true, lamportsBase: 1_000n }, 900n, null)).toBe(0n);
     expect(companionSolOf({ nativeSol: true }, RENT_EXEMPT_EMPTY + 7n, null)).toBe(7n);
     expect(vaultSlotSolOf({ isNative: true }, RENT_EXEMPT_EMPTY - 1n, null)).toBe(0n);
+  });
+
+  it('read rent at the cluster’s rate (the Rent sysvar), not the legacy one', async () => {
+    // Mainnet, 15 Oct 2026: SIMD-0437-2, 5,080 lamports per byte-year, threshold 1.
+    const sysvar = Buffer.alloc(17);
+    sysvar.writeBigUInt64LE(5_080n, 0);
+    sysvar.writeDoubleLE(1, 8);
+    sysvar[16] = 50;
+    try {
+      expect(await loadRent({ getAccountInfo: async (key: PublicKey) => (key.equals(RENT_SYSVAR) ? ({ data: sysvar } as never) : null) })).toBe(650_240n);
+      expect(rentExemptMinimum(411)).toBe(539n * 5_080n);
+      expect(launchCreatorFeesOf({ isNative: true }, { lamports: Number(728n * 5_080n + 42n), data: Buffer.alloc(600) }, null)).toBe(42n);
+      expect(companionSolOf({ nativeSol: true }, 650_240n + 7n, null)).toBe(7n);
+      // The legacy rate on a mainnet account would have read 0 and under-counted every launch's fees.
+      expect(lamportsAboveRent(728n * 5_080n + 42n, 600) > lamportsAboveRent(728n * 5_080n + 42n, 0) - 728n * 5_080n).toBe(true);
+      // The old rate: 3,480 a byte-year, two years.
+      setRent(rentOfSysvar(Buffer.concat([Buffer.from(new BigUint64Array([3_480n]).buffer), Buffer.from(new Float64Array([2]).buffer), Buffer.from([50])])));
+      expect(rentExemptMinimum(0)).toBe(890_880n);
+    } finally {
+      setRent(LEGACY_RENT_LAMPORTS_PER_BYTE);
+    }
   });
 
   it('a launch-pool swap’s cuts, wherever the launch keeps them', () => {

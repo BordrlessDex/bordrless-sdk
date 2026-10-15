@@ -24,15 +24,47 @@ import * as a from './addresses.ts';
 import { decodeCompanion, type Companion } from './companion.ts';
 import type { DecodedEvent, SwappedEvent } from './events.ts';
 import { eventKey } from './events.ts';
+import { RENT_SYSVAR } from './timelock.ts';
 import { decodeVault, slotOwner, type Vault } from './vault.ts';
 
 // ---- rent --------------------------------------------------------------------------------------------
 
-/** The rent-exempt minimum of an account of `dataLen` bytes, at the default rent (3,480 lamports per byte-year, two years, 128 bytes of header). */
-export const rentExemptMinimum = (dataLen: number): bigint => BigInt(dataLen + 128) * 6_960n;
-/** The rent-exempt minimum of an empty account (a wallet, a companion's creator PDA, a vault slot's owner): 890,880 lamports. */
-export const RENT_EXEMPT_EMPTY = rentExemptMinimum(0);
-/** An account's lamports above its rent-exempt minimum (0 when below). */
+/** The legacy rent (3,480 lamports per byte-year over two years): what a reader assumes before `loadRent`. */
+export const LEGACY_RENT_LAMPORTS_PER_BYTE = 6_960n;
+
+/**
+ * The cluster's rent, as its Rent sysvar says: lamports per byte-year and the exemption threshold. Mainnet changes it by
+ * feature (SIMD-0194, then SIMD-0437's steps: 6,333, 5,080, 2,575, 1,322, 696 lamports per byte), so a reader that decides
+ * what of an account's lamports is SOL above its rent must read it (`loadRent`) rather than assume one. Until then: legacy.
+ */
+let rent = { lamportsPerByteYear: LEGACY_RENT_LAMPORTS_PER_BYTE, threshold: 1 };
+
+/** The Rent sysvar's data as rent: `lamports_per_byte_year` (u64), `exemption_threshold` (f64), `burn_percent` (u8). */
+export function rentOfSysvar(data: Uint8Array): { lamportsPerByteYear: bigint; threshold: number } {
+  const b = Buffer.from(data);
+  if (b.length < 16) throw new Error('not a Rent sysvar');
+  return { lamportsPerByteYear: b.readBigUInt64LE(0), threshold: b.readDoubleLE(8) };
+}
+/** Sets the rent the readers below use (from `rentOfSysvar`, or the lamports per byte with a threshold of 1). */
+export function setRent(r: { lamportsPerByteYear: bigint; threshold: number } | bigint): void {
+  rent = typeof r === 'bigint' ? { lamportsPerByteYear: r, threshold: 1 } : { ...r };
+}
+/** Reads the cluster's Rent sysvar and sets it (`setRent`); answers the rent-exempt minimum of an empty account. */
+export async function loadRent(connection: Pick<Connection, 'getAccountInfo'>): Promise<bigint> {
+  const info = await connection.getAccountInfo(RENT_SYSVAR, 'confirmed');
+  if (!info) throw new Error('the Rent sysvar could not be read');
+  setRent(rentOfSysvar(info.data));
+  return rentExemptMinimum(0);
+}
+
+/** The rent-exempt minimum of an account of `dataLen` bytes at the cluster's rent (`loadRent`): as the runtime's `Rent::minimum_balance`. */
+export const rentExemptMinimum = (dataLen: number): bigint => {
+  const base = BigInt(dataLen + 128) * rent.lamportsPerByteYear;
+  return Number.isInteger(rent.threshold) ? base * BigInt(rent.threshold) : BigInt(Math.floor(Number(base) * rent.threshold));
+};
+/** @deprecated The legacy rent-exempt minimum of an empty account (890,880): use `rentExemptMinimum(0)`, at the cluster's rent. */
+export const RENT_EXEMPT_EMPTY = BigInt(128) * LEGACY_RENT_LAMPORTS_PER_BYTE;
+/** An account's lamports above its rent-exempt minimum at the cluster's rent (0 when below). */
 export const lamportsAboveRent = (lamports: bigint | number, dataLen: number): bigint => {
   const extra = BigInt(lamports) - rentExemptMinimum(dataLen);
   return extra > 0n ? extra : 0n;
