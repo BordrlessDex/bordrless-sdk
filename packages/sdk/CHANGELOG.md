@@ -4,9 +4,9 @@ The public package is `@bordrless/sdk` on npm, published from the public reposit
 BordrlessDex/bordrless-sdk together with `@bordrless/shared` (shared first; the SDK depends on the
 same version of it). The monorepo is where both are written.
 
-## Unreleased
+## 0.13.0 (15 Oct 2026)
 
-- The companion's fee claim tells the hook's SOL cut apart (companion upgrade not yet deployed):
+- The companion's fee claim tells the hook's SOL cut apart (companion upgraded on mainnet 15 Oct):
   `FeesClaimed.fromHook` (appended; an event from before decodes with `fromHook: '0'`) and
   `Companion.quoteCutClaimed` (the account grows from 300 to 308 bytes; `decodeCompanion` reads a
   300-byte companion with `quoteCutClaimed: null`). `COMPANION_LEN`, `COMPANION_LEN_V1`,
