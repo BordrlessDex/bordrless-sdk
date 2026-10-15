@@ -257,10 +257,25 @@ optional bridge accounts; the remaining accounts are the same slices as `swap`
 ([Without TypeScript](07-other-languages.md#native-sol-swap_v2)). `minAmountOut` on a sell is in
 lamports delivered.
 
-**The old `swap` keeps working** on a native pool through a small bridged-SOL buffer in the old
-quote vault, with a limit: **a sell fails with `BufferShort`** when the buffer can't cover it
-(`classicSellCapacity(pool)` says how much it can), and an old-path buy on a pool with no lamports
-yet can fail with `LamportsShort`. Move to `swap_v2`.
+**Pass the bridge accounts only when a cut needs wrapping**: on a launch pool, only when the pool is
+native and its launch is not (a held or half-migrated coin). They are the bridge's global SOL
+wrapper, SOL vault and bridged-SOL mint: passing them on every trade write-locks those accounts and
+serializes your trades with everyone else's. `launch.swapV2` decides this from `keys.native`.
+
+**`launch.swap` changed in 0.14.0 (breaking on native launches).** It builds `swap_v2` for a native
+launch: the wallet pays a buy in SOL, a sell delivers SOL to the wallet. If you wrap SOL before
+calling it, that bridged SOL is now left unspent in the trader's holding (no loss), and wrapping a
+native launch's swap with `router.swap` throws: use `router.swapV2`. **Escape hatch:**
+`launch.swapClassic(keys, …)` always builds the classic `swap`.
+
+**The old `swap` keeps working** on a native pool, with the same accounts, through a bridged-SOL
+buffer in the old quote vault. A **sell** is paid from the buffer as far as it goes and **the rest as
+SOL to the trader's wallet**, which must be writable (the SDK passes it writable; a fee payer always
+is): it never fails for an empty buffer, but part of the proceeds can arrive as SOL rather than
+bridged SOL (`Swapped.deliveredOut` counts both). `remove_liquidity` does the same for the provider.
+An old-path **buy** on a native launch pool pays the launch's fees in SOL from the pool, so on a
+fresh native launch pool with no SOL yet it fails with `LamportsShort` until a `swap_v2` trade.
+Move to `swap_v2`.
 
 Quoting is unchanged: the reserves are the pool's books (`quoteReserve`, virtual reserves), never
 the vault's balance. What a wallet can spend on a buy is its lamports (`spendableQuote`).

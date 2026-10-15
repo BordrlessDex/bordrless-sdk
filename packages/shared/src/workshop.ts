@@ -491,3 +491,18 @@ export interface WorkshopConfigPrepareResponse {
 export interface WorkshopConfigConfirmRequest {
   config: Address;
 }
+
+/**
+ * Workshop scripts that are not native-ready (audit H-1, I-5): they buy through the classic `swap` with the companion creator's
+ * bridged SOL and check that the pool's quote vault holds its books, so on a native coin every step fails (`Settlement`). The 13
+ * coins already launched with one are held (only their pool goes native; `pnpm admin native`); a new launch with one is refused
+ * while native launches are on, by the site and by the companion program itself (`ScriptNotNativeReady`, bordrless-programs
+ * `NOT_NATIVE_READY_SCRIPTS`). Taken off this list (and the program's, by an upgrade) when the author ships a native build.
+ */
+export const NATIVE_SCRIPT_HOLD: Readonly<Record<string, string>> = {
+  HxsFA5ox5pYVBDN1QSUtnUzvAuJtAQZRG8YYMuJzR2Mp: 'PumpTek’s script',
+  DMQE7DHM2sjLXAYmqmnFvxCdkmEFctB2fZQY21ToZQuZ: 'the 8jYBwc… pair’s script',
+};
+
+/** Why a script can't launch on native SOL (its name on `NATIVE_SCRIPT_HOLD`), or null when it can. */
+export const nativeScriptHold = (program: string): string | null => NATIVE_SCRIPT_HOLD[program] ?? null;

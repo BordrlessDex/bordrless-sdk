@@ -238,7 +238,10 @@ program's split.
 **The router** (`docs/router.md`; 0.10.0). An app that routes swaps (a terminal, a wallet, a bot)
 adds its own fee of 1 to 100 bps to any swap on any Bordrless pool: build the swap as usual, then
 `router.swap(trader, integratorQuote, treasuryQuote, dexSwap, feeBps, minQuoteAfterFee)`. A fifth of
-the fee goes to Bordrless, the rest to your holding of the pool's quote.
+the fee goes to Bordrless, the rest to your holding of the pool's quote. On a native pool (0.14.0)
+`launch.swap` builds `swap_v2` for a native launch: wrap it with
+`router.swapV2(trader, integratorWallet, treasuryWallet, dexSwapV2, feeBps, minSolAfterFee)`, fees in
+SOL to the wallets (`router.swap` throws on a `swap_v2`). `launch.swapClassic` keeps the classic swap.
 
 **Payees** (`docs/payees-and-wallet-payouts.md`; 0.10.0). A companion coin's launcher shares their
 part of the fees with up to 10 wallets, each a fixed share, set before the launch:

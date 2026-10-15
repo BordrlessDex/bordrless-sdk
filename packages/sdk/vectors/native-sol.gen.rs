@@ -30,8 +30,15 @@ fn main() {
     let v2n = swap::swap_v2(&swap::SwapV2Keys { trader, pool, base_mint: base, trader_base: tb, trader_quote: k(14), hook_program: None, base_mint_writable: false, with_bridge: false }, args(0), vec![]);
     out.push(ix_json("swapV2Plain", &v2n));
     out.push(ix_json("migratePool", &swap::migrate_pool_to_native(admin, pool, 777)));
+    out.push(ix_json("migratePoolForeign", &swap::migrate_pool_to_native_with(admin, pool, 777, true)));
     out.push(ix_json("revertPool", &swap::revert_pool_to_bridged(admin, pool)));
+    out.push(ix_json("revertLaunchPool", &swap::revert_launch_pool_to_bridged(admin, pool, base)));
+    let classic = swap::swap(&swap::SwapKeys { trader, pool, base_mint: base, quote_mint: sol, trader_base: tb, trader_quote: k(18), hook_program: Some(hook), base_mint_writable: false, quote_mint_writable: false }, args(0), extras.clone());
+    out.push(ix_json("classicSwap", &classic));
+    let lq = swap::LiquidityKeys { provider: trader, pool, base_mint: base, quote_mint: sol, hook_program: None };
+    out.push(ix_json("removeLiquidity", &swap::remove_liquidity(&lq, bordrless_swap::instructions::RemoveLiquidityArgs { lp_amount: 9, min_base: 1, min_quote: 2, base_hook_accounts: 0, quote_hook_accounts: 0, hook_data: vec![] }, vec![])));
     out.push(ix_json("rebalancePool", &swap::rebalance_pool(trader, pool)));
+    out.push(ix_json("bufferAll", &swap::buffer_all(trader, pool)));
     out.push(ix_json("setBufferTarget", &swap::set_buffer_target(admin, pool, 5)));
     let cpa = bordrless_swap::instructions::CreatePoolArgs { lp_fee_bps: 30, hook_program: Pubkey::default(), hook_flags: 0, virtual_base: 0, virtual_quote: 0, base_amount: 1000, quote_amount: 2000, base_hook_accounts: 0, quote_hook_accounts: 0, hook_data: vec![] };
     out.push(ix_json("createNativePool", &swap::create_native_pool(&swap::CreatePoolKeys { payer: trader, authority: trader, treasury: treas, base_mint: base, quote_mint: sol, hook_caller: None }, cpa, vec![])));
@@ -40,6 +47,7 @@ fn main() {
     let lk = launch::LaunchKeys::new(mint, sol, bordrless_core::policy::LP_FEE_BPS, &rules);
     out.push(ix_json("launchSwapV2Buy", &launch::swap_v2(&lk, trader, k(15), 1, 1000, 1)));
     out.push(ix_json("launchSwapV2Sell", &launch::swap_v2(&lk, trader, k(15), 0, 1000, 1)));
+    out.push(ix_json("launchSwapV2Bridge", &launch::swap_v2_with_bridge(&lk, trader, trader, 1, 1000, 1, launch::base_hook_slice(&mint, &sol, lk.modules), true)));
     out.push(ix_json("launchSwapV2NoBridge", &launch::swap_v2_with_bridge(&lk, trader, trader, 1, 1000, 1, launch::base_hook_slice(&mint, &sol, lk.modules), false)));
     out.push(ix_json("claimCreatorSol", &launch::claim_creator_fees_sol(creator, mint, None, None)));
     out.push(ix_json("claimCreatorSolBoth", &launch::claim_creator_fees_sol(creator, mint, Some((cfg, author)), Some((cfg, partner)))));
@@ -60,6 +68,9 @@ fn main() {
     // companion
     out.push(ix_json("companionMigrate", &bordrless_companion::client::migrate_companion_to_native(admin, mint)));
     out.push(ix_json("companionRevert", &bordrless_companion::client::revert_companion_to_bridged(admin, mint)));
+    let inner = Instruction { program_id: bordrless_launch::ID, accounts: vec![AccountMeta::new(k(50), false), AccountMeta::new_readonly(mint, true)], data: vec![] };
+    let largs = bordrless_launch::instructions::CreateLaunchArgs { name: "N".into(), symbol: "S".into(), uri: "u".into(), creator_fee_bps: 100, virtual_quote: 1, rules };
+    out.push(ix_json("companionLaunchScript", &bordrless_companion::client::launch_script(trader, mint, &inner, largs)));
     out.push(metas_json("companionNativeAccounts", &bordrless_companion::client::native_accounts(&lk)));
     // hook vault
     let mut slots = [hook_vault::state::Slot::default(); hook_vault::constants::MAX_SLOTS];

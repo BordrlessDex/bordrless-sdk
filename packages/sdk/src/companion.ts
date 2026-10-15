@@ -1,13 +1,13 @@
 /**
  * Companions (programs/bordrless_companion, docs/companions.md): a launch whose creator is a program.
- * The companion creates the launch with its creator address (`companionCreatorAddress`) as the
+ * The companion creates the launch with its companion address (`companionCreatorAddress`) as the
  * creator, so every creator fee lands with it, and its code alone decides what happens to it: bought
  * back and burned, streamed to holders through the kit, or paid to the launcher (the beneficiary),
  * by a split fixed at `create`. The launcher's own buy (`devBuy`) is held by the companion and vests
  * to them (`release`). Every step but `devBuy` is permissionless and pays its sender a bounty.
  *
  * Each step's remaining accounts are the accounts of the instructions it invokes, built with the
- * same builders the program uses on chain; the program looks them up by key. The creator address
+ * same builders the program uses on chain; the program looks them up by key. The companion address
  * signs only inside the program, so it is never marked a signer here. Mirrors
  * `bordrless_companion::client` account for account (held to it by
  * `packages/sdk/vectors/companion-games.json`, which the programs' `game_vectors` test renders).
@@ -70,7 +70,7 @@ export interface CompanionArgs {
   buybackInterval: number;
   /** The dev bag vests over this many seconds from the launch (at most a year). */
   vestSecs: number;
-  /** Lamports for the creator address: the launch's fee and rent, and its own rent-exempt minimum. */
+  /** Lamports for the companion address: the launch's fee and rent, and its own rent-exempt minimum. */
   fund: bigint;
 }
 
@@ -147,7 +147,8 @@ export const COMPANION_LEN_NATIVE = 309;
 export const COMPANION_TEMPLATES: Readonly<Record<CompanionTemplate, Readonly<CompanionSplit>>> = COMPANION_SPLITS;
 
 /** The defaults the launch page (and its API) sends with a split: a 0.5% bounty, buybacks of at most 1 SOL a minute apart, a 30-day vest. */
-export const COMPANION_DEFAULTS = { bountyBps: 50, maxBuyback: 1_000_000_000n, buybackInterval: 60, vestSecs: 30 * 86_400 } as const;
+/** The defaults a site launch sends: no vest (the first buy is the launcher's at launch unless they chose one; 2026-10-15). */
+export const COMPANION_DEFAULTS = { bountyBps: 50, maxBuyback: 1_000_000_000n, buybackInterval: 60, vestSecs: 0 } as const;
 
 const ro = (pubkey: PublicKey, isSigner = false): AccountMeta => ({ pubkey, isSigner, isWritable: false });
 const rw = (pubkey: PublicKey, isSigner = false): AccountMeta => ({ pubkey, isSigner, isWritable: true });
@@ -374,7 +375,7 @@ export const companion = {
     return build('create', data, named, remaining(token.createHolding(payer, a.BRIDGED_SOL_MINT, creator)));
   },
   /**
-   * `launch`: `create_launch` through the companion, its creator address the creator. Build
+   * `launch`: `create_launch` through the companion, its companion address the creator. Build
    * `createLaunch` with `companionCreatorAddress(mint)` as the creator; the mint signs. A game
    * companion's launch comes from a `LaunchConfig` naming the game's hook with the lottery flags,
    * its custom hook passed to `createLaunch` (`lotteryHook.accounts(mint)`); its state is among
@@ -387,6 +388,15 @@ export const companion = {
     const inner = createLaunch.keys.map((m) => ({ pubkey: m.pubkey, isSigner: m.isSigner && m.pubkey.equals(mint), isWritable: m.isWritable }));
     const data = { args: { ...args, virtualQuote: bn(args.virtualQuote), rules: { ...args.rules } } };
     return build('launch', data, named, inner);
+  },
+  /**
+   * `launch` of a script companion: the script's address appended last, which the companion reads and never forwards. While native
+   * launches are on, a script companion needs it, and a script that is not native-ready is refused (`ScriptNotNativeReady`).
+   */
+  launchScript(launcher: PublicKey, mint: PublicKey, createLaunch: TransactionInstruction, args: CreateLaunchArgs): TransactionInstruction {
+    const out = companion.launch(launcher, mint, createLaunch, args);
+    out.keys.push(ro(a.scriptAddress(mint)));
+    return out;
   },
   /** `dev_buy`: the beneficiary's buy, held by the companion and vesting to them. A game coin's (`keys.customHook`) carries the hook's slice and registry. */
   devBuy(beneficiary: PublicKey, keys: LaunchKeys, lamports: bigint, minOut: bigint): TransactionInstruction {
@@ -447,7 +457,7 @@ export const companion = {
    *
    * A token with a custom hook (2026-10-12; `client::snowball_step_with`): the swap carries the
    * hook's slice with `keys.customHook`'s extras, resolved for a buy (the pool vault's transfer to
-   * the creator address); `sell`'s extras, resolved for a sell (the creator address's transfer to
+   * the companion address); `sell`'s extras, resolved for a sell (the companion address's transfer to
    * the vault), follow it, `keys.customHook`'s when not given (a hook whose extras do not depend on
    * the direction, as `resolveCustomHookAccounts` resolves them), and the hook's registry comes
    * last: the program resolves the side it trades itself. Without a hook, exactly the plain step.
@@ -671,7 +681,7 @@ export const companion = {
   allowWalletPayouts(mint: PublicKey): TransactionInstruction {
     return build('allowWalletPayouts', {}, [ro(mint, true), ro(a.companionAddress(mint)), rw(a.payoutTermsAddress(mint)), ro(a.scriptAddress(mint))], []);
   },
-  /** `withdraw` before the launch, signed by the mint: the creator address's funding back to the beneficiary (a launch that never happened). */
+  /** `withdraw` before the launch, signed by the mint: the companion address's funding back to the beneficiary (a launch that never happened). */
   refund(sender: PublicKey, mint: PublicKey, beneficiary: PublicKey): TransactionInstruction {
     const ix = companion.withdraw(sender, mint, beneficiary);
     ix.keys.push(ro(mint, true));

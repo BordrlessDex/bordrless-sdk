@@ -48,7 +48,7 @@ DEX `swap_v2`, discriminator `[43,4,237,11,26,201,30,98]`, data as `swap` (`Swap
 five times the DEX id; 18 DEX event authority; 19 DEX program; then the remaining accounts as for
 `swap`. `SwappedNative` follows `Swapped`, discriminator `[211,64,168,225,250,98,248,180]`. The
 router's `swap_v2` has the same discriminator under the router: trader (w, s), integrator wallet
-(w), DEX treasury (w), DEX, System Program, router event authority, router, then the DEX accounts.
+(w), DEX treasury (w), DEX, System Program, router event authority, router, then the DEX accounts. Pass the bridge accounts only when a quote-side cut names a holding of bridged SOL (a launch pool whose launch is not native yet); otherwise they write-lock the bridge's global accounts on every trade.
 
 Rust: `bordrless_swap::client::swap_v2`, `bordrless_launch::client::swap_v2` /
 `swap_v2_with_base_slice`, `claim_creator_fees_sol`; `bordrless_kit::client::claim_sol`;

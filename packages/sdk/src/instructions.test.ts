@@ -45,6 +45,9 @@ const PROGRAM_ID: Record<ProgramName, PublicKey> = { token: a.TOKEN_PROGRAM, swa
  * program's id) is read-only and signs nothing.
  */
 function holdToIdl(program: ProgramName, name: string, ix: TransactionInstruction, remaining: number, writableMints: string[] = []): void {
+  // The DEX's classic swap and liquidity pass the signer writable on purpose: a native pool pays what its buffer can't cover as
+  // lamports to it (audit N-4, N-5); the IDL keeps it read-only, so a CPI caller passing it read-only still works.
+  if (program === 'swap' && ['swap', 'add_liquidity', 'remove_liquidity'].includes(name)) writableMints = [...writableMints, 'trader', 'provider'];
   const idl = IDL[program] as unknown as RawIdl;
   const def = idl.instructions.find((i) => i.name === name);
   if (!def) throw new Error(`${program} has no ${name}`);
@@ -633,7 +636,7 @@ describe('companions (docs/companions.md): each step against the IDL, its inner 
   const tail = (ix: TransactionInstruction, n: number) => ix.keys.slice(ix.keys.length - n);
   const signers = (ix: TransactionInstruction) => ix.keys.filter((m) => m.isSigner).map((m) => m.pubkey.toBase58());
 
-  it('create, launch: the creator address never asks for a signature; the mint does', () => {
+  it('create, launch: the companion address never asks for a signature; the mint does', () => {
     const create = companion.create(launcher, launcher, mint, args);
     const holding = token.createHolding(launcher, SOL, creator);
     holdToIdl('companion', 'create', create, holding.keys.length + 1);

@@ -55,23 +55,34 @@ function same(name: string, ix: TransactionInstruction): void {
 const args = (direction: 0 | 1): SwapArgs => ({ direction, amountIn: 1_000_000n, minAmountOut: 5n, inHookAccounts: 0, outHookAccounts: 0, hookData: Uint8Array.from([1, 2]) });
 const RULES: LaunchRulesData = { holderFeeBuyBps: 100, holderFeeSellBps: 100, burnBuyBps: 10, burnSellBps: 0, maxWalletBps: 0, creatorLockSecs: 0, earlyWindowSecs: 0, earlyLockSecs: 0 };
 const KEYS = launchKeys(k(7), SOL, LP_FEE_BPS, RULES);
+/** A native launch's keys: `launch.swapV2` passes no bridge accounts by default, as the Rust client's `swap_v2_with_base_slice`. */
+const NKEYS = { ...KEYS, native: true };
 
 describe('native-SOL builders are the Rust clients’', () => {
   it('the DEX: swap_v2 (with and without the bridge), create_native_pool and the four quote-form instructions', () => {
     same('swapV2Bridge', swap.swapV2({ trader: k(1), pool: k(2), baseMint: k(3), traderBase: k(4), traderQuote: k(1), hookProgram: k(5), baseMintWritable: true, withBridge: true }, args(1), [{ pubkey: k(20), isSigner: false, isWritable: true }, { pubkey: k(21), isSigner: false, isWritable: false }]));
     same('swapV2Plain', swap.swapV2({ trader: k(1), pool: k(2), baseMint: k(3), traderBase: k(4), traderQuote: k(14), hookProgram: null }, args(0)));
     same('migratePool', swap.migratePoolToNative(k(6), k(2), 777n));
+    same('migratePoolForeign', swap.migratePoolToNative(k(6), k(2), 777n, true));
     same('revertPool', swap.revertPoolToBridged(k(6), k(2)));
+    same('revertLaunchPool', swap.revertPoolToBridged(k(6), k(2), k(3)));
+    same('classicSwap', swap.swap({ trader: k(1), pool: k(2), baseMint: k(3), quoteMint: SOL, traderBase: k(4), traderQuote: k(18), hookProgram: k(5) }, args(0), [{ pubkey: k(20), isSigner: false, isWritable: true }, { pubkey: k(21), isSigner: false, isWritable: false }]));
+    same('removeLiquidity', swap.removeLiquidity({ provider: k(1), pool: k(2), baseMint: k(3), quoteMint: SOL, hookProgram: null }, { lpAmount: 9n, minBase: 1n, minQuote: 2n, baseHookAccounts: 0, quoteHookAccounts: 0, hookData: new Uint8Array() }));
     same('rebalancePool', swap.rebalancePool(k(1), k(2)));
+    same('bufferAll', swap.bufferAll(k(1), k(2)));
     same('setBufferTarget', swap.setBufferTarget(k(6), k(2), 5n));
     same('createNativePool', swap.createNativePool(k(1), k(1), k(13), k(3), { lpFeeBps: 30, hookProgram: null, hookFlags: 0, virtualBase: 0n, virtualQuote: 0n, baseAmount: 1000n, quoteAmount: 2000n, baseHookAccounts: 0, quoteHookAccounts: 0, hookData: new Uint8Array() }));
   });
 
   it('the launchpad: swap_v2 on a launch pool, the _sol claims, set_native_launches, migrate and revert', () => {
     expect(KEYS.modules).toBe(kitModulesOf(RULES));
-    same('launchSwapV2Buy', launch.swapV2(KEYS, k(1), k(15), 1, 1000n, 1n));
-    same('launchSwapV2Sell', launch.swapV2(KEYS, k(1), k(15), 0, 1000n, 1n));
+    same('launchSwapV2Buy', launch.swapV2(NKEYS, k(1), k(15), 1, 1000n, 1n));
+    same('launchSwapV2Sell', launch.swapV2(NKEYS, k(1), k(15), 0, 1000n, 1n));
     same('launchSwapV2NoBridge', launch.swapV2(KEYS, k(1), k(1), 1, 1000n, 1n, { withBridge: false }));
+    same('launchSwapV2Bridge', launch.swapV2(KEYS, k(1), k(1), 1, 1000n, 1n, { withBridge: true }));
+    // O-1: the bridge only for a launch not yet native (its hook names bridged holdings); a native launch's cuts are lamports.
+    expect(launch.swapV2(NKEYS, k(1), k(1), 1, 1000n, 1n).keys.length).toBe(launch.swapV2(KEYS, k(1), k(1), 1, 1000n, 1n, { withBridge: false }).keys.length);
+    expect(launch.swapV2(KEYS, k(1), k(1), 1, 1000n, 1n).keys.map((m) => m.pubkey.toBase58())).toContain(a.SOL_VAULT.toBase58());
     same('claimCreatorSol', launch.claimCreatorFeesSol(k(11), k(7)));
     same('claimCreatorSolBoth', launch.claimCreatorFeesSol(k(11), k(7), { config: k(9), author: k(8) }, { config: k(9), partner: k(10) }));
     same('claimAuthorSol', launch.claimAuthorFeesSol(k(8), k(7), k(9), k(11), k(10)));
@@ -92,6 +103,7 @@ describe('native-SOL builders are the Rust clients’', () => {
     same('kitSetNativeBare', kit.setNative(k(16), k(1), k(7), null, SOL, false, false));
     same('companionMigrate', companion.migrateToNative(k(6), k(7)));
     same('companionRevert', companion.revertToBridged(k(6), k(7)));
+    same('companionLaunchScript', companion.launchScript(k(1), k(7), { programId: a.LAUNCH_PROGRAM, keys: [{ pubkey: k(50), isSigner: false, isWritable: true }, { pubkey: k(7), isSigner: true, isWritable: false }], data: Buffer.alloc(0) } as unknown as TransactionInstruction, { name: 'N', symbol: 'S', uri: 'u', creatorFeeBps: 100, virtualQuote: 1n, rules: RULES }));
     expect(companion.nativeAccounts(KEYS).map((m) => [m.pubkey.toBase58(), m.isSigner, m.isWritable])).toEqual(vec.companionNativeAccounts);
     const view = { mint: k(7), nSlots: 3, slots: [{ policy: 'sellForSol', pendingSol: 5n }, { policy: 'burn', pendingSol: 0n }, { policy: 'sellBuyBurn', pendingSol: 9n }] } as unknown as VaultView;
     same('vaultMigrate', vault.setVaultNative(k(6), view, true));

@@ -261,13 +261,13 @@ export interface SwappedNativeEvent {
 }
 
 /** `PoolQuoteFormChanged.kind`. */
-export const POOL_QUOTE_FORM_KIND = { migrated: 0, reverted: 1, rebalanced: 2, targetSet: 3 } as const;
+export const POOL_QUOTE_FORM_KIND = { migrated: 0, reverted: 1, rebalanced: 2, targetSet: 3, bufferedAll: 4 } as const;
 
 /** swap `PoolQuoteFormChanged`: a pool moved between bridged SOL in its vault and lamports on its account. */
 export interface PoolQuoteFormChangedEvent {
   kind: 'swap.PoolQuoteFormChanged';
   pool: string;
-  /** 0 migrated to native, 1 reverted to bridged, 2 rebalanced, 3 buffer target set (`POOL_QUOTE_FORM_KIND`). */
+  /** 0 migrated to native, 1 reverted to bridged, 2 rebalanced, 3 buffer target set, 4 buffered all (`POOL_QUOTE_FORM_KIND`). */
   change: number;
   native: boolean;
   unwrapped: bigint;

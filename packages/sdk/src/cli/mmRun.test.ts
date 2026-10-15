@@ -119,6 +119,36 @@ describe('the swaps the market maker builds', () => {
   });
 });
 
+describe('the swaps the market maker builds on native SOL (audit O-4)', () => {
+  const owner = key();
+  const mint = key();
+  const swapName = (data: Buffer): string => (CODERS.swap.instruction.decode(data) as { name: string }).name;
+
+  it('a native launch: no wrap, no bridged-SOL holding, swap_v2 paid and delivered in SOL', () => {
+    const launch = { mint, quoteMint: BRIDGED_SOL_MINT, lpFeeBps: 30, rules: NO_LAUNCH_RULES, customHook: null, modules: 0, creatorFeeBps: 100, createdAt: 0, sniperWindowSecs: 0, sniperStartBps: 0, status: 1, isNative: true } as unknown as Launch;
+    const pool = poolOf({ baseMint: mint, lpFeeBps: 30, hookProgram: LAUNCH_PROGRAM, feeModel: FEE_MODEL_SHARE, quoteNative: true } as Partial<Pool>);
+    const market: Market = { mint, token: mintOf(null), poolKey: launchPoolAddress(mint, BRIDGED_SOL_MINT, 30), pool, launch, kit: null, customHook: null, baseHookList: null, poolHookList: null };
+    const buy = tradeInstructions(market, owner, 'buy', 100_000_000n, 1n, 100_000_000n);
+    expect(buy.map((ix) => ix.programId.toBase58())).toEqual([TOKEN_PROGRAM, SWAP_PROGRAM].map(String));
+    expect(swapName(buy[1]!.data)).toBe('swapV2');
+    const sell = tradeInstructions(market, owner, 'sell', 1_000n * TOKEN, 1n, 0n);
+    expect(sell.map((ix) => ix.programId.toBase58())).toEqual([SWAP_PROGRAM].map(String));
+    expect(swapName(sell[0]!.data)).toBe('swapV2');
+  });
+
+  it('a native ordinary pool: swap_v2; a held coin (pool native, launch bridged): the classic swap with bridged SOL', () => {
+    const pool = poolOf({ baseMint: mint, quoteNative: true } as Partial<Pool>);
+    const market: Market = { mint, token: mintOf(null), poolKey: poolAddress(mint, BRIDGED_SOL_MINT, pool.lpFeeBps, null), pool, launch: null, kit: null, customHook: null, baseHookList: null, poolHookList: null };
+    const sell = tradeInstructions(market, owner, 'sell', 1_000n * TOKEN, 1n, 0n);
+    expect(sell.map((ix) => swapName(ix.data))).toEqual(['swapV2']);
+    const held = { mint, quoteMint: BRIDGED_SOL_MINT, lpFeeBps: 30, rules: NO_LAUNCH_RULES, customHook: null, modules: 0, creatorFeeBps: 100, createdAt: 0, sniperWindowSecs: 0, sniperStartBps: 0, status: 1, isNative: false } as unknown as Launch;
+    const heldMarket: Market = { ...market, launch: held, pool: poolOf({ baseMint: mint, lpFeeBps: 30, hookProgram: LAUNCH_PROGRAM, quoteNative: true } as Partial<Pool>) };
+    const buy = tradeInstructions(heldMarket, owner, 'buy', 100_000_000n, 1n, 40_000_000n);
+    expect(buy.map((ix) => ix.programId.toBase58())).toEqual([TOKEN_PROGRAM, BRIDGE_PROGRAM, TOKEN_PROGRAM, SWAP_PROGRAM].map(String));
+    expect(swapName(buy[3]!.data)).toBe('swap');
+  });
+});
+
 describe('the quotes the market maker decides with', () => {
   const mint = key();
   const reserves = { baseReserve: 500_000_000n * TOKEN, quoteReserve: 50n * SOL, virtualBase: 0n, virtualQuote: 0n };

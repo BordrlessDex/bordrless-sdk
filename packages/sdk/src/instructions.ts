@@ -12,7 +12,7 @@
  * DEX's for that hook. No instruction takes the v1 global hook signers any more.
  */
 import BN from 'bn.js';
-import { PublicKey, TransactionInstruction, type AccountMeta } from '@solana/web3.js';
+import { PublicKey, SYSVAR_INSTRUCTIONS_PUBKEY as SYSVAR_INSTRUCTIONS, TransactionInstruction, type AccountMeta } from '@solana/web3.js';
 import { LP_FEE_BPS, type RuleBounds } from '@bordrless/shared';
 import * as a from './addresses.ts';
 import { kitModulesOf, rulesBurn, type KitConfig, type Launch, type LaunchRulesData, type Pool, type QuoteCutCaps } from './accounts.ts';
@@ -285,7 +285,8 @@ export const swap = {
    */
   swap(keys: SwapKeys, args: SwapArgs, extras: AccountMeta[] = []): TransactionInstruction {
     const metas = [
-      ro(keys.trader, true),
+      // Writable: on a native pool, what the buffer can't cover of an old-path sell is paid to the trader as lamports.
+      rw(keys.trader, true),
       ro(a.SWAP_CONFIG),
       rw(keys.pool),
       mintMeta(keys.baseMint, keys.baseMintWritable),
@@ -367,17 +368,34 @@ export const swap = {
       ro(a.SYSTEM_PROGRAM),
     ]);
   },
-  /** `migrate_pool_to_native(buffer_target)`: the DEX admin, with the DEX paused, turns a pool quoted in bridged SOL native (idempotent). */
-  migratePoolToNative(admin: PublicKey, pool: PublicKey, bufferTarget: bigint): TransactionInstruction {
-    return ix(a.SWAP_PROGRAM, 'swap', 'migratePoolToNative', { bufferTarget: bn(bufferTarget) }, swap.quoteFormKeys(admin, pool));
+  /**
+   * `migrate_pool_to_native(buffer_target, allow_foreign_hook)`: the DEX admin, with the DEX paused, turns a pool quoted in bridged
+   * SOL native (idempotent; a re-run applies a new target). The DEX refuses a pool whose hook is neither absent nor the launchpad
+   * unless `allowForeignHook` (`ForeignHookPool`), and the excluded pool `4PvPnTBy…` whatever (`ExcludedPool`).
+   */
+  migratePoolToNative(admin: PublicKey, pool: PublicKey, bufferTarget: bigint, allowForeignHook = false): TransactionInstruction {
+    return ix(a.SWAP_PROGRAM, 'swap', 'migratePoolToNative', { bufferTarget: bn(bufferTarget), allowForeignHook }, swap.quoteFormKeys(admin, pool));
   },
-  /** `revert_pool_to_bridged`: the DEX admin (a plain wallet: it wraps the pool's SOL), with the DEX paused (idempotent). */
-  revertPoolToBridged(admin: PublicKey, pool: PublicKey): TransactionInstruction {
-    return ix(a.SWAP_PROGRAM, 'swap', 'revertPoolToBridged', {}, swap.quoteFormKeys(admin, pool));
+  /**
+   * `revert_pool_to_bridged`: the DEX admin (a plain wallet: it wraps the pool's SOL), with the DEX paused (idempotent). A launch
+   * pool (hook the launchpad) passes `launchMint`, its coin: the DEX reads the launch and refuses while it is still native
+   * (`LaunchStillNative`; revert the launch first).
+   */
+  revertPoolToBridged(admin: PublicKey, pool: PublicKey, launchMint: PublicKey | null = null): TransactionInstruction {
+    const keys = swap.quoteFormKeys(admin, pool);
+    if (launchMint) keys.push(ro(a.launchAddress(launchMint)));
+    return ix(a.SWAP_PROGRAM, 'swap', 'revertPoolToBridged', {}, keys);
   },
   /** `rebalance_pool`: anyone (a plain wallet) moves a native pool's buffer toward its target. */
   rebalancePool(cranker: PublicKey, pool: PublicKey): TransactionInstruction {
     return ix(a.SWAP_PROGRAM, 'swap', 'rebalancePool', {}, swap.quoteFormKeys(cranker, pool));
+  },
+  /**
+   * `buffer_all`: anyone (a plain wallet: it wraps the pool's SOL) moves all of a native pool's quote into its quote vault for the
+   * rest of the transaction; the same transaction must send `rebalance_pool` of the pool after it (`NoRebalanceAfter`).
+   */
+  bufferAll(cranker: PublicKey, pool: PublicKey): TransactionInstruction {
+    return ix(a.SWAP_PROGRAM, 'swap', 'bufferAll', {}, [...swap.quoteFormKeys(cranker, pool), ro(SYSVAR_INSTRUCTIONS)]);
   },
   /** `set_buffer_target`: the DEX admin sets a native pool's buffer target. */
   setBufferTarget(admin: PublicKey, pool: PublicKey, bufferTarget: bigint): TransactionInstruction {
@@ -387,7 +405,8 @@ export const swap = {
   liquidityKeys(keys: LiquidityKeys): AccountMeta[] {
     const lpMint = a.lpMintAddress(keys.pool);
     return withEvents(a.SWAP_PROGRAM, [
-      ro(keys.provider, true),
+      // Writable: a native pool pays what its buffer can't cover of a withdrawal as lamports.
+      rw(keys.provider, true),
       ro(a.SWAP_CONFIG),
       rw(keys.pool),
       ro(keys.baseMint),
@@ -879,7 +898,12 @@ export const launch = {
   swap(keys: LaunchKeys, trader: PublicKey, recipient: PublicKey, direction: 0 | 1, amountIn: bigint, minAmountOut: bigint): TransactionInstruction {
     return keys.native ? launch.swapV2(keys, trader, recipient, direction, amountIn, minAmountOut) : launch.swapClassic(keys, trader, recipient, direction, amountIn, minAmountOut);
   },
-  /** The classic `swap` of a launch pool, whatever its form (`launch.swap` before native SOL): the quote is bridged SOL in holdings, which on a native pool moves through its buffer (a sell is `BufferShort` when the buffer can't cover it). */
+  /**
+   * The classic `swap` of a launch pool, whatever its form (`launch.swap` before native SOL): the quote is bridged SOL in holdings,
+   * which on a native pool moves through its buffer. On a native pool a sell is paid from the buffer as far as it goes and the rest
+   * as SOL to the trader's wallet. The escape hatch for callers that wrap SOL themselves; `launch.swap` picks `swap_v2` for a
+   * native launch.
+   */
   swapClassic(keys: LaunchKeys, trader: PublicKey, recipient: PublicKey, direction: 0 | 1, amountIn: bigint, minAmountOut: bigint): TransactionInstruction {
     const buy = direction === 1;
     const traderBase = a.holdingAddress(keys.mint, buy ? recipient : trader);
@@ -898,8 +922,10 @@ export const launch = {
   /**
    * `swap_v2` on a native launch pool (`bordrless_launch::client::swap_v2_with_bridge`): a buy pays SOL from `trader`'s wallet and
    * delivers the token to `recipient`'s holding; a sell delivers SOL to `recipient`'s wallet. No wrap, no unwrap, no holding of
-   * bridged SOL. `withBridge` (default true, as the Rust client's `swap_v2_with_base_slice`) passes the bridge's accounts, so a cut
-   * to an old-style holding of bridged SOL is wrapped; a native launch's own cuts are lamports and need none.
+   * bridged SOL. `withBridge` passes the bridge's accounts, so a cut to an old-style holding of bridged SOL is wrapped: by default
+   * only when the launch is not native (`!keys.native`: a held coin, or a coin half migrated, its pool native), as the launchpad's
+   * hook then names its bridged holdings. A native launch's own cuts are lamports and need none, and passing them would write-lock
+   * the bridge's global SOL accounts on every trade (audit O-1).
    */
   swapV2(keys: LaunchKeys, trader: PublicKey, recipient: PublicKey, direction: 0 | 1, amountIn: bigint, minAmountOut: bigint, options: { withBridge?: boolean; baseSlice?: AccountMeta[] } = {}): TransactionInstruction {
     const buy = direction === 1;
@@ -907,7 +933,7 @@ export const launch = {
     const traderQuote = buy ? trader : recipient;
     const slice = options.baseSlice ?? launch.baseHookSliceOf(keys);
     return swap.swapV2(
-      { trader, pool: a.launchPoolAddress(keys.mint, keys.quoteMint, keys.lpFeeBps), baseMint: keys.mint, traderBase, traderQuote, hookProgram: a.LAUNCH_PROGRAM, baseMintWritable: keys.burns, withBridge: options.withBridge ?? true },
+      { trader, pool: a.launchPoolAddress(keys.mint, keys.quoteMint, keys.lpFeeBps), baseMint: keys.mint, traderBase, traderQuote, hookProgram: a.LAUNCH_PROGRAM, baseMintWritable: keys.burns, withBridge: options.withBridge ?? !keys.native },
       { direction, amountIn, minAmountOut, inHookAccounts: buy ? 0 : slice.length, outHookAccounts: buy ? slice.length : 0, hookData: new Uint8Array() },
       [...slice, ...a.launchHookExtras(keys.mint, keys.quoteMint), ...launch.quoteCutExtrasOf(keys, trader, recipient)],
     );
@@ -968,9 +994,14 @@ export const launch = {
   migrateLaunchToNative(admin: PublicKey, mint: PublicKey, quoteMint: PublicKey, modules: number, lpFeeBps: number = LP_FEE_BPS): TransactionInstruction {
     return ix(a.LAUNCH_PROGRAM, 'launch', 'migrateLaunchToNative', {}, launch.launchFormKeys(admin, mint, quoteMint, modules, lpFeeBps));
   },
-  /** `revert_launch_to_bridged`, as `migrateLaunchToNative` (the admin wallet wraps; idempotent). */
+  /**
+   * `revert_launch_to_bridged`, as `migrateLaunchToNative` (the admin wallet wraps; idempotent), with the coin's hook-vault and
+   * companion addresses after (read): the launchpad refuses while either is still native (`VaultStillNative`,
+   * `CompanionStillNative`; revert them first).
+   */
   revertLaunchToBridged(admin: PublicKey, mint: PublicKey, quoteMint: PublicKey, modules: number, lpFeeBps: number = LP_FEE_BPS): TransactionInstruction {
-    return ix(a.LAUNCH_PROGRAM, 'launch', 'revertLaunchToBridged', {}, launch.launchFormKeys(admin, mint, quoteMint, modules, lpFeeBps));
+    const order = [ro(PublicKey.findProgramAddressSync([Buffer.from('vault'), mint.toBuffer()], a.HOOK_VAULT_PROGRAM)[0]), ro(a.companionAddress(mint))];
+    return ix(a.LAUNCH_PROGRAM, 'launch', 'revertLaunchToBridged', {}, [...launch.launchFormKeys(admin, mint, quoteMint, modules, lpFeeBps), ...order]);
   },
 };
 

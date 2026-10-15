@@ -174,18 +174,25 @@ export function quoterOf(market: Market, pool: Pool, kit: KitConfig | null, now:
 }
 
 /**
+ * Whether the market trades in plain SOL (`swap_v2`): a native launch (`launch.swap` then builds `swap_v2`), or an ordinary pool
+ * whose quote is native. A held coin (its pool native, its launch bridged) still trades the classic swap with bridged SOL.
+ */
+export const tradesNative = (m: Pick<Market, 'launch' | 'pool'>): boolean => (m.launch ? m.launch.isNative === true : m.pool.quoteNative === true);
+
+/**
  * The instructions of one trade, in the API's order (trade/pool.ts `poolSwapInstructions`,
- * trade/prepare.ts `swapInstructions`): the bridged-SOL holding made and `wrap` lamports wrapped
- * when a buy needs plain SOL, the token holding made, then the swap. No unwrap: a sell's proceeds
- * stay bridged for the next buy.
+ * trade/prepare.ts `swapInstructions`). Bridged SOL: the bridged-SOL holding made and `wrap` lamports wrapped when a buy needs
+ * plain SOL, the token holding made, then the swap; no unwrap (a sell's proceeds stay bridged for the next buy). Native SOL
+ * (`tradesNative`): no wrap and no bridged-SOL holding; the wallet pays a buy and a sell's SOL lands on it.
  */
 export function tradeInstructions(m: Market, owner: PublicKey, side: Side, amountIn: bigint, minOut: bigint, wrap: bigint): TransactionInstruction[] {
   const quoteMint = m.pool.quoteMint;
+  const native = tradesNative(m);
   const ixs: TransactionInstruction[] = [];
   if (side === 'buy') {
-    if (wrap > 0n) ixs.push(token.createHolding(owner, quoteMint, owner), bridge.wrapSol(owner, wrap));
+    if (wrap > 0n && !native) ixs.push(token.createHolding(owner, quoteMint, owner), bridge.wrapSol(owner, wrap));
     ixs.push(token.createHolding(owner, m.mint, owner));
-  } else ixs.push(token.createHolding(owner, quoteMint, owner));
+  } else if (!native) ixs.push(token.createHolding(owner, quoteMint, owner));
   const direction = side === 'buy' ? 1 : 0;
   if (m.launch) {
     ixs.push(launchIx.swap(launchKeysOf(m.launch, m.customHook), owner, owner, direction, amountIn, minOut));
@@ -198,6 +205,11 @@ export function tradeInstructions(m: Market, owner: PublicKey, side: Side, amoun
   const baseHook: TokenHook | null = m.token.hookProgram ? tokenHookOf(m.token.hookProgram, m.baseHookList, op) : null;
   const poolExtras = m.pool.hookProgram ? poolHookAccounts(m.poolHookList, dexHookSigner(m.pool.hookProgram), m.poolKey, m.mint, quoteMint, owner) : [];
   // Bridged SOL has no hook, so the quote side's slice is empty whichever way the swap goes; the base side's slice follows its mint.
+  if (native) {
+    const keys = { trader: owner, pool: m.poolKey, baseMint: m.mint, traderBase: mine, traderQuote: owner, hookProgram: m.pool.hookProgram };
+    ixs.push(swapIx.swapV2WithHooks(keys, { direction, amountIn, minAmountOut: minOut }, { baseHook, poolExtras }));
+    return ixs;
+  }
   const keys = { trader: owner, pool: m.poolKey, baseMint: m.mint, quoteMint, traderBase: mine, traderQuote: holdingAddress(quoteMint, owner), hookProgram: m.pool.hookProgram };
   ixs.push(swapIx.swapWithHooks(keys, { direction, amountIn, minAmountOut: minOut }, side === 'buy' ? { outHook: baseHook, poolExtras } : { inHook: baseHook, poolExtras }));
   return ixs;
@@ -236,7 +248,9 @@ async function readState(connection: Connection, market: Market, owner: PublicKe
     return info && info.owner.equals(TOKEN_PROGRAM) ? decodeHolding(info.data).amount : 0n;
   };
   const kitInfo = withKit ? infos[3] : null;
-  return { pool: decodePool(poolInfo.data), kit: kitInfo ? decodeKitConfig(kitInfo.data) : market.kit, wallet: { lamports: BigInt(lamports), bridgedSol: amount(1), tokens: amount(2) } };
+  // A native market's buys are paid in plain SOL only: bridged SOL can't pay a swap_v2, so it is not counted as buying power.
+  const bridgedSol = tradesNative(market) ? 0n : amount(1);
+  return { pool: decodePool(poolInfo.data), kit: kitInfo ? decodeKitConfig(kitInfo.data) : market.kit, wallet: { lamports: BigInt(lamports), bridgedSol, tokens: amount(2) } };
 }
 
 type Prepared =
@@ -250,7 +264,8 @@ type Prepared =
  * (the API's `measureHookedDelivery`). A failing dry run is the refusal, explained from the logs.
  */
 async function prepareTrade(connection: Connection, market: Market, owner: PublicKey, side: Side, decision: Extract<Decision, { action: 'buy' | 'sell' }>, rules: Rules, wallet: Wallet, tables: AddressLookupTableAccount[], priority: number | null): Promise<Prepared> {
-  const measure = market.token.hookProgram !== null && !market.token.hookProgram.equals(KIT_PROGRAM);
+  // A native sell delivers SOL to the wallet, which also pays the fee: its quote stands (the token's hook acts on the input side).
+  const measure = market.token.hookProgram !== null && !market.token.hookProgram.equals(KIT_PROGRAM) && !(side === 'sell' && tradesNative(market));
   const receiving = holdingAddress(side === 'buy' ? market.mint : BRIDGED_SOL_MINT, owner);
   const before = side === 'buy' ? wallet.tokens : wallet.bridgedSol;
   const wrap = decision.action === 'buy' ? decision.wrap : 0n;
@@ -419,7 +434,8 @@ export async function runMarketMaker(flags: Record<string, string | true>): Prom
       return;
     }
     const after = await readState(connection, market, owner);
-    const gained = side === 'buy' ? after.wallet.tokens - state.wallet.tokens : after.wallet.bridgedSol - state.wallet.bridgedSol;
+    // A native sell's SOL lands on the wallet, which paid the 5,000-lamport signature fee (a priority fee makes this a slight under-count).
+    const gained = side === 'buy' ? after.wallet.tokens - state.wallet.tokens : tradesNative(market) ? after.wallet.lamports - state.wallet.lamports + 5_000n : after.wallet.bridgedSol - state.wallet.bridgedSol;
     const fill = fillPrice(side, decision.amountIn, gained > 0n ? gained : prepared.expectedOut);
     ref = referenceAfter(side, fill, spotPrice(reservesOf(after.pool)), rules.stepBps);
     fills += 1;

@@ -364,3 +364,41 @@ export function describeHookFlags(flags: number, table: Record<string, number>):
     .filter(([, bit]) => (flags & bit) !== 0)
     .map(([name]) => name.toLowerCase().replace(/_/g, ' '));
 }
+
+/**
+ * Keys a transaction always demotes to read-only: the runtime's reserved account keys (builtin programs and sysvars). Such a key can
+ * never be credited lamports, so the launchpad refuses one as a partner (`create_partner_config`, audit N-7), and `pnpm admin native`
+ * flags an existing partner config naming one.
+ */
+export const RESERVED_ACCOUNT_KEYS: readonly string[] = [
+  'AddressLookupTab1e1111111111111111111111111',
+  'BPFLoader1111111111111111111111111111111111',
+  'BPFLoader2111111111111111111111111111111111',
+  'BPFLoaderUpgradeab1e11111111111111111111111',
+  'LoaderV411111111111111111111111111111111111',
+  'ComputeBudget111111111111111111111111111111',
+  'Config1111111111111111111111111111111111111',
+  'Ed25519SigVerify111111111111111111111111111',
+  'Feature111111111111111111111111111111111111',
+  'NativeLoader1111111111111111111111111111111',
+  'KeccakSecp256k11111111111111111111111111111',
+  'Secp256r1SigVerify1111111111111111111111111',
+  'Stake11111111111111111111111111111111111111',
+  'StakeConfig11111111111111111111111111111111',
+  '11111111111111111111111111111111',
+  'Vote111111111111111111111111111111111111111',
+  'ZkE1Gama1Proof11111111111111111111111111111',
+  'ZkTokenProof1111111111111111111111111111111',
+  'SysvarC1ock11111111111111111111111111111111',
+  'SysvarEpochRewards1111111111111111111111111',
+  'SysvarEpochSchedu1e111111111111111111111111',
+  'SysvarFees111111111111111111111111111111111',
+  'Sysvar1nstructions1111111111111111111111111',
+  'SysvarLastRestartS1ot1111111111111111111111',
+  'SysvarRecentB1ockHashes11111111111111111111',
+  'SysvarRent111111111111111111111111111111111',
+  'SysvarRewards111111111111111111111111111111',
+  'SysvarS1otHashes111111111111111111111111111',
+  'SysvarS1otHistory11111111111111111111111111',
+  'SysvarStakeHistory1111111111111111111111111',
+];

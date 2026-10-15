@@ -7,8 +7,41 @@ same version of it). The monorepo is where both are written.
 ## Unreleased: native SOL (0.14.0)
 
 The off-chain side of moving Bordrless from bridged SOL (`A49oVh…`) to native SOL (bordrless-programs
-branch `native-sol`, `docs/native-sol-migration.md`; not deployed yet). Additions only: every export
-of 0.12.0 keeps its name, signature and behaviour for bridged pools and launches.
+branch `native-sol`, `docs/native-sol-migration.md`; not deployed yet). Every export of 0.12.0 keeps
+its name and signature, and its behaviour on bridged pools and launches, with **one breaking change on
+native launches**:
+
+- **Breaking: `launch.swap` builds `swap_v2` for a native launch** (`LaunchKeys.native`, which
+  `launchKeysOf` sets from a native `Launch`). The trader's wallet pays a buy in SOL and a sell
+  delivers SOL to the recipient's wallet; no wrap or unwrap. This is deliberate: it is what a native
+  launch should trade. Code that wraps SOL before `launch.swap` now leaves that bridged SOL unspent
+  (no loss), and `router.swap(…, launch.swap(…))` throws for a native launch: use `router.swapV2`.
+  **Escape hatch:** `launch.swapClassic` builds the classic `swap` with bridged SOL in holdings
+  whatever the launch's form. `docs/integration/04-trading.md` has the detail.
+
+Held coins (a companion whose Workshop script is not native-ready: its pool native, the rest bridged):
+`swap.bufferAll` (the DEX's `buffer_all`, sent before a held coin's step with `rebalance_pool` after
+it) and `POOL_QUOTE_FORM_KIND.bufferedAll`; `NATIVE_SCRIPT_HOLD` and `nativeScriptHold` in
+`@bordrless/shared`.
+
+After the native-SOL audit (bordrless-programs `docs/native-sol-audit.md`):
+
+- `launch.swapV2` passes the bridge's accounts by default only when the launch is not native
+  (`!keys.native`: a held or half-migrated coin), so native trades no longer write-lock the
+  bridge's global SOL accounts. `withBridge` still overrides.
+- `swap.swap` (classic) and the liquidity builders pass the trader / provider writable: on a native
+  pool what the buffer can't cover of an old-path sell or a withdrawal is paid to it in SOL.
+- `swap.migratePoolToNative(admin, pool, target, allowForeignHook = false)` (the DEX refuses a
+  foreign hook without it, and pool `4PvPnTBy…` always); `swap.revertPoolToBridged(admin, pool,
+  launchMint)` passes a launch pool's launch (the DEX refuses while it is native);
+  `launch.revertLaunchToBridged` passes the coin's hook-vault and companion addresses (refused while
+  either is native); `companion.launchScript` (a script companion's launch, which a script that is
+  not native-ready can't do while native launches are on).
+- `explainProgramError` knows `ForeignHookPool`, `ExcludedPool`, `LaunchStillNative`,
+  `CompanionStillNative`, `VaultStillNative` and `ScriptNotNativeReady`; `RESERVED_ACCOUNT_KEYS` in
+  `@bordrless/shared` (keys that can't be a partner).
+- The market maker (`bordrless mm`) trades native markets in plain SOL: no wrap, `swap_v2`, sells
+  measured in lamports.
 
 - **IDLs**: the DEX, the launchpad, the kit, the companion, the router and `hook_vault` with their
   native-SOL instructions, events and errors (`BufferShort`, `LamportsShort`, `NotNativePool`, …,
@@ -34,11 +67,9 @@ of 0.12.0 keeps its name, signature and behaviour for bridged pools and launches
   `vault.setVaultNative` (and `execute`/`executeBuy` add the `swap_v2` accounts for a native
   vault); `router.swapV2`. Every one is held byte for byte to the Rust clients
   (`vectors/native-sol.json`).
-- **`launch.swap` picks the path**: with `LaunchKeys.native` (which `launchKeysOf` sets from a
-  native `Launch`) it builds `swap_v2`: the trader's wallet pays a buy, a sell delivers SOL to the
-  recipient's wallet, no wrap or unwrap. Without it, exactly the classic `swap` as before
-  (`launch.swapClassic` builds that one whatever the keys). `swap.swap` stays the raw `swap`
-  instruction; `swap.swapFor(pool, …)` picks.
+- **`launch.swap` picks the path** (the breaking change above): with `LaunchKeys.native` it builds
+  `swap_v2`; without it, exactly the classic `swap` as before (`launch.swapClassic` builds that one
+  whatever the keys). `swap.swap` stays the raw `swap` instruction; `swap.swapFor(pool, …)` picks.
 - **Events**: `typedNativeEvent` reads `SwappedNative`, `PoolQuoteFormChanged`, `LaunchNativeSet`,
   `NativeLaunchesSet`, `KitNativeSet` and `CompanionNativeSet`; `pairSwappedNative` and
   `swapSolSide` read a `swap_v2`'s SOL side (its `Swapped` deltas and recipient may be wallets);
