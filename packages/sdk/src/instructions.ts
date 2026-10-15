@@ -13,9 +13,9 @@
  */
 import BN from 'bn.js';
 import { PublicKey, TransactionInstruction, type AccountMeta } from '@solana/web3.js';
-import type { RuleBounds } from '@bordrless/shared';
+import { LP_FEE_BPS, type RuleBounds } from '@bordrless/shared';
 import * as a from './addresses.ts';
-import { kitModulesOf, rulesBurn, type Launch, type LaunchRulesData, type QuoteCutCaps } from './accounts.ts';
+import { kitModulesOf, rulesBurn, type KitConfig, type Launch, type LaunchRulesData, type Pool, type QuoteCutCaps } from './accounts.ts';
 import { CODERS, type ProgramName } from './coders.ts';
 import { customHookLaunchAccounts, customHookSlice, kitHookSlice, tokenHookSlice, type CustomHookAccounts, type TokenHook } from './hooks.ts';
 import { timelockAddress } from './authority.ts';
@@ -178,6 +178,29 @@ export interface SwapKeys {
   quoteMintWritable?: boolean;
 }
 
+/**
+ * The keys of a `swap_v2` (a native pool, `Pool.quoteNative`): as `SwapKeys` without the quote mint (always bridged SOL) and
+ * with `traderQuote` a wallet: on a buy the trader itself (it pays the SOL), on a sell any account to deliver the SOL to (a
+ * wallet, never a token holding).
+ */
+export interface SwapV2Keys {
+  trader: PublicKey;
+  pool: PublicKey;
+  baseMint: PublicKey;
+  /** The trader's base holding, or on a buy any holding of the base mint to deliver to. */
+  traderBase: PublicKey;
+  /** A buy: the trader. A sell: the wallet the SOL goes to. */
+  traderQuote: PublicKey;
+  hookProgram: PublicKey | null;
+  /** Pass the base mint writable (the pool hook may burn base). */
+  baseMintWritable?: boolean;
+  /**
+   * Pass the bridge's accounts (and bridged SOL writable): needed when a quote-side cut names a holding of bridged SOL, which is
+   * paid wrapped (a launch not yet native on a native pool). Five more accounts; leave it off for a native launch's own cuts.
+   */
+  withBridge?: boolean;
+}
+
 export interface LiquidityKeys {
   provider: PublicKey;
   pool: PublicKey;
@@ -214,6 +237,8 @@ export interface SwapConfigArgs {
 /** The pool hook's `hook_signer?` slot: the DEX's signer for the pool's hook, or the DEX id without one. */
 const poolHookSigner = (hookProgram: PublicKey | null): AccountMeta => opt(a.SWAP_PROGRAM, hookProgram ? a.dexHookSigner(hookProgram) : null);
 const mintMeta = (mint: PublicKey, writable: boolean | undefined): AccountMeta => (writable ? rw(mint) : ro(mint));
+/** The bridge's `wrap_sol` / `unwrap_sol` accounts a DEX native instruction passes: the bridge, its config, the SOL wrapper (w), the SOL vault (w). */
+const bridgeSolKeys = (): AccountMeta[] => [ro(a.BRIDGE_PROGRAM), ro(a.BRIDGE_CONFIG), rw(a.SOL_WRAPPER), rw(a.SOL_VAULT)];
 
 export const swap = {
   initConfig(authority: PublicKey, args: SwapConfigArgs): TransactionInstruction {
@@ -281,6 +306,82 @@ export const swap = {
     const inSlice = tokenHookSlice(hooks.inHook ?? null);
     const outSlice = tokenHookSlice(hooks.outHook ?? null);
     return swap.swap(keys, { direction: args.direction, amountIn: args.amountIn, minAmountOut: args.minAmountOut, inHookAccounts: inSlice.length, outHookAccounts: outSlice.length, hookData: args.hookData ?? new Uint8Array() }, [...inSlice, ...outSlice, ...(hooks.poolExtras ?? [])]);
+  },
+  /**
+   * `swap_v2` on a native pool (`bordrless_swap::client::swap_v2`): 20 accounts, then `extras` as for `swap`. The trader's wallet
+   * pays a buy's SOL (no wrap, no holding of bridged SOL); a sell delivers SOL to `keys.traderQuote`. `minAmountOut` is checked
+   * against what the recipient gained (lamports on a sell). The DEX refuses it on a bridged pool (`NotNativePool`).
+   */
+  swapV2(keys: SwapV2Keys, args: SwapArgs, extras: AccountMeta[] = []): TransactionInstruction {
+    const bridged = keys.withBridge === true;
+    const metas = [
+      rw(keys.trader, true),
+      ro(a.SWAP_CONFIG),
+      rw(keys.pool),
+      mintMeta(keys.baseMint, keys.baseMintWritable),
+      mintMeta(a.BRIDGED_SOL_MINT, bridged),
+      rw(a.vaultAddress(keys.pool, keys.baseMint)),
+      rw(keys.traderBase),
+      rw(keys.traderQuote),
+      opt(a.SWAP_PROGRAM, keys.hookProgram),
+      poolHookSigner(keys.hookProgram),
+      ...tokenFixed(),
+      ro(a.SYSTEM_PROGRAM),
+      ...(bridged ? [...bridgeSolKeys(), ro(a.BRIDGE_EVENT_AUTHORITY)] : Array.from({ length: 5 }, () => ro(a.SWAP_PROGRAM))),
+    ];
+    const data = { args: { ...args, amountIn: bn(args.amountIn), minAmountOut: bn(args.minAmountOut), hookData: Buffer.from(args.hookData) } };
+    return ix(a.SWAP_PROGRAM, 'swap', 'swapV2', data, [...withEvents(a.SWAP_PROGRAM, metas), ...extras]);
+  },
+  /** `swapV2` with the slices given whole, as `swapWithHooks` (the quote side, SOL, has no token hook: its slice is empty). */
+  swapV2WithHooks(keys: SwapV2Keys, args: { direction: 0 | 1; amountIn: bigint; minAmountOut: bigint; hookData?: Uint8Array }, hooks: { baseHook?: TokenHook | null; poolExtras?: AccountMeta[] } = {}): TransactionInstruction {
+    const slice = tokenHookSlice(hooks.baseHook ?? null);
+    const buy = args.direction === 1;
+    return swap.swapV2(keys, { direction: args.direction, amountIn: args.amountIn, minAmountOut: args.minAmountOut, inHookAccounts: buy ? 0 : slice.length, outHookAccounts: buy ? slice.length : 0, hookData: args.hookData ?? new Uint8Array() }, [...slice, ...(hooks.poolExtras ?? [])]);
+  },
+  /**
+   * The swap a pool takes, by its form (`pool.quoteNative`): `swap_v2` for a native pool (the trader's wallet pays a buy, a sell is
+   * delivered to `recipientWallet`, the trader's by default), the classic `swap` for a bridged one (`keys.traderQuote` its holding).
+   */
+  swapFor(pool: Pick<Pool, 'quoteNative'>, keys: SwapKeys, args: SwapArgs, extras: AccountMeta[] = [], recipientWallet: PublicKey | null = null): TransactionInstruction {
+    if (!pool.quoteNative) return swap.swap(keys, args, extras);
+    const quote = args.direction === 1 ? keys.trader : (recipientWallet ?? keys.trader);
+    return swap.swapV2({ trader: keys.trader, pool: keys.pool, baseMint: keys.baseMint, traderBase: keys.traderBase, traderQuote: quote, hookProgram: keys.hookProgram, baseMintWritable: keys.baseMintWritable }, args, extras);
+  },
+  /** `create_native_pool`: `createPool`'s accounts and arguments; the quote mint must be bridged SOL, and the payer pays the quote deposit in SOL. */
+  createNativePool(payer: PublicKey, authority: PublicKey, treasury: PublicKey, baseMint: PublicKey, args: CreatePoolArgs, extras: AccountMeta[] = [], hookCaller: PublicKey | null = null): TransactionInstruction {
+    const out = swap.createPool(payer, authority, treasury, baseMint, a.BRIDGED_SOL_MINT, args, extras, hookCaller);
+    const data = { args: { ...args, hookProgram: args.hookProgram ?? PublicKey.default, virtualBase: bn(args.virtualBase), virtualQuote: bn(args.virtualQuote), baseAmount: bn(args.baseAmount), quoteAmount: bn(args.quoteAmount), hookData: Buffer.from(args.hookData) } };
+    return new TransactionInstruction({ programId: a.SWAP_PROGRAM, keys: out.keys, data: CODERS.swap.instruction.encode('createNativePool', data) });
+  },
+  /** The 15 accounts of `migrate_pool_to_native`, `revert_pool_to_bridged`, `rebalance_pool` and `set_buffer_target` (`QuoteForm`). The signer is a plain wallet: it may wrap the pool's SOL on the way back. */
+  quoteFormKeys(signer: PublicKey, pool: PublicKey): AccountMeta[] {
+    return withEvents(a.SWAP_PROGRAM, [
+      rw(signer, true),
+      ro(a.SWAP_CONFIG),
+      rw(pool),
+      rw(a.vaultAddress(pool, a.BRIDGED_SOL_MINT)),
+      ...bridgeSolKeys(),
+      rw(a.BRIDGED_SOL_MINT),
+      ro(a.BRIDGE_EVENT_AUTHORITY),
+      ...tokenFixed(),
+      ro(a.SYSTEM_PROGRAM),
+    ]);
+  },
+  /** `migrate_pool_to_native(buffer_target)`: the DEX admin, with the DEX paused, turns a pool quoted in bridged SOL native (idempotent). */
+  migratePoolToNative(admin: PublicKey, pool: PublicKey, bufferTarget: bigint): TransactionInstruction {
+    return ix(a.SWAP_PROGRAM, 'swap', 'migratePoolToNative', { bufferTarget: bn(bufferTarget) }, swap.quoteFormKeys(admin, pool));
+  },
+  /** `revert_pool_to_bridged`: the DEX admin (a plain wallet: it wraps the pool's SOL), with the DEX paused (idempotent). */
+  revertPoolToBridged(admin: PublicKey, pool: PublicKey): TransactionInstruction {
+    return ix(a.SWAP_PROGRAM, 'swap', 'revertPoolToBridged', {}, swap.quoteFormKeys(admin, pool));
+  },
+  /** `rebalance_pool`: anyone (a plain wallet) moves a native pool's buffer toward its target. */
+  rebalancePool(cranker: PublicKey, pool: PublicKey): TransactionInstruction {
+    return ix(a.SWAP_PROGRAM, 'swap', 'rebalancePool', {}, swap.quoteFormKeys(cranker, pool));
+  },
+  /** `set_buffer_target`: the DEX admin sets a native pool's buffer target. */
+  setBufferTarget(admin: PublicKey, pool: PublicKey, bufferTarget: bigint): TransactionInstruction {
+    return ix(a.SWAP_PROGRAM, 'swap', 'setBufferTarget', { bufferTarget: bn(bufferTarget) }, swap.quoteFormKeys(admin, pool));
   },
   /** The 17 accounts of `add_liquidity` and `remove_liquidity`. */
   liquidityKeys(keys: LiquidityKeys): AccountMeta[] {
@@ -504,6 +605,11 @@ export interface LaunchKeys {
   quoteCutHook?: PublicKey | null;
   /** The launch's creator, with `quoteCutHook`: its trades to itself skip the SOL cut and its accounts. */
   creator?: PublicKey;
+  /**
+   * The launch is native (`Launch.isNative`; its pool trades SOL): `launch.swap` builds `swap_v2`, the trader's wallet paying a
+   * buy and a sell delivering SOL to the recipient's wallet. `launchKeysOf` sets it from the decoded launch.
+   */
+  native?: boolean;
 }
 
 /** The keys of a launch of `mint` with `rules`. */
@@ -513,10 +619,11 @@ export const launchKeys = (mint: PublicKey, quoteMint: PublicKey, lpFeeBps: numb
  * (`fetchCustomHookAccounts(connection, launch.customHook, launch.mint)`): without them the swap
  * would be built without the token's hook and refused on chain, so this throws.
  */
-export function launchKeysOf(l: Pick<Launch, 'mint' | 'quoteMint' | 'lpFeeBps' | 'rules' | 'customHook'> & Partial<Pick<Launch, 'quoteCut' | 'creator'>>, customHook: CustomHookAccounts | null = null): LaunchKeys {
+export function launchKeysOf(l: Pick<Launch, 'mint' | 'quoteMint' | 'lpFeeBps' | 'rules' | 'customHook'> & Partial<Pick<Launch, 'quoteCut' | 'creator' | 'isNative'>>, customHook: CustomHookAccounts | null = null): LaunchKeys {
   if (l.customHook && !customHook) throw new Error(`the launch's token runs the hook ${l.customHook.toBase58()}: resolve its accounts for the mint first`);
   if (l.customHook && customHook && !customHook.program.equals(l.customHook)) throw new Error('the hook accounts given are another program’s');
-  const keys = launchKeys(l.mint, l.quoteMint, l.lpFeeBps, l.rules, l.customHook ? customHook : null);
+  const plain = launchKeys(l.mint, l.quoteMint, l.lpFeeBps, l.rules, l.customHook ? customHook : null);
+  const keys = l.isNative ? { ...plain, native: true } : plain;
   return l.customHook && l.quoteCut ? { ...keys, quoteCutHook: l.customHook, ...(l.creator ? { creator: l.creator } : {}) } : keys;
 }
 
@@ -770,6 +877,10 @@ export const launch = {
    * holds `minAmountOut` to pro rata, so give the least you accept for the whole `amountIn`.
    */
   swap(keys: LaunchKeys, trader: PublicKey, recipient: PublicKey, direction: 0 | 1, amountIn: bigint, minAmountOut: bigint): TransactionInstruction {
+    return keys.native ? launch.swapV2(keys, trader, recipient, direction, amountIn, minAmountOut) : launch.swapClassic(keys, trader, recipient, direction, amountIn, minAmountOut);
+  },
+  /** The classic `swap` of a launch pool, whatever its form (`launch.swap` before native SOL): the quote is bridged SOL in holdings, which on a native pool moves through its buffer (a sell is `BufferShort` when the buffer can't cover it). */
+  swapClassic(keys: LaunchKeys, trader: PublicKey, recipient: PublicKey, direction: 0 | 1, amountIn: bigint, minAmountOut: bigint): TransactionInstruction {
     const buy = direction === 1;
     const traderBase = a.holdingAddress(keys.mint, buy ? recipient : trader);
     const traderQuote = a.holdingAddress(keys.quoteMint, buy ? trader : recipient);
@@ -777,8 +888,89 @@ export const launch = {
     return swap.swap(
       { trader, pool: a.launchPoolAddress(keys.mint, keys.quoteMint, keys.lpFeeBps), baseMint: keys.mint, quoteMint: keys.quoteMint, traderBase, traderQuote, hookProgram: a.LAUNCH_PROGRAM, baseMintWritable: keys.burns, quoteMintWritable: false },
       { direction, amountIn, minAmountOut, inHookAccounts: buy ? 0 : slice.length, outHookAccounts: buy ? slice.length : 0, hookData: new Uint8Array() },
-      [...slice, ...a.launchHookExtras(keys.mint, keys.quoteMint), ...(keys.quoteCutHook && !(keys.creator?.equals(trader) && keys.creator.equals(recipient)) ? a.quoteCutExtras(keys.quoteCutHook, keys.mint, trader) : [])],
+      [...slice, ...a.launchHookExtras(keys.mint, keys.quoteMint), ...launch.quoteCutExtrasOf(keys, trader, recipient)],
     );
+  },
+  /** The SOL cut's four accounts a trade by `trader` to `recipient` passes after `launchHookExtras` (none without a cut, or for the creator trading to itself). */
+  quoteCutExtrasOf(keys: LaunchKeys, trader: PublicKey, recipient: PublicKey): AccountMeta[] {
+    return keys.quoteCutHook && !(keys.creator?.equals(trader) && keys.creator.equals(recipient)) ? a.quoteCutExtras(keys.quoteCutHook, keys.mint, trader) : [];
+  },
+  /**
+   * `swap_v2` on a native launch pool (`bordrless_launch::client::swap_v2_with_bridge`): a buy pays SOL from `trader`'s wallet and
+   * delivers the token to `recipient`'s holding; a sell delivers SOL to `recipient`'s wallet. No wrap, no unwrap, no holding of
+   * bridged SOL. `withBridge` (default true, as the Rust client's `swap_v2_with_base_slice`) passes the bridge's accounts, so a cut
+   * to an old-style holding of bridged SOL is wrapped; a native launch's own cuts are lamports and need none.
+   */
+  swapV2(keys: LaunchKeys, trader: PublicKey, recipient: PublicKey, direction: 0 | 1, amountIn: bigint, minAmountOut: bigint, options: { withBridge?: boolean; baseSlice?: AccountMeta[] } = {}): TransactionInstruction {
+    const buy = direction === 1;
+    const traderBase = a.holdingAddress(keys.mint, buy ? recipient : trader);
+    const traderQuote = buy ? trader : recipient;
+    const slice = options.baseSlice ?? launch.baseHookSliceOf(keys);
+    return swap.swapV2(
+      { trader, pool: a.launchPoolAddress(keys.mint, keys.quoteMint, keys.lpFeeBps), baseMint: keys.mint, traderBase, traderQuote, hookProgram: a.LAUNCH_PROGRAM, baseMintWritable: keys.burns, withBridge: options.withBridge ?? true },
+      { direction, amountIn, minAmountOut, inHookAccounts: buy ? 0 : slice.length, outHookAccounts: buy ? slice.length : 0, hookData: new Uint8Array() },
+      [...slice, ...a.launchHookExtras(keys.mint, keys.quoteMint), ...launch.quoteCutExtrasOf(keys, trader, recipient)],
+    );
+  },
+  /**
+   * `claim_creator_fees_sol` of a native launch: its creator fees (the launch account's lamports above its rent-exempt minimum)
+   * paid in SOL to the creator's wallet, and, as for `claimCreatorFees`, the author's and the partner's parts to their wallets.
+   */
+  claimCreatorFeesSol(creator: PublicKey, mint: PublicKey, author: { config: PublicKey; author: PublicKey } | null = null, partner: { config: PublicKey; partner: PublicKey } | null = null): TransactionInstruction {
+    const keys = withEvents(a.LAUNCH_PROGRAM, [rw(creator, true), rw(a.launchAddress(mint))]);
+    if (author) keys.push(ro(author.config), rw(author.author));
+    if (partner) keys.push(rw(a.partnerFeeAddress(partner.config)), rw(partner.partner));
+    return ix(a.LAUNCH_PROGRAM, 'launch', 'claimCreatorFeesSol', {}, keys);
+  },
+  /** `claim_author_fees_sol` of a native launch: the author's share to its wallet, the creator's part to `creator`'s wallet (and a partner's to its wallet). */
+  claimAuthorFeesSol(author: PublicKey, mint: PublicKey, config: PublicKey, creator: PublicKey, partner: PublicKey | null = null): TransactionInstruction {
+    const keys = withEvents(a.LAUNCH_PROGRAM, [rw(author, true), rw(a.launchAddress(mint)), ro(config), rw(creator)]);
+    if (partner) keys.push(rw(a.partnerFeeAddress(config)), rw(partner));
+    return ix(a.LAUNCH_PROGRAM, 'launch', 'claimAuthorFeesSol', {}, keys);
+  },
+  /** `distribute_fees_sol` of a native partner launch: anyone pays every party to its wallet; `author` when the launch pays one. */
+  distributeFeesSol(mint: PublicKey, config: PublicKey, creator: PublicKey, partner: PublicKey, author: PublicKey | null = null): TransactionInstruction {
+    const keys = withEvents(a.LAUNCH_PROGRAM, [rw(a.launchAddress(mint)), rw(a.partnerFeeAddress(config)), rw(creator), rw(partner)]);
+    if (author) keys.push(ro(config), rw(author));
+    return ix(a.LAUNCH_PROGRAM, 'launch', 'distributeFeesSol', {}, keys);
+  },
+  /** The creator's fee claim a launch takes, by its form: `claimCreatorFeesSol` for a native launch, `claimCreatorFees` (bridged SOL to holdings) otherwise. */
+  claimCreatorFeesFor(l: Pick<Launch, 'mint' | 'quoteMint'> & Partial<Pick<Launch, 'isNative'>>, creator: PublicKey, author: { config: PublicKey; author: PublicKey } | null = null, partner: { config: PublicKey; partner: PublicKey } | null = null): TransactionInstruction {
+    return l.isNative ? launch.claimCreatorFeesSol(creator, l.mint, author, partner) : launch.claimCreatorFees(creator, l.mint, l.quoteMint, author, partner);
+  },
+  /** `set_native_launches(on)`: the launchpad admin makes launches made from now on native (or not). */
+  setNativeLaunches(admin: PublicKey, on: boolean): TransactionInstruction {
+    return ix(a.LAUNCH_PROGRAM, 'launch', 'setNativeLaunches', { on }, withEvents(a.LAUNCH_PROGRAM, [ro(admin, true), rw(a.LAUNCH_CONFIG)]));
+  },
+  /** The 22 accounts of `migrate_launch_to_native` and `revert_launch_to_bridged` (`LaunchForm`); `modules` is `Launch.modules`. */
+  launchFormKeys(admin: PublicKey, mint: PublicKey, quoteMint: PublicKey, modules: number, lpFeeBps: number = LP_FEE_BPS): AccountMeta[] {
+    const launchKey = a.launchAddress(mint);
+    const kitKeys =
+      modules === 0
+        ? Array.from({ length: 5 }, () => ro(a.LAUNCH_PROGRAM))
+        : [ro(a.KIT_PROGRAM), rw(a.kitConfigAddress(mint)), (modules & HOLDER_REWARDS) !== 0 ? rw(a.holderVaultAddress(mint, quoteMint)) : ro(a.KIT_PROGRAM), ro(a.kitCallerAddress(mint)), ro(a.KIT_EVENT_AUTHORITY)];
+    return withEvents(a.LAUNCH_PROGRAM, [
+      rw(admin, true),
+      ro(a.LAUNCH_CONFIG),
+      ro(a.SWAP_CONFIG),
+      rw(launchKey),
+      ro(a.launchPoolAddress(mint, quoteMint, lpFeeBps)),
+      rw(a.holdingAddress(quoteMint, launchKey)),
+      rw(quoteMint),
+      ...bridgeSolKeys(),
+      ro(a.BRIDGE_EVENT_AUTHORITY),
+      ...tokenFixed(),
+      ro(a.SYSTEM_PROGRAM),
+      ...kitKeys,
+    ]);
+  },
+  /** `migrate_launch_to_native`: the launchpad admin (a plain wallet), with the DEX paused and the launch's pool already native (idempotent). Its kit moves with it. */
+  migrateLaunchToNative(admin: PublicKey, mint: PublicKey, quoteMint: PublicKey, modules: number, lpFeeBps: number = LP_FEE_BPS): TransactionInstruction {
+    return ix(a.LAUNCH_PROGRAM, 'launch', 'migrateLaunchToNative', {}, launch.launchFormKeys(admin, mint, quoteMint, modules, lpFeeBps));
+  },
+  /** `revert_launch_to_bridged`, as `migrateLaunchToNative` (the admin wallet wraps; idempotent). */
+  revertLaunchToBridged(admin: PublicKey, mint: PublicKey, quoteMint: PublicKey, modules: number, lpFeeBps: number = LP_FEE_BPS): TransactionInstruction {
+    return ix(a.LAUNCH_PROGRAM, 'launch', 'revertLaunchToBridged', {}, launch.launchFormKeys(admin, mint, quoteMint, modules, lpFeeBps));
   },
 };
 
@@ -841,6 +1033,36 @@ export const kit = {
   share(sharer: PublicKey, mint: PublicKey, source: PublicKey, rewardMint: PublicKey, amount: bigint): TransactionInstruction {
     const keys = [ro(sharer, true), rw(a.kitConfigAddress(mint)), rw(source), ro(rewardMint), rw(a.rewardVaultAddress(mint, rewardMint)), ...tokenFixed()];
     return ix(a.KIT_PROGRAM, 'kit', 'share', { amount: bn(amount) }, withEvents(a.KIT_PROGRAM, keys));
+  },
+  /** `claim_sol` of a native kit (`KitConfig.isNative`): `owner`'s holder rewards paid to its wallet in SOL. No holding of bridged SOL needed. */
+  claimSol(owner: PublicKey, mint: PublicKey): TransactionInstruction {
+    const keys = [rw(owner, true), rw(a.kitConfigAddress(mint)), ro(mint), rw(a.holdingAddress(mint, owner)), ro(a.KIT_HOOK_AUTHORITY), ...tokenFixed()];
+    return ix(a.KIT_PROGRAM, 'kit', 'claimSol', {}, withEvents(a.KIT_PROGRAM, keys));
+  },
+  /** `share_sol(amount)`: `sharer` shares `amount` lamports of its own with the holders of a native kit's `mint`, as `share`. */
+  shareSol(sharer: PublicKey, mint: PublicKey, amount: bigint): TransactionInstruction {
+    return ix(a.KIT_PROGRAM, 'kit', 'shareSol', { amount: bn(amount) }, withEvents(a.KIT_PROGRAM, [rw(sharer, true), rw(a.kitConfigAddress(mint)), ro(a.SYSTEM_PROGRAM)]));
+  },
+  /** The claim a kit takes, by its form: `claimSol` for a native kit, `claim` (into the owner's holding of bridged SOL) otherwise. */
+  claimFor(config: Pick<KitConfig, 'mint' | 'rewardMint'> & Partial<Pick<KitConfig, 'isNative'>>, owner: PublicKey): TransactionInstruction {
+    return config.isNative ? kit.claimSol(owner, config.mint) : kit.claim(owner, config.mint, config.rewardMint);
+  },
+  /**
+   * `set_native(native)` of `mint`'s kit: only the launchpad's kit-caller PDA signs it (inside `migrate_launch_to_native` and
+   * `create_launch`), `wallet` wrapping on the way back; built for completeness and the tests. `rewardVault` with holder rewards;
+   * the bridge's accounts when `withBridge` (none needed while the vault is empty).
+   */
+  setNative(kitCaller: PublicKey, wallet: PublicKey, mint: PublicKey, rewardVault: PublicKey | null, rewardMint: PublicKey, withBridge: boolean, native: boolean): TransactionInstruction {
+    const keys = [
+      ro(kitCaller, true),
+      rw(wallet, true),
+      rw(a.kitConfigAddress(mint)),
+      rewardVault ? rw(rewardVault) : ro(a.KIT_PROGRAM),
+      ...(withBridge ? [...bridgeSolKeys(), rw(rewardMint), ro(a.BRIDGE_EVENT_AUTHORITY)] : Array.from({ length: 6 }, () => ro(a.KIT_PROGRAM))),
+      ...tokenFixed(),
+      ro(a.SYSTEM_PROGRAM),
+    ];
+    return ix(a.KIT_PROGRAM, 'kit', 'setNative', { native }, withEvents(a.KIT_PROGRAM, keys));
   },
 };
 

@@ -100,6 +100,8 @@ export interface Vault {
   openedAt: number;
   createdAt: number;
   lastActivityAt: number;
+  /** Native SOL (`Vault.reserved[0]`): each slot's SOL (`pendingSol`, and every sell's proceeds) is lamports on its owner, above the rent-exempt minimum of an empty account. Absent from vaults decoded by older code. */
+  isNative?: boolean;
 }
 
 type Raw = Record<string, unknown>;
@@ -148,6 +150,7 @@ export function decodeVault(data: Buffer | Uint8Array): Vault {
     openedAt: int(v.openedAt),
     createdAt: int(v.createdAt),
     lastActivityAt: int(v.lastActivityAt),
+    isNative: Number((v.reserved as number[])[0]) === 1,
   };
 }
 
@@ -226,7 +229,29 @@ export type VaultBuyHook = { kind: 'kit'; rewards: boolean } | { kind: 'custom';
 /** The parts of a decoded vault the builders read. */
 export type VaultView = Pick<Vault, 'mint' | 'nSlots' | 'slots'>;
 
+/** Whether a vault view is a decoded native vault (`Vault.isNative`). */
+const isNativeView = (v: VaultView): boolean => (v as Partial<Vault>).isNative === true;
+
 export const vault = {
+  /**
+   * `migrate_vault_to_native` (`native`) or `revert_vault_to_bridged` of `v` (`hook_vault::client::set_vault_native`), signed by
+   * hook_vault's upgrade authority with the DEX paused (and, to migrate, the coin's launch native): each slot in use with
+   * pending SOL, its owner and its holding of bridged SOL, then the bridge's unwrap accounts.
+   */
+  setVaultNative(admin: PublicKey, v: VaultView, native: boolean): TransactionInstruction {
+    const mint = v.mint;
+    const keys = [rw(admin, true), ro(a.programDataAddress(a.HOOK_VAULT_PROGRAM)), ro(a.SWAP_CONFIG), rw(hookVaultAddress(mint)), ro(a.launchAddress(mint)), ro(a.SYSTEM_PROGRAM)];
+    const extra: AccountMeta[] = [];
+    for (let i = 0; i < v.nSlots; i += 1) {
+      if ((v.slots[i]?.pendingSol ?? 0n) === 0n) continue;
+      const owner = slotOwner(mint, i);
+      push(extra, owner, true);
+      push(extra, a.holdingAddress(a.BRIDGED_SOL_MINT, owner), true);
+      unwrapAccounts(extra, owner);
+    }
+    return new TransactionInstruction({ programId: a.HOOK_VAULT_PROGRAM, keys: [...keys, ...extra], data: encode(native ? 'migrateVaultToNative' : 'revertVaultToBridged', {}) });
+  },
+
   /**
    * `create_vault`: the vault of `mint`, whose keypair signs (and which must not exist yet), `payer`
    * paying its rent. `buyMints` are the tokens of the `sellBuyBurn` slots, whose launches are read;
@@ -281,7 +306,9 @@ export const vault = {
     if (slot.policy === 'burn') {
       add(extra, hookedBurn(owner, mint, hook));
     } else {
-      add(extra, launch.swap({ ...coin, customHook: hook }, owner, owner, 0, 0n, 0n));
+      add(extra, launch.swapClassic({ ...coin, customHook: hook }, owner, owner, 0, 0n, 0n));
+      // A native vault sells through `swap_v2`.
+      if (isNativeView(v)) add(extra, launch.swapV2({ ...coin, customHook: hook }, owner, owner, 0, 0n, 0n, { withBridge: false }));
       unwrapAccounts(extra, owner);
       if (slot.policy === 'sellForSol') push(extra, slot.target, true);
     }
@@ -293,8 +320,10 @@ export const vault = {
   executeBuy(cranker: PublicKey, v: VaultView, i: number, x: LaunchKeys, hook: VaultBuyHook): TransactionInstruction {
     const owner = slotOwner(v.mint, i);
     const extra: AccountMeta[] = [];
-    const buy = hook.kind === 'kit' ? launch.swap({ ...x, customHook: null }, owner, owner, 1, 0n, 0n) : launch.swap({ ...x, customHook: hook.transfer }, owner, owner, 1, 0n, 0n);
+    const buy = hook.kind === 'kit' ? launch.swapClassic({ ...x, customHook: null }, owner, owner, 1, 0n, 0n) : launch.swapClassic({ ...x, customHook: hook.transfer }, owner, owner, 1, 0n, 0n);
     add(extra, buy);
+    // A native vault buys a native pool through `swap_v2`.
+    if (isNativeView(v)) add(extra, hook.kind === 'kit' ? launch.swapV2({ ...x, customHook: null }, owner, owner, 1, 0n, 0n, { withBridge: false }) : launch.swapV2({ ...x, customHook: hook.transfer }, owner, owner, 1, 0n, 0n, { withBridge: false }));
     push(extra, a.launchAddress(x.mint), false);
     add(extra, token.createHolding(cranker, x.mint, owner));
     const holding = a.holdingAddress(x.mint, owner);

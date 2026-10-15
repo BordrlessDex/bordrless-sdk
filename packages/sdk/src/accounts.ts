@@ -108,7 +108,22 @@ export interface Pool {
   feeModel: number;
   /** Under the share model, Bordrless's share of what the hooks cut, in basis points; 0 under the flat model. */
   protocolShareBps: number;
+  /**
+   * Native SOL (`Pool.reserved[0]`): the pool holds its quote as lamports on the pool account itself, plus a bridged-SOL buffer
+   * (`bufferQuote`) in its old quote vault for the old `swap`. Its `quoteMint` stays bridged SOL, so its address never changes.
+   * Trade it with `swap_v2` (`swap.swapV2`, or `launch.swap` with `native` keys). Absent from pools decoded by older code.
+   */
+  quoteNative?: boolean;
+  /** A native pool's buffer (`reserved[1..9]`): the bridged SOL in its quote vault that its books count. 0 for a bridged pool. */
+  bufferQuote?: bigint;
+  /** The buffer `rebalance_pool` moves a native pool toward (`reserved[9..17]`). */
+  bufferTarget?: bigint;
 }
+
+/** `Pool.reserved` starts at byte 351 of a pool account with a hook (411 bytes; 319 for a hook-less pool, whose `Option` takes one byte): the native flag is there, the buffer 1 byte on, the target 9. */
+export const POOL_ACCOUNT_SIZE = 411;
+export const POOL_RESERVED_OFFSET = 351;
+export const POOL_NATIVE_FLAG_OFFSET = POOL_RESERVED_OFFSET;
 
 /** Whether a pool pays Bordrless a share of its hooks' cuts rather than a flat rate (`Pool::shares_cuts`). */
 export const poolSharesCuts = (pool: Pick<Pool, 'feeModel'>): boolean => pool.feeModel === FEE_MODEL_SHARE;
@@ -154,6 +169,8 @@ export interface LaunchConfig {
   launches: bigint;
   /** v2: the bounds `create_launch` holds token rules to (§5.2). */
   ruleBounds: RuleBounds;
+  /** Native SOL (`Config.reserved[0]`, `set_native_launches`): launches made from now on are native. Absent from configs decoded by older code. */
+  nativeLaunches?: boolean;
 }
 
 /** The token rules a launch fixes, as the program keeps them (`LaunchRules`: locks in seconds, counted from the launch). */
@@ -247,6 +264,12 @@ export interface Launch {
    * Absent from launches decoded by older code.
    */
   partnerShareBps?: number;
+  /**
+   * Native SOL (`Launch.reserved[17]`): its pool holds SOL, its creator fees are lamports on the launch account above its
+   * rent-exempt minimum (claimed with `launch.claimCreatorFeesSol`), its holder fees lamports on the kit config. Absent from
+   * launches decoded by older code.
+   */
+  isNative?: boolean;
 }
 
 /** A custom hook's SOL cut caps, in basis points of a buy's SOL in and a sell's SOL out (each at most `QUOTE_CUT_MAX_BPS`). */
@@ -259,6 +282,8 @@ export interface QuoteCutCaps {
 export const QUOTE_CUT_MAX_BPS = 1_000;
 
 const u16At = (b: number[] | Uint8Array, i: number): number => Number(b[i]) | (Number(b[i + 1]) << 8);
+/** A u64 (little-endian) at `i` of a byte array the coder decoded. */
+const u64At = (b: number[] | Uint8Array, i: number): bigint => Buffer.from(Array.from(b).slice(i, i + 8).map(Number)).readBigUInt64LE(0);
 
 /** The SOL cut caps in `reserved` at `at` (a launch's 0, a config's 1), or null when both are 0. */
 export function quoteCutCapsOf(reserved: number[] | Uint8Array, at: number): QuoteCutCaps | null {
@@ -380,6 +405,10 @@ export interface KitConfig {
   totalShared: bigint;
   createdAt: number;
   streamNext: bigint;
+  /** Native SOL (`KitConfig.reserved[0]`): the reward vault is the config's lamports above `lamportsBase`, claimed with `kit.claimSol`. Absent from configs decoded by older code. */
+  isNative?: boolean;
+  /** A native kit's lamport base (`reserved[1..9]`): the config's lamports that are not rewards. 0 for a bridged kit. */
+  lamportsBase?: bigint;
 }
 
 export interface TaxConfig {
@@ -487,6 +516,9 @@ export const decodePool = (data: Buffer): Pool => {
     hookSignerBump: Number(r.hookSignerBump),
     feeModel: Number(r.feeModel),
     protocolShareBps: Number(r.protocolShareBps),
+    quoteNative: Number((r.reserved as number[])[0]) === 1,
+    bufferQuote: u64At(r.reserved as number[], 1),
+    bufferTarget: u64At(r.reserved as number[], 9),
   };
 };
 
@@ -548,6 +580,7 @@ export const decodeLaunchConfig = (data: Buffer): LaunchConfig => {
     paused: Boolean(r.paused),
     launches: big(r.launches),
     ruleBounds: ruleBounds(r.ruleBounds),
+    nativeLaunches: Number((r.reserved as number[])[0]) === 1,
   };
 };
 
@@ -598,6 +631,7 @@ export const decodeLaunch = (data: Buffer): Launch => {
     quoteCut: r.customHook != null ? quoteCutCapsOf(r.reserved as number[], 0) : null,
     quoteCutAccrued: Buffer.from((r.reserved as number[]).slice(4, 12)).readBigUInt64LE(0),
     partnerShareBps: u16At(r.reserved as number[], 14),
+    isNative: Number((r.reserved as number[])[17]) === 1,
   };
 };
 
@@ -667,6 +701,8 @@ export const decodeKitConfig = (data: Buffer): KitConfig => {
     totalShared: big(r.totalShared),
     createdAt: int(r.createdAt),
     streamNext: big(r.streamNext),
+    isNative: Number((r.reserved as number[])[0]) === 1,
+    lamportsBase: u64At(r.reserved as number[], 1),
   };
 };
 

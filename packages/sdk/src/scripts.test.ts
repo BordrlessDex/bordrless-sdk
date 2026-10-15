@@ -180,7 +180,8 @@ describe('the accounts', () => {
   it('reads a companion of mode 2 as a script companion (and 1 as a Snowball)', () => {
     const disc = (IDL.companion as unknown as { accounts: { name: string; discriminator: number[] }[] }).accounts.find((x) => x.name === 'Companion')!.discriminator;
     const size = CODERS.companion.accounts.size('companion');
-    expect(size).toBe(COMPANION_LEN);
+    // The IDL's companion carries the native-SOL byte (phase 3); a companion not grown for it is `COMPANION_LEN` bytes.
+    expect(size).toBe(COMPANION_LEN + 1);
     // `mode` is the last byte of a companion made before `quoteCutClaimed` (2026-10-15), whose 8 bytes follow it since; the rest zeros, as a fresh classic companion's.
     const of = (mode: number, len = size): Buffer => {
       const b = Buffer.alloc(len);

@@ -182,6 +182,23 @@ For one known token, read `holdingAddress(mint, owner)` directly; it's a PDA, no
 holding of `BRIDGED_SOL_MINT` is the wallet's bridged SOL: show it as SOL that can be unwrapped
 ([The bridge](06-bridge.md)).
 
+## Native SOL
+
+Once pools move to native SOL, the SOL sits as lamports on program accounts, not in holdings. The
+decoders say which form each account is in, and `@bordrless/sdk` reads either:
+
+| account | flag | its SOL | reader |
+| --- | --- | --- | --- |
+| pool | `Pool.quoteNative` (`bufferQuote`, `bufferTarget`) | books: `quoteReserve + protocolFeesQuote` (lamports on the pool, minus the buffer in the vault) | `poolQuoteBooks`, `poolQuoteStateOf` |
+| launch | `Launch.isNative` | creator fees: launch lamports above rent | `fetchLaunchCreatorFees` |
+| kit | `KitConfig.isNative` (`lamportsBase`) | rewards: config lamports above `lamportsBase` | `fetchKitRewardVault` |
+| companion | `Companion.nativeSol` (309-byte accounts; 300 and 308 read false) | creator PDA lamports above rent(0) | `fetchCompanionSol` |
+| hook vault | `Vault.isNative` | each slot owner's lamports above rent(0) | `fetchVaultSlotsSol` |
+
+Price and liquidity from the pool's **books**, never the quote vault balance (on a native pool it is
+only the buffer). Claims: `launch.claimCreatorFeesSol`, `kit.claimSol` (or `claimCreatorFeesFor`,
+`kit.claimFor`, which pick by form).
+
 ## Freshness
 
 Accounts change with every trade. For prices, either re-read the pool, or take the reserves from

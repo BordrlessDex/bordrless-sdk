@@ -55,4 +55,29 @@ export const router = {
     ];
     return new TransactionInstruction({ programId: a.ROUTER_PROGRAM, keys, data: Buffer.from(data) });
   },
+  /**
+   * `swap_v2`: `dexSwapV2` (a DEX `swap_v2` for `trader` on a native pool, as `launch.swapV2` or `swap.swapV2` build it, its quote
+   * account the trader's own wallet on a sell as on a buy) routed with a fee of `feeBps` paid in SOL to `integrator` (a wallet,
+   * not the trader or the pool; it must end at or above rent) and Bordrless's share to `treasury` (the DEX config's treasury
+   * wallet, `decodeSwapConfig(...).treasury`). A buy pays the fee from the trader's wallet before the DEX swaps the rest; a sell
+   * pays it from the SOL delivered. `minQuoteAfterFee` is a sell's floor on what the trader keeps.
+   */
+  swapV2(trader: PublicKey, integrator: PublicKey, treasury: PublicKey, dexSwapV2: TransactionInstruction, feeBps: number, minQuoteAfterFee = 0n): TransactionInstruction {
+    if (!dexSwapV2.programId.equals(a.SWAP_PROGRAM)) throw new Error('router.swapV2 wraps a DEX swap_v2 instruction');
+    if (!Number.isInteger(feeBps) || feeBps < 1 || feeBps > ROUTER_MAX_FEE_BPS) throw new Error(`an integrator fee is 1 to ${ROUTER_MAX_FEE_BPS} basis points`);
+    const decoded = CODERS.swap.instruction.decode(dexSwapV2.data) as { name: string; data: { args: Record<string, unknown> } } | null;
+    if (!decoded || decoded.name !== 'swapV2') throw new Error('not a DEX swap_v2 instruction');
+    const data = CODERS.router.instruction.encode('swapV2', { args: { swap: decoded.data.args, feeBps, minQuoteAfterFee: new BN(minQuoteAfterFee.toString()) } });
+    const keys: AccountMeta[] = [
+      { pubkey: trader, isSigner: true, isWritable: true },
+      rw(integrator),
+      rw(treasury),
+      ro(a.SWAP_PROGRAM),
+      ro(a.SYSTEM_PROGRAM),
+      ro(a.eventAuthority(a.ROUTER_PROGRAM)),
+      ro(a.ROUTER_PROGRAM),
+      ...dexSwapV2.keys,
+    ];
+    return new TransactionInstruction({ programId: a.ROUTER_PROGRAM, keys, data: Buffer.from(data) });
+  },
 };

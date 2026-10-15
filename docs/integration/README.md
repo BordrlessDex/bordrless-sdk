@@ -62,6 +62,11 @@ For a terminal that lists, prices and trades Bordrless tokens:
    ([Indexing trades](03-indexing-trades.md)).
 7. **Handle bridged SOL**: show a wallet's bridged-SOL holding as SOL; unwrap sell proceeds
    ([The bridge](06-bridge.md#bridged-sol)).
+8. **Get ready for native SOL** (timeline TBD): detect `quoteNative` / `isNative`, trade native
+   pools with `swap_v2` (the old `swap` sells fail with `BufferShort` once the buffer can't cover
+   them), index `SwappedNative`, read SOL as lamports where the flags say so
+   ([Native SOL pools](04-trading.md#native-sol-pools-swap_v2), [Indexing](03-indexing-trades.md#native-sol-swaps-swap_v2),
+   [Reading](02-reading-tokens.md#native-sol)).
 
 ## The guides
 

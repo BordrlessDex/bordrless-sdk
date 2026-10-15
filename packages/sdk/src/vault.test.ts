@@ -138,7 +138,7 @@ describe('hook_vault builders are the Rust client’s', () => {
     expect(names).toContain('MintExists');
     expect(names).toContain('NoRoom');
     expect(names).not.toContain('SliceUsed');
-    expect(PROGRAM_ERRORS.hookVault.size).toBe(27);
+    expect(PROGRAM_ERRORS.hookVault.size).toBe(30);
     const e = explainProgramError(a.HOOK_VAULT_PROGRAM, 6022);
     expect([e.program, e.name]).toEqual(['hookVault', 'MintExists']);
     const o = explainProgramError(a.HOOK_VAULT_PROGRAM, 6026);

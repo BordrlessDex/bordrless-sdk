@@ -473,6 +473,12 @@ export interface LaunchSummary {
   burned: Amount | null;
   /** The creator wallet's share of the live supply, 0 to 1; null when unknown. */
   creatorShare: number | null;
+  /**
+   * Native SOL (bordrless-programs `docs/native-sol-migration.md`): the launch's pool holds SOL as lamports and trades with
+   * `swap_v2` (no wrap, no bridged SOL), its creator fees and holder rewards are paid in SOL by the `_sol` claims. False for a
+   * launch still on bridged SOL; absent from older backends (read as false).
+   */
+  quoteNative?: boolean;
 }
 
 export interface LaunchDetail extends LaunchSummary {
@@ -618,7 +624,7 @@ export type SolMode = 'SOL' | 'BSOL';
 export interface SwapQuoteRequest {
   mint: Address;
   side: Side;
-  /** Input amount in base units: quote (bridged SOL) for a buy, the token for a sell. */
+  /** Input amount in base units: quote (lamports of SOL, or of bridged SOL on a pool not yet native) for a buy, the token for a sell. */
   amount: Amount;
   slippageBps: number;
 }
@@ -675,6 +681,8 @@ export interface SwapQuote {
    * the dry run could not be made). Absent on every other token.
    */
   hookCut?: Amount | null;
+  /** The pool trades native SOL (`swap_v2`): a buy is paid from the wallet's SOL and a sell delivers SOL, no bridged SOL in between. Absent from older backends. */
+  quoteNative?: boolean;
 }
 
 export interface SwapPrepareRequest extends SwapQuoteRequest {
@@ -1616,6 +1624,10 @@ export interface PoolSummary {
   volume24hUsd: number | null;
   createdAt: number;
   launchMint: Address | null;
+  /** Native SOL: the pool holds its quote as lamports (its `quoteReserve` is its books, not its vault) and trades with `swap_v2`. Absent from older backends (read as false). */
+  quoteNative?: boolean;
+  /** A native pool's bridged-SOL buffer in its old quote vault (what the old `swap` can still pay out); null for a bridged pool or an older backend. */
+  bufferQuote?: Amount | null;
 }
 
 export interface PoolList {

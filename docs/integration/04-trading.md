@@ -6,6 +6,12 @@ is no Bordrless API in the path.
 Launch pools trade against **bridged SOL**, an SPL-free 1:1 wrapper of SOL on the Bordrless bridge.
 A buy with SOL therefore wraps the SOL first, and a sell unwraps it after, in the same transaction.
 
+> **Native SOL (coming; timeline TBD).** Pools are moving to hold SOL as lamports on the pool
+> account (bordrless-programs `docs/native-sol-migration.md`). A native pool keeps its address and
+> its `quote_mint`; trade it with `swap_v2`: no wrap, no unwrap, no bridged-SOL holding. See
+> [Native SOL pools](#native-sol-pools-swap_v2) below. Everything on this page keeps working for
+> bridged pools.
+
 ## A buy, end to end
 
 From [`quote-buy.ts`](../../examples/quote-buy.ts), which quotes, builds and simulates without
@@ -226,6 +232,38 @@ hook's accounts in `extras`, through `tokenHookSlice(await fetchTokenHook(connec
 `args.inHookAccounts` / `args.outHookAccounts` say how many belong to each side. Quote them with
 `swapOut` from `@bordrless/shared`, after the LP and protocol fees. See
 `packages/sdk/src/instructions.ts` for the account list.
+
+## Native SOL pools (`swap_v2`)
+
+**Detect**: `decodePool(data).quoteNative` (`Pool.reserved[0] == 1`), or `decodeLaunch(data).isNative`
+for a launch. `launchKeysOf(launch)` sets `keys.native` from a decoded native launch, and then
+`launch.swap` builds `swap_v2` by itself:
+
+```ts
+import { decodeLaunch, launch, launchKeysOf, router } from '@bordrless/sdk';
+
+const l = decodeLaunch(launchInfo.data);
+const keys = launchKeysOf(l, customHook);             // keys.native === true on a native launch
+const ix = launch.swap(keys, trader, trader, 1, lamportsIn, minOut); // swap_v2: the wallet pays SOL
+// A sell (direction 0) delivers SOL to the recipient's wallet. No wrapSol / unwrapSol around it.
+// Explicitly: launch.swapV2(keys, …), swap.swapV2({...}, args, extras), swap.swapFor(pool, …).
+// The old instruction on any launch: launch.swapClassic(keys, …).
+const routed = router.swapV2(trader, integratorWallet, dexTreasury, ix, 50); // fee in SOL to wallets
+```
+
+`swap_v2`'s accounts are `swap`'s without the quote vault, with the trader's wallet (buy) or the
+receiving wallet (sell) as the quote account (never a token holding), the System Program and five
+optional bridge accounts; the remaining accounts are the same slices as `swap`
+([Without TypeScript](07-other-languages.md#native-sol-swap_v2)). `minAmountOut` on a sell is in
+lamports delivered.
+
+**The old `swap` keeps working** on a native pool through a small bridged-SOL buffer in the old
+quote vault, with a limit: **a sell fails with `BufferShort`** when the buffer can't cover it
+(`classicSellCapacity(pool)` says how much it can), and an old-path buy on a pool with no lamports
+yet can fail with `LamportsShort`. Move to `swap_v2`.
+
+Quoting is unchanged: the reserves are the pool's books (`quoteReserve`, virtual reserves), never
+the vault's balance. What a wallet can spend on a buy is its lamports (`spendableQuote`).
 
 ## Sending
 

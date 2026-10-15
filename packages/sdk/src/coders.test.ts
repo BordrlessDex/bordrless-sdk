@@ -240,7 +240,7 @@ describe('errors are explained by the program that failed (codes overlap)', () =
     expect(explainProgramError('launch', 2006)).toMatchObject({ name: 'ConstraintSeeds' });
     expect(explainProgramError('kit', 6999).name).toBeNull();
     expect(explainProgramError('swap', 6037)).toMatchObject({ name: 'NotBridgedSol', message: "the pool's quote is not bridged SOL" });
-    expect([PROGRAM_ERRORS.kit.size, PROGRAM_ERRORS.launch.size, PROGRAM_ERRORS.swap.size, PROGRAM_ERRORS.token.size, PROGRAM_ERRORS.bridge.size, PROGRAM_ERRORS.taxHook.size]).toEqual([29, 55, 39, 27, 14, 6]);
+    expect([PROGRAM_ERRORS.kit.size, PROGRAM_ERRORS.launch.size, PROGRAM_ERRORS.swap.size, PROGRAM_ERRORS.token.size, PROGRAM_ERRORS.bridge.size, PROGRAM_ERRORS.taxHook.size]).toEqual([33, 60, 48, 27, 14, 6]);
   });
 
   it('explains the companion\'s game errors and the lottery hook\'s, read from the logs of a failed step', () => {
@@ -251,7 +251,7 @@ describe('errors are explained by the program that failed (codes overlap)', () =
     // v1's codes keep their numbers: v2 only appends.
     expect(explainProgramError('companion', 6011).name).toBe('CustomHookUnsupported');
     // Phase 2 appends three more (the jackpot's and the streak's steps); phase 3a and Snowball more; approvals and script companions (2026-10-12) ten more, 6070 to 6079.
-    expect([PROGRAM_ERRORS.companion.size, PROGRAM_ERRORS.lotteryHook.size]).toEqual([91, 6]);
+    expect([PROGRAM_ERRORS.companion.size, PROGRAM_ERRORS.lotteryHook.size]).toEqual([93, 6]);
     expect([6067, 6069, 6070, 6073, 6078, 6079].map((code) => explainProgramError('companion', code).name)).toEqual(['BadSnowball', 'SnowballNotDue', 'NotApproved', 'ScriptOverspent', 'ScriptBrokeCustody', 'ProgramNotBounded']);
     expect(explainProgramError('companion', 6049).name).toBe('WrongGameKind');
     expect(explainProgramError('companion', 6050)).toMatchObject({ name: 'NoShare', explanation: expect.stringMatching(/forfeits the share/) });

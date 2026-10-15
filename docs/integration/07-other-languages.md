@@ -31,6 +31,29 @@ the Rust `anchor-client`) can decode the accounts and events and encode the inst
   and [docs/games.md](https://github.com/BordrlessDex/bordrless-programs/blob/main/docs/games.md#the-game-ticket-standard-bordrless-game);
   the TypeScript twins are `game.ts` and `gameKinds.ts`.
 
+## Native SOL: `swap_v2`
+
+Detect: `Pool.reserved[0] == 1`. In the 411-byte pool account `reserved` starts at byte 351 for a
+pool with a hook (the `Option<hook_program>` tag at 171 is 1) and at 319 for a hook-less pool; the
+buffer is a u64 LE at `reserved+1`, its target at `reserved+9`. `Launch.reserved[17]`,
+`KitConfig.reserved[0]` (base u64 at `[1..9]`), `Vault.reserved[0]` and the companion's byte 308
+(only in a 309-byte account) are the other flags.
+
+DEX `swap_v2`, discriminator `[43,4,237,11,26,201,30,98]`, data as `swap` (`SwapArgs`). Accounts:
+0 trader (w, s); 1 DEX config; 2 pool (w); 3 base mint (w only for a burn); 4 bridged SOL mint
+(w only with the bridge accounts); 5 base vault (w); 6 trader base holding (w); 7 trader quote
+(w): the trader's wallet on a buy, the receiving wallet on a sell; 8 pool hook (or the DEX id);
+9 DEX hook signer (or the DEX id); 10 token program; 11 token event authority; 12 System Program;
+13–17 bridge program, bridge config, SOL wrapper (w), SOL vault (w), bridge event authority, or
+five times the DEX id; 18 DEX event authority; 19 DEX program; then the remaining accounts as for
+`swap`. `SwappedNative` follows `Swapped`, discriminator `[211,64,168,225,250,98,248,180]`. The
+router's `swap_v2` has the same discriminator under the router: trader (w, s), integrator wallet
+(w), DEX treasury (w), DEX, System Program, router event authority, router, then the DEX accounts.
+
+Rust: `bordrless_swap::client::swap_v2`, `bordrless_launch::client::swap_v2` /
+`swap_v2_with_base_slice`, `claim_creator_fees_sol`; `bordrless_kit::client::claim_sol`;
+`bordrless_router::client::swap_v2`.
+
 ## Rust
 
 The program crates have client modules that build every instruction the way the programs expect.

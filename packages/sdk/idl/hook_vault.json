@@ -231,6 +231,68 @@
       ]
     },
     {
+      "name": "migrate_vault_to_native",
+      "docs": [
+        "The upgrade authority, with the DEX paused and the coin's launch native: turns the vault",
+        "native (each slot's pending SOL unwrapped onto its owner). Idempotent."
+      ],
+      "discriminator": [
+        77,
+        196,
+        1,
+        138,
+        47,
+        126,
+        199,
+        192
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "program_data"
+        },
+        {
+          "name": "dex_config",
+          "address": "2XLvgczuVACmvvjfRLLAcLwMzFHutbAAro61zZKP8fsx"
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vault.mint",
+                "account": "Vault"
+              }
+            ]
+          }
+        },
+        {
+          "name": "launch"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "open_vault",
       "docs": [
         "The vault's creator (or a sender with the mint's keypair signing), once the coin is launched",
@@ -381,6 +443,68 @@
           "type": "bool"
         }
       ]
+    },
+    {
+      "name": "revert_vault_to_bridged",
+      "docs": [
+        "The upgrade authority, with the DEX paused: turns a native vault back (each slot's pending",
+        "SOL wrapped into its holding). Idempotent."
+      ],
+      "discriminator": [
+        179,
+        91,
+        16,
+        210,
+        111,
+        9,
+        183,
+        124
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "program_data"
+        },
+        {
+          "name": "dex_config",
+          "address": "2XLvgczuVACmvvjfRLLAcLwMzFHutbAAro61zZKP8fsx"
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vault.mint",
+                "account": "Vault"
+              }
+            ]
+          }
+        },
+        {
+          "name": "launch"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
     }
   ],
   "accounts": [
@@ -652,6 +776,21 @@
       "code": 6026,
       "name": "NotOpener",
       "msg": "only the vault's creator (who paid for it) or the coin's mint keypair opens a vault"
+    },
+    {
+      "code": 6027,
+      "name": "NotUpgradeAuthority",
+      "msg": "not the hook vault program's upgrade authority"
+    },
+    {
+      "code": 6028,
+      "name": "DexNotPaused",
+      "msg": "the DEX must be paused for this"
+    },
+    {
+      "code": 6029,
+      "name": "LaunchNotNative",
+      "msg": "the coin's launch is not native yet: migrate its pool and launch first"
     }
   ],
   "types": [
@@ -1057,7 +1196,13 @@
           {
             "name": "reserved",
             "docs": [
-              "Reserved."
+              "Reserved. `reserved[0..4]` are the custom hook's SOL cut caps from the config",
+              "([`Launch::quote_cut`]), `reserved[4..12]` the SOL it has taken so far (part of",
+              "`creator_fees_accrued`), `reserved[12]` the bump of the hook's `[\"state\", mint]` and",
+              "`reserved[13]` of the launchpad's `[\"quote-cut\", hook]` signer; zeros for every launch made",
+              "before (`docs/quote-cut.md`). `reserved[14..16]` are the partner's share of the creator fee",
+              "and `reserved[16]` the bump of the config's [`PartnerFee`], from the config",
+              "([`Launch::partner_share_bps`], `docs/partner-fee.md`); zeros for every launch made before."
             ],
             "type": {
               "array": [

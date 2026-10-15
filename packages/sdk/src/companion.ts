@@ -124,11 +124,19 @@ export interface Companion {
    * null for a companion made before (its 300-byte account has no room for it) until its first claim since grows it. Optional only so a companion written out by hand need not name it.
    */
   quoteCutClaimed?: bigint | null;
+  /**
+   * Native SOL (phase 3, `Companion.native_sol`, one byte past `quoteCutClaimed`): the companion's SOL is lamports on its creator
+   * address (`creatorAddress(mint)`) above the rent-exempt minimum of an empty account, not bridged SOL in the creator's holding.
+   * False for a 300- or 308-byte companion (not grown for the flag). Optional only so a companion written out by hand need not name it.
+   */
+  nativeSol?: boolean;
 }
 
 /** A `Companion` account's size since `quoteCutClaimed` (2026-10-15); one made before is `COMPANION_LEN_V1` until its first fee claim since. */
 export const COMPANION_LEN = 308;
 export const COMPANION_LEN_V1 = 300;
+/** A `Companion` grown for its native-SOL flag (`migrate_companion_to_native`, or a native launch at creation): `COMPANION_LEN` plus one byte. */
+export const COMPANION_LEN_NATIVE = 309;
 
 /**
  * The three preset splits (any split summing to 10,000 works; the launch form offers any in 10% steps): buysItself (every creator fee bought back and
@@ -386,7 +394,7 @@ export const companion = {
     const extra = [
       ...remaining(token.createHolding(beneficiary, keys.mint, creator)),
       ...remaining(bridge.wrapSol(creator, lamports)),
-      ...remaining(launch.swap(keys, creator, creator, 1, lamports, minOut)),
+      ...remaining(launch.swapClassic(keys, creator, creator, 1, lamports, minOut)),
       ...hookRegistry(keys),
     ];
     const named = [rw(beneficiary, true), rw(a.companionAddress(keys.mint)), rw(creator), ro(a.launchAddress(keys.mint)), ro(a.SYSTEM_PROGRAM)];
@@ -413,7 +421,7 @@ export const companion = {
     const creator = a.companionCreatorAddress(keys.mint);
     const holding = a.holdingAddress(keys.mint, creator);
     const extra = [
-      ...remaining(launch.swap(keys, creator, creator, 1, 0n, 0n)),
+      ...remaining(launch.swapClassic(keys, creator, creator, 1, 0n, 0n)),
       ro(a.poolAddress(keys.mint, keys.quoteMint, keys.lpFeeBps, a.LAUNCH_PROGRAM)),
       ...remaining(token.createHolding(cranker, keys.mint, creator)),
       ...remaining(token.burn(creator, holding, keys.mint, 0n, mintHook(keys, rewards))),
@@ -451,7 +459,7 @@ export const companion = {
     if (buyHook && sellHook && !buyHook.program.equals(sellHook.program)) throw new Error('the sell’s hook accounts are another program’s');
     const buyKeys: LaunchKeys = { ...keys, customHook: buyHook ?? null };
     const extra = [
-      ...remaining(launch.swap(buyKeys, creator, creator, 1, 0n, 0n)),
+      ...remaining(launch.swapClassic(buyKeys, creator, creator, 1, 0n, 0n)),
       ...(sellHook ? sellHook.extras.map((m) => ({ ...m })) : []),
       ro(a.poolAddress(keys.mint, keys.quoteMint, keys.lpFeeBps, a.LAUNCH_PROGRAM)),
       ...remaining(token.createHolding(cranker, keys.mint, creator)),
@@ -598,6 +606,38 @@ export const companion = {
     const creator = a.companionCreatorAddress(mint);
     const source = a.holdingAddress(a.BRIDGED_SOL_MINT, creator);
     return build('share', {}, step(cranker, mint), [...remaining(kit.share(creator, mint, source, a.BRIDGED_SOL_MINT, 0n)), ...unwrapAccounts(creator)]);
+  },
+  /**
+   * The accounts a native companion's steps call besides a bridged one's (`bordrless_companion::client::native_accounts`): the
+   * launchpad's `claim_creator_fees_sol`, the creator address's `swap_v2` on the launch pool (System Program, DEX) and the kit's
+   * `share_sol`. Every step looks its accounts up by key, so appending these to any step serves a native companion
+   * (`companion.native`); a bridged one ignores them.
+   */
+  nativeAccounts(keys: LaunchKeys): AccountMeta[] {
+    const creator = a.companionCreatorAddress(keys.mint);
+    return [
+      ...remaining(launch.claimCreatorFeesSol(creator, keys.mint)),
+      ...remaining(launch.swapV2(keys, creator, creator, 1, 0n, 0n, { withBridge: false, baseSlice: launch.baseHookSlice(keys.mint, keys.quoteMint, keys.modules) })),
+      ...remaining(kit.shareSol(creator, keys.mint, 0n)),
+    ];
+  },
+  /** A step of a native companion (`Companion.nativeSol`): `ix` with `nativeAccounts(keys)` appended. */
+  native(ix: TransactionInstruction, keys: LaunchKeys): TransactionInstruction {
+    return new Ix({ programId: ix.programId, keys: [...ix.keys, ...companion.nativeAccounts(keys)], data: ix.data });
+  },
+  /** The accounts of `migrate_companion_to_native` and `revert_companion_to_bridged` (`CompanionForm`): the companion program's upgrade authority signs; the DEX must be paused. */
+  formKeys(admin: PublicKey, mint: PublicKey): AccountMeta[] {
+    const creator = a.companionCreatorAddress(mint);
+    const named = [rw(admin, true), ro(a.programDataAddress(a.COMPANION_PROGRAM)), ro(a.SWAP_CONFIG), rw(a.companionAddress(mint)), rw(creator), ro(a.launchAddress(mint)), ro(a.SYSTEM_PROGRAM)];
+    return [...named, ro(a.COMPANION_EVENT_AUTHORITY), ro(a.COMPANION_PROGRAM), ...unwrapAccounts(creator)];
+  },
+  /** `migrate_companion_to_native`: needs the coin's launch native. The account grows by one byte (nine for one made before `quoteCutClaimed`), the admin paying the rent. */
+  migrateToNative(admin: PublicKey, mint: PublicKey): TransactionInstruction {
+    return new Ix({ programId: a.COMPANION_PROGRAM, keys: companion.formKeys(admin, mint), data: CODERS.companion.instruction.encode('migrateCompanionToNative', {}) });
+  },
+  /** `revert_companion_to_bridged`, as `migrateToNative`. */
+  revertToBridged(admin: PublicKey, mint: PublicKey): TransactionInstruction {
+    return new Ix({ programId: a.COMPANION_PROGRAM, keys: companion.formKeys(admin, mint), data: CODERS.companion.instruction.encode('revertCompanionToBridged', {}) });
   },
   /** `withdraw` (anyone): pays the companion's beneficiary their part as SOL. */
   withdraw(sender: PublicKey, mint: PublicKey, beneficiary: PublicKey): TransactionInstruction {
@@ -1066,9 +1106,11 @@ const variant = (v: unknown): string => Object.keys(v as object)[0] ?? '';
 
 /** A `Companion` account, by its IDL name `companion` (v2 fields read zero, so null and 0, for a v1 companion). */
 export function decodeCompanion(data: Buffer): Companion {
-  // A companion made before `quoteCutClaimed` has no bytes for it: decoded with them zeroed, then read as null.
-  const old = data.length === COMPANION_LEN_V1;
-  const r = CODERS.companion.accounts.decode('companion', old ? Buffer.concat([data, Buffer.alloc(COMPANION_LEN - COMPANION_LEN_V1)]) : data) as Record<string, unknown>;
+  // A companion made before `quoteCutClaimed` has no bytes for it, and one not grown for its native flag none for that:
+  // decoded with them zeroed, then read as null (the claimed amount) and false (bridged).
+  const old = data.length <= COMPANION_LEN_V1;
+  const grown = data.length >= COMPANION_LEN_NATIVE;
+  const r = CODERS.companion.accounts.decode('companion', grown ? data : Buffer.concat([data, Buffer.alloc(COMPANION_LEN_NATIVE - data.length)])) as Record<string, unknown>;
   const s = r.split as Record<string, unknown>;
   const hook = r.gameHook as PublicKey;
   return {
@@ -1106,6 +1148,7 @@ export function decodeCompanion(data: Buffer): Companion {
     script: num(r.mode) === MODE_SCRIPT,
     payees: num(r.version) === COMPANION_VERSION_WITH_PAYEES,
     quoteCutClaimed: old ? null : big((r.quoteCutClaimed as Record<string, unknown>).amount),
+    nativeSol: grown && Boolean((r.nativeSol as Record<string, unknown> | undefined)?.on),
   };
 }
 

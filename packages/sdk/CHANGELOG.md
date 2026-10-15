@@ -4,6 +4,44 @@ The public package is `@bordrless/sdk` on npm, published from the public reposit
 BordrlessDex/bordrless-sdk together with `@bordrless/shared` (shared first; the SDK depends on the
 same version of it). The monorepo is where both are written.
 
+## Unreleased: native SOL (0.14.0)
+
+The off-chain side of moving Bordrless from bridged SOL (`A49oVh…`) to native SOL (bordrless-programs
+branch `native-sol`, `docs/native-sol-migration.md`; not deployed yet). Additions only: every export
+of 0.12.0 keeps its name, signature and behaviour for bridged pools and launches.
+
+- **IDLs**: the DEX, the launchpad, the kit, the companion, the router and `hook_vault` with their
+  native-SOL instructions, events and errors (`BufferShort`, `LamportsShort`, `NotNativePool`, …,
+  explained in `explainProgramError`).
+- **Flags**: `Pool.quoteNative`, `bufferQuote`, `bufferTarget` (`reserved[0..17]`),
+  `LaunchConfig.nativeLaunches`, `Launch.isNative` (`reserved[17]`), `KitConfig.isNative` and
+  `lamportsBase`, `Vault.isNative`, `Companion.nativeSol` (`decodeCompanion` reads 300, 308 and
+  309-byte companions; `COMPANION_LEN_NATIVE`). All optional fields, absent from objects older code
+  made.
+- **Builders**: `swap.swapV2`, `swapV2WithHooks`, `swapFor` (by the pool's form),
+  `createNativePool`, `migratePoolToNative`, `revertPoolToBridged`, `rebalancePool`,
+  `setBufferTarget`; `launch.swapV2`, `swapClassic`, `claimCreatorFeesSol`, `claimAuthorFeesSol`,
+  `distributeFeesSol`, `claimCreatorFeesFor`, `setNativeLaunches`, `migrateLaunchToNative`,
+  `revertLaunchToBridged`; `kit.claimSol`, `shareSol`, `claimFor`, `setNative`;
+  `companion.nativeAccounts`, `native`, `migrateToNative`, `revertToBridged`;
+  `vault.setVaultNative` (and `execute`/`executeBuy` add the `swap_v2` accounts for a native
+  vault); `router.swapV2`. Every one is held byte for byte to the Rust clients
+  (`vectors/native-sol.json`).
+- **`launch.swap` picks the path**: with `LaunchKeys.native` (which `launchKeysOf` sets from a
+  native `Launch`) it builds `swap_v2`: the trader's wallet pays a buy, a sell delivers SOL to the
+  recipient's wallet, no wrap or unwrap. Without it, exactly the classic `swap` as before
+  (`launch.swapClassic` builds that one whatever the keys). `swap.swap` stays the raw `swap`
+  instruction; `swap.swapFor(pool, …)` picks.
+- **Events**: `typedNativeEvent` reads `SwappedNative`, `PoolQuoteFormChanged`, `LaunchNativeSet`,
+  `NativeLaunchesSet`, `KitNativeSet` and `CompanionNativeSet`; `pairSwappedNative` and
+  `swapSolSide` read a `swap_v2`'s SOL side (its `Swapped` deltas and recipient may be wallets);
+  `launchSwapCutsOf` finds a launch's fees wherever it keeps them. `typedEvent` and `TypedEvent`
+  are unchanged.
+- **Balances** (`native.ts`): `poolQuoteBooks`, `poolLamportsQuote`, `poolBufferDrift`,
+  `classicSellCapacity`, `poolQuoteStateOf`/`fetchPoolQuoteState`, `spendableQuote`,
+  `launchCreatorFeesOf`/`fetchLaunchCreatorFees`, `kitRewardVaultOf`/`fetchKitRewardVault`,
+  `companionSolOf`/`fetchCompanionSol`, `vaultSlotSolOf`/`fetchVaultSlotsSol`,
+  `rentExemptMinimum`, `NATIVE_POOL_FILTERS`.
 ## 0.13.0 (15 Oct 2026)
 
 - The companion's fee claim tells the hook's SOL cut apart (companion upgraded on mainnet 15 Oct):

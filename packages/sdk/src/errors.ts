@@ -71,6 +71,11 @@ const EXPLANATIONS: Partial<Record<ProgramName, Readonly<Record<string, string>>
     LpBelowMinimum: 'The pool moved: this deposit would mint less LP than your minimum. Try again.',
     WithdrawalBelowMinimum: 'The pool moved: this withdrawal would return less than your minimum. Try again.',
     MintNotWritable: 'This trade was built without the token mint writable, which its burn needs. Refresh and try again.',
+    BufferShort: 'This pool now trades in SOL: its bridged-SOL buffer cannot cover this sell. Sell with swap_v2 (SOL straight to your wallet), or try a smaller amount.',
+    LamportsShort: 'The pool’s SOL cannot cover this right now. Try again shortly, or a smaller amount.',
+    NotNativePool: 'This pool still trades in bridged SOL: use the ordinary swap.',
+    RecipientBelowRent: 'The SOL would land on an account left below its rent-exempt minimum. Send it to a wallet with some SOL, or a larger amount.',
+    WrongNativeAccount: 'This SOL trade names the wrong account to pay or be paid: a buy is paid by the trader’s own wallet, a sell is delivered to a wallet (not a token holding).',
   },
   bridge: {
     Paused: 'The bridge is paused right now.',

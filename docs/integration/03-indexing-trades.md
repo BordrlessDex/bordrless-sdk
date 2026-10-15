@@ -89,6 +89,22 @@ pool price moved by `receivedIn` after fees, not by `amountIn`.
 trade's open is the price before it, from the previous event's reserves or the launch's opening
 reserves.
 
+### Native SOL swaps (`swap_v2`)
+
+A `swap_v2` emits `Swapped` (same fields) and then `SwappedNative`: `quoteLamports` (what the
+trader paid the pool on a buy, what was delivered on a sell), `quoteDeltas` (`{account, amount,
+wrapped}`: each quote-side cut, paid as lamports or wrapped into a bridged-SOL holding),
+`bufferQuote`, `poolLamports`. On these swaps `Swapped`'s quote-side deltas and a sell's
+`recipient` can be **wallets**, not holdings, and the SOL moves by system transfers, so no token
+`Transferred` covers it. Read the SOL side from `SwappedNative`: `typedNativeEvent`,
+`pairSwappedNative(events)`, `swapSolSide(swapped, native)`. A native launch's creator fee is the
+delta to the launch account itself and its holder fee the delta to the kit config:
+`launchSwapCutsOf(ev, mint, quoteMint)` finds them in either form.
+
+Other new events: `PoolQuoteFormChanged` (a pool migrated, reverted, rebalanced or its buffer target
+set), `LaunchNativeSet`, `NativeLaunchesSet`, `KitNativeSet` and, from the companion,
+`CompanionNativeSet`. `typedEvent` is unchanged; `typedNativeEvent` reads these.
+
 ## Which transactions to read
 
 A pool's address is in every swap on it, so `getSignaturesForAddress(pool)` lists a token's trades.
