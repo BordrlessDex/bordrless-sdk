@@ -126,7 +126,11 @@ Label it "Creator: companion (fees run by a program)" rather than a wallet. Its 
 - **The split** of every fee claim, fixed when the companion was made: `buybackBps` (the token is
   bought on its own pool and burned), `holdersBps` (shared with holders through the kit's holder
   rewards), `beneficiaryBps` (paid to `beneficiary`), and for a game `potBps`. They sum to
-  10,000.
+  10,000. The split applies to the creator fee alone. Since 15 Oct 2026, the part of a claim that
+  was the hook's SOL cut (a coin whose hook takes one) goes whole to the pot, or else to buyback,
+  else holders; it is never split with the beneficiary unless the split has nothing else.
+  `companion.quoteCutClaimed` is how much of the launch's cut the companion has taken (`null` on a
+  companion not claimed on since then).
 - **The dev buy**: the launcher's own buy is held by the companion at `companionCreatorAddress(mint)`
   and vests linearly over `vestSecs` from the launch (`companionVested(companion, now)`). Count
   `devTokens - devReleased` as the dev's, locked.

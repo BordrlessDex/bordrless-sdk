@@ -146,7 +146,7 @@ Worth a row each:
 | Event | What it records |
 | --- | --- |
 | `CompanionCreated`, `CompanionLaunched` | A companion's split, bounty, buyback limits and vesting; its launch. The launch's `LaunchCreated` has the companion's address as `creator` |
-| `FeesClaimed`, `PotFunded` | A fee claim and how it was split (`toBuyback`, `toHolders`, `toBeneficiary`; a game's `toPot`, and `pendingPot` after) |
+| `FeesClaimed`, `PotFunded` | A fee claim and how it was split (`toBuyback`, `toHolders`, `toBeneficiary`; a game's `toPot`, and `pendingPot` after). `fromHook` (since 15 Oct 2026; `'0'` on older events) is the part that was the hook's SOL cut; it is already inside the bucket it went to, so don't add it again |
 | `BoughtBack`, `BuybackWaited` | A buyback: SOL `spent`, tokens `burned`; or a wait while the price is above the reference. The same transaction has a `Swapped` whose `trader` is the companion's creator address |
 | `DevBought`, `DevReleased` | The launcher's vesting buy, and what vested to them |
 | `SharedWithHolders`, `BeneficiaryPaid` | SOL to holder rewards; SOL to the launcher |
