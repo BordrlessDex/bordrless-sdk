@@ -127,7 +127,7 @@ export function poolReserves(data: Buffer): { baseMint: PublicKey; quoteMint: Pu
 
 /**
  * The holdings `pay_strategy` would take for `period`: the mint's holding at its owner's address, an
- * eligible wallet (none of `excluded`: the launch, its pool, the creator address, the companion, the
+ * eligible wallet (none of `excluded`: the launch, its pool, the companion address, the companion, the
  * game, the terms, the oracle payer, the strategy, the hook), its weight for the period (its ticket
  * range for that round) at least `minWeight` and at most its balance. The strategy decides each
  * amount; the companion refuses the rest on chain.

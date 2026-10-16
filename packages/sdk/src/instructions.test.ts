@@ -419,7 +419,7 @@ describe('builders hold to the v2 IDLs (programs-summary §3)', () => {
     holdToIdl('launch', 'set_config', launch.setConfig(creator, config), 0);
     // The rule bounds are the args' last field: u16 × 5 then u32 × 3.
     const tail = init.data.subarray(init.data.length - 22);
-    expect([tail.readUInt16LE(0), tail.readUInt16LE(2), tail.readUInt16LE(4), tail.readUInt16LE(6), tail.readUInt16LE(8), tail.readUInt32LE(10), tail.readUInt32LE(14), tail.readUInt32LE(18)]).toEqual([200, 100, 300, 100, 500, 90 * DAY, 300, 7 * DAY]);
+    expect([tail.readUInt16LE(0), tail.readUInt16LE(2), tail.readUInt16LE(4), tail.readUInt16LE(6), tail.readUInt16LE(8), tail.readUInt32LE(10), tail.readUInt32LE(14), tail.readUInt32LE(18)]).toEqual([200, 100, 500, 100, 500, 90 * DAY, 300, 7 * DAY]);
     // Without a config the optional slot after the kit accounts (index 29) is the launch's id.
     expect(keyAt(every, 29)).toBe(a.LAUNCH_PROGRAM.toBase58());
   });

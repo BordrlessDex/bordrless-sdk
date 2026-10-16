@@ -171,7 +171,8 @@ upgrade it, and no reading (a Workshop hook shows Bordrless's reading of it inst
    instruction like it). The registry must not depend on who sends or receives: the launch passes
    one slice for every transfer.
 4. **Make the config** (`buildCreateConfig`; `buildCreateListedConfig` with an author share, which
-   pays you half the creator fee of every launch someone else makes from it) and share its key. A
+   pays you that share of the creator fee, at most half, of every launch someone else makes from
+   it) and share its key. A
    Workshop hook's builder can make it here too: once a launch uses it, the Workshop adopts it and
    offers the hook on the launch page.
 5. **Paste the key** into the launch page. It reads the config, shows every rule and the hook,
@@ -251,14 +252,16 @@ is set before the launch.
 
 ## Companions: a launch whose creator is a program
 
-A companion creates a launch and signs as its creator (`companionCreatorAddress(mint)`), so every
-creator fee lands with it and only its code spends it, by a split fixed at `create`: any
+A companion creates a launch and signs as its creator (`companionCreatorAddress(mint)`, the
+companion address), so the launch's whole fee on every trade (`creatorFeeBps`) lands with it and
+only its code spends it, by a split fixed at `create`: any
 `{ buybackBps, holdersBps, beneficiaryBps }` summing to 10,000 (bought back and burned, streamed to
 holders through the kit, paid to the launcher in SOL), the templates among them:
 `COMPANION_TEMPLATES.buysItself` (all bought back and burned), `rugProofDev` (half to holders, half
-to the launcher, whose first buy vests) or `buybackAndReward` (half bought back and burned, half to
+to the launcher) or `buybackAndReward` (half bought back and burned, half to
 holders). Launch with one through the site's API (`POST https://bordrless.app/api/launch/prepare`
-with `companion: { split, vestDays? }` or `{ template, vestDays? }`; with `game`, `snowball` or
+with `companion: { split, vestDays? }` or `{ template, vestDays? }` (`vestDays` 0 by default: the first buy is
+the launcher's at launch; 1 to 365 vests it); with `game`, `snowball` or
 `script` for a Jackpot, a Snowball or a custom companion) or with `companion.create`,
 `companion.launch` and `companion.devBuy`. Since the 2026-10-12 upgrade a companion may launch a
 token with a custom hook too, from a plain config (no author share: `AuthorShareUnsupported`) and
@@ -287,6 +290,17 @@ const steps = [
   ...(companionVested(c, now) > c.devReleased ? [companion.release(me, keys, rewards, c.beneficiary)] : []),
 ];
 ```
+
+### Creator fee and companion fee
+
+On chain a launch has one `creatorFeeBps` (the whole fee); its companion splits every claim
+(`split.beneficiaryBps` the launcher's part, `potBps` the pot's). `feeSplitOf({ creatorFeeBps: 100,
+companionFeeBps: 50 })` gives `{ creatorFeeBps: 150, split: { beneficiaryBps: 6_667, ... }, potBps:
+3_333 }`, rounded as the site rounds; `launchFeesOf(decodeLaunch(l), decodeCompanion(c))` reads the two
+fees back. A pair config's fixed split is not on chain: `pairLauncherShareBps(inspection)` reads it
+from the API's `ConfigInspection` (keeper.json `launcherShareBps`). `scriptAuthorShare(feeTaken,
+hookCut, beneficiaryBps, { got, bountyBps })` is what a claim pays a script's author, as the companion
+computes it: half of the launcher's part of the creator fee taken, never of the hook's cut or the pot.
 
 ## Games: a lottery coin run by its companion (v2, live on mainnet)
 
@@ -471,25 +485,45 @@ What a builder can make for a launch on Bordrless, in two layers. A **hook** is 
 runs inside every trade: the token program calls it before and after each transfer, mint and burn,
 and applies its answer (cuts, a refusal, 64 bytes of state written into each holding). A
 **companion** is your program too, a script, but it never runs inside a trade: Bordrless's
-companion program holds the launch's creator fee in a pot and calls your script on a timer with
+companion program holds the launch's companion fee in a pot and calls your script on a timer with
 the launch's accounts (the mint, the launch, the companion, the pool, your state, then whatever the
 sender passes), your script reads what it likes (its hook's data in the holdings, the pool, its
-state) and acts as the creator address, and the companion program executes within hard bounds:
+state) and acts as the companion address, and the companion program executes within hard bounds:
 it trades on the launch pool, buys back, burns, pays holders or wallets from the pot within the
 terms the launch fixed when the script answers a payout ("Paying through the companion", below),
 and refuses a step that spends more than the pot, touches the dev bag, takes lamports or breaks
 custody. Bordrless's program is never upgraded for a builder's program, only for a new kind of
 action. A **pair** is the two together, a hook on the trades and a companion on the pot: the hook
 can take a cut, keep a score or fund the pot; the companion pays from the pot, filled by the
-creator fee, by the hook, or both.
+companion fee, by the hook's SOL cut, or both. A companion can also run on its own, funded by the
+companion fee alone, and a hook can run without a companion (then there is only a creator fee).
+
+**The fees.** On chain a launch charges one fee on each trade (`creatorFeeBps`, the whole). On a
+companion coin the companion splits each claim of it: the launcher's part (`split.beneficiaryBps`)
+is the **creator fee**, paid to the launcher, and the pot's part (`potBps`) is the **companion
+fee**, which the script spends. The site shows the two as rows, "Creator fee" and "Companion fee",
+together at most 5% of a trade (`MAX_CREATOR_FEE_BPS`, 500; it was 2% until 15 Oct 2026); each row is 0, 0.5%,
+1% or 2% (`CREATOR_FEE_CHOICES_BPS`; the Companion fee from 0.5%), 1% by default, and a Workshop config's fee
+is any quarter percent up to 5% (`FEE_STEP_BPS`). That 5% is the site's and the API's limit: the launchpad's
+own cap (`Config.max_creator_fee_bps`) is 10%. A pair or a Workshop config fixes the split
+(`launcherShareBps`, even by default; keeper.json's, 0 to 9,500, wins, so the pot keeps at least a
+twentieth), and the API refuses any other (`split_fixed`): it is never the launcher's to adjust.
+
+**Builder shares.** A hook's builder takes 0 to 50% of the creator fee in 5% steps
+(`workshopAuthorShareOk`, `WORKSHOP_AUTHOR_SHARE_STEP_BPS`: its launch config's author share). A
+companion's or a pair's builder takes exactly half or nothing (`SCRIPT_LIMITS.authorShareBps`), and
+since the companion upgrade of 15 Oct 2026 that half is of the launcher's part of the creator fee
+each claim takes (after the hook's SOL cut), paid out of that part: never of the companion fee, the
+pot, the buyback, the holders or the hook's cut. The sender's bounty is taken from the whole claim,
+and `FeesClaimed.toBeneficiary` is net of the author's share.
 
 Two lanes, and the chain takes both:
 
 | | The Workshop (https://bordrless.app/workshop) | Self-serve |
 | --- | --- | --- |
 | Who deploys | Bordrless, under its upgrade key, after its checks (the template's rules, the build, a hook's trading test, and one reading by AI that states its rules and judges it); approved by itself once the rules, the build and the trading test pass; you pay the submission fee and the deploy | You, then you make it immutable: `solana program set-upgrade-authority <program> --final` (`hookFinalCommand()` in @bordrless/shared; `bordrless hook deploy <so> --program-keypair <kp> --immutable` does both) |
-| A hook | Listed; its config pays you half the creator fee of launches others make with it (`AUTHOR_SHARE_BPS`), or nothing, as you choose at the submission | A config you make and share; `buildCreateListedConfig` can still pay you a share. On a Workshop hook of yours such a config is adopted once a launch uses it; on any other hook it is not offered on the site |
-| A script | Approved on chain by Bordrless (`Approval`, `inspectScriptProgram`); its author paid the same half (or nothing) by the companion program | No approval needed: an immutable script runs unreviewed, with no author's share |
+| A hook | Listed; its config pays you 0 to 50% of the creator fee of launches others make with it, in 5% steps (up to `AUTHOR_SHARE_BPS`), as you choose at the submission | A config you make and share; `buildCreateListedConfig` can still pay you a share. On a Workshop hook of yours such a config is adopted once a launch uses it; on any other hook it is not offered on the site |
+| A script | Approved on chain by Bordrless (`Approval`, `inspectScriptProgram`); its author paid half of the launcher's part of the creator fee (or nothing, as you choose) by the companion program, never of the pot | No approval needed: an immutable script runs unreviewed, with no author's share |
 | What the site shows | Bordrless's reading of it (its rules as exact rows, the most it takes, what to watch, what it found) on the launch and token pages | A custom hook written by its creator, with who can upgrade it; no reading: not read by Bordrless, unless you submit its source with the program's address ("The reading lane", below). A launch whose creator fee goes to a program of your own (not the companion program) is allowed by the chain but hidden on the site |
 
 Test first, on your machine, against the live programs copied from mainnet (`solana program dump
@@ -563,7 +597,7 @@ const setup = [
 ```
 
 Anyone cranks it, as any companion: `companion.claimFeesScript(me, mint, scriptClaimAuthor(script,
-c))` claims the fees (the author's half first, when there is one), and once `scriptDue(c, s, now)`
+c))` claims the fees (the author's share, when there is one, out of the launcher's part), and once `scriptDue(c, s, now)`
 holds, `companion.scriptStep(me, keys, s.program, extras)` runs a step, `extras` being what your
 `companion_step` documents after its six accounts (a trade: the launch pool's swap accounts, as
 `launch.swap(keys, creator, creator, 1, lamports, minOut)` names them); the sender is paid
@@ -574,7 +608,7 @@ says none) and gives `companion_init` its `initData` (hex; nothing when it says 
 **3. A pair** is submitted as one Workshop item (both sources, `keeper.json` beside the script's
 and `hook.json` beside the hook's when they apply; one approval bound to both builds, one deploy,
 one config that requires the script: the launch page locks the hook to it). Whale Bait, the first:
-the hook cuts whale trades in tokens into the creator address's holding of the token, the script
+the hook cuts whale trades in tokens into the companion address's holding of the token, the script
 sells them into the pot and pays the holders under 20M tokens once an epoch. On chain it is the
 two above: a plain config on the hook (`buildCreateConfig`, never listed: a companion refuses an
 author share, so the pair's builder is paid by the companion program alone) and
@@ -611,11 +645,37 @@ brings with the launch pool's swap accounts and without them, and whether it car
 (`swapAccounts`), the token's hook accounts (`hookAccounts`) or the companion's payout accounts
 (`payouts`, the payout path below); `stepSecs`, how often a step runs (10 s to a day; the launch
 takes it from here, never from the launcher: without it a thirtieth of a fixed `roundSecs`, else a
-minute, `keeperStepSecs`); and `wallets`, up to 12 addresses or keys in your state a step brings
-for wallet answers. Anyone can still send a step with any accounts: check every holding and payee
+minute, `keeperStepSecs`); `wallets`, up to 12 addresses or keys in your state a step brings
+for wallet answers; `payoutTerms`, the payout terms the launch makes your script with ("Paying
+through the companion", below); `mintWritable`, the coin's mint writable in every step (below);
+and `launcherShareBps`, the launcher's share of each trade's fee fixed for
+every launch with your script (0 to 9,500 of 10,000; "0.5% to the launcher and 1.5% to the engine"
+of a 2% fee is 2500). The fee a launch charges on each trade is one number on chain, split by the
+companion at every claim: the launcher's share is their **creator fee**, paid to their wallet, and
+the rest is the **companion fee**, the pot's, which your script spends. A pair's builder can fix
+the same split on the Workshop's config page instead (two sliders, the creator fee and the companion
+fee in quarter-percent steps; keeper.json's wins when both are set). Without either a pair's
+config splits the fee evenly until its builder sets the split on the item's page. The launch page
+shows a pair's split and the API refuses any other (`split_fixed`): it is never the launcher's to adjust. A hook's SOL cut
+(hook.json, below) lands in the pot whole since the companion upgrade of 15 Oct 2026; before it,
+the launcher's share applied to the cut too. Anyone can still send a step with any accounts: check every holding and payee
 in the script itself. Only a holder answer reaches your hook’s `record_payout`; a wallet answer
 emits `ScriptWalletPayout` with your tag and writes nothing on any holding, so a script that pays
 wallets keeps what it has paid in its own state.
+
+**A script that burns: `mintWritable`** (16 Oct 2026; default false). Every step then passes the
+coin's mint writable, which a script that burns the coin (the token program's `burn`) needs: with
+`swapAccounts` the mint already in the swap accounts is made writable and their order is unchanged;
+without them the mint is appended last. Without the flag the mint is writable only on a launch with
+a burn rate, and a burn elsewhere fails the whole step (`MintNotWritable`). A burn may take the coin
+down to the dev bag still held, never into it (`ScriptTookDevBag`).
+
+**Native coins.** Every coin launched since 15 Oct 2026 trades in SOL: the pot is the companion
+address's lamports above its rent, a script trades with `swap_v2` and pays a wallet with a system
+transfer from the companion address. Pay holders with `"payTo": "owner"` (the owner's wallet after
+each holding). `"ownerQuoteHolding"` (the owner's bridged-SOL holding) is the older coins' way: the
+Workshop refuses a new script whose keeper.json pays to it without a native branch in its code
+(`scriptNativeReady` in @bordrless/shared).
 
 ```ts
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -623,6 +683,7 @@ import { KEEPER_EXAMPLE, checkKeeperJson } from '@bordrless/sdk';
 
 // The template's example (a dividend pair: holders under 20M tokens not paid this epoch, each paid to
 // its SOL holding, 3 a step beside the swap accounts): start from it beside src/, then change it to your layout.
+// It pays to "ownerQuoteHolding", the bridged-SOL way of the older coins: for a native coin, change payTo to "owner".
 writeFileSync('my_script/keeper.json', KEEPER_EXAMPLE);
 const checked = checkKeeperJson(readFileSync('my_script/keeper.json', 'utf8'));
 if (!checked.ok) throw new Error(checked.problem);   // the sentence the Workshop would refuse it with
@@ -636,11 +697,23 @@ A token hook only sees token transfers, so a cut it takes is in the token. Since
 which the launchpad calls (signing with `quoteCutSignerAddress(hook)`) on a coin whose config was
 made with `launch.createQuoteCutConfig`, and takes the rate it answers (a `u16` of basis points, the
 instruction's return value: `-> Result<u16>` in Anchor), at most the config's cap, from the trade's
-SOL into the creator fee. In the Workshop you don't make that config: put **`hook.json`** beside the
-hook's `src/` with its caps, and the Workshop makes the config with them once it is approved
+SOL, and adds it to the launch's fee (counted with it, Bordrless's quarter taken from it the same
+way). On a coin without a companion it is claimed with the creator fee (a listed config's author
+share applies to it too); on a pair it lands whole in the companion's pot (since the companion
+upgrade of 15 Oct 2026), not split with the launcher or the script's builder. In the Workshop you
+don't make that config: put **`hook.json`** beside the hook's `src/` with its caps, and the Workshop makes the config with them once it is approved
 (docs/workshop.md "A hook's SOL cut"). A hook with `quote_cut` must have one; a `hook.json` without
 `quote_cut` is refused. The trading test runs the cut at the caps (every cut must be
 min(answer, cap) of the SOL the launchpad passed), and the reading reads the caps beside the code.
+
+**If you build the swap yourself** (a terminal, a router, a bot): a coin whose launch has a SOL cut
+(`decodeLaunch(...).quoteCut`, `LaunchDetail.customHook.quoteCut` on the API) needs four more
+accounts after the pool hook's four extras, or the DEX refuses the trade with
+`QuoteCutAccountsMissing` (6047): the hook program, the trader's holding of the coin, the hook's
+state `["state", mint]` and the launchpad's signer for the hook, in that order
+(`quoteCutExtras(hook, mint, trader)`). `launchKeysOf(launch, hookAccounts)` and `launch.swap` do
+this for you; a swap built from a pool's registry alone lands on every other coin and fails on
+these (Axiom's router did, 15 Oct 2026). The coin's creator trading for itself skips them.
 
 ```ts
 import { writeFileSync } from 'node:fs';
@@ -657,9 +730,10 @@ console.log(checked.words, checked.details[0]);          // what its page will s
 A script may also let the companion program pay (docs/loss-cover.md §1; Lossback's path, live). A
 script made with `companion.createScriptV2` has payout terms, `PayoutTerms` at
 `payoutTermsAddress(mint)`: the most one step pays of the pot, the most one holding (or wallet)
-gets of a step's budget, the most a window pays of the pot, and the window (10 s to a day;
-`PAYOUT_LIMITS`, `payoutTermsValid`). Its `companion_step` then answers, as return data, a
-`PayoutAnswer` (`encodePayoutAnswer`: version 1, up to 16 entries, each the index of a holding
+gets of a step's budget, the most a window pays (`windowBps` of `max(windowPot, potAfterScript +
+windowPaid)` less what the window has paid, so fees arriving mid-window count; `payoutStepBudget`),
+and the window (10 s to a day; `PAYOUT_LIMITS`, `payoutTermsValid`). Its `companion_step` then
+answers, as return data, a `PayoutAnswer` (`encodePayoutAnswer`: version 1, up to 16 entries, each the index of a holding
 among the step's extra accounts, lamports and a tag); the companion checks every entry against the
 terms, pays each holding's owner SOL from the pot and has the token's hook record it
 (`record_payout`, signed by `PAYOUT_AUTHORITY`; the hook needs `WRITES_HOOK_DATA` and that
@@ -693,9 +767,22 @@ const answer = encodePayoutAnswer({ version: 1, entries: [{ account: 7, lamports
 const read = decodePayoutTerms((await connection.getAccountInfo(payoutTermsAddress(mint)))!.data); // paidTotal, walletsAllowed, …
 ```
 
-The launch page makes the terms (`create_script_v2`) only for a Workshop script whose `keeper.json`
-names wallets, with the site's own limits; a pair on this path otherwise launches through the SDK,
-as above.
+The launch page makes the terms (`create_script_v2`) for a Workshop script whose `keeper.json` says
+`payouts: true` (holder answers, version 1, recorded by the launch's hook) or names `wallets` (wallet
+answers, version 2): its `keeper.json`'s `payoutTerms` when it names them, else open terms (since 16
+Oct 2026: a step may pay the whole pot, one holding or wallet all of a step, a window all of the pot,
+the window the shortest the program takes, 10 s). A script with neither launches without terms, and
+a pair built for terms some other way launches through the SDK, as above.
+
+Terms can change after the launch (the companion upgrade of 15 Oct 2026):
+`companion.setPayoutTerms(authority, mint, { stepBps, holdingBps, windowBps, windowSecs })`
+(`set_payout_terms`), signed by the launch's beneficiary (the launcher) or the script approver
+(`NotTermsAuthority`, 6094, otherwise), within `createScriptV2`'s bounds. The window starts over,
+what was paid stays counted, and `PayoutTermsSet` is emitted, as `create_script_v2` emits it.
+
+```ts
+const tighter = companion.setPayoutTerms(launcher, mint, { stepBps: 1_000, holdingBps: 2_500, windowBps: 5_000, windowSecs: 3_600 });
+```
 
 ### The reading lane: Bordrless's words on a program you deployed
 

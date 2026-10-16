@@ -165,7 +165,7 @@ describe('a pair from your own terminal', () => {
     accounts.set(made.address.toBase58(), info(LAUNCH_PROGRAM, Buffer.concat([onChain, Buffer.alloc(Math.max(0, 176 - onChain.length))])));
     const config = await inspectConfig(connection, made.address, mint);
     expect(config).toMatchObject({ problems: [], hookAccepted: true, registryReady: true });
-    // The companion's launch wraps the launch from the config, with the hook's accounts and the creator address as the creator.
+    // The companion's launch wraps the launch from the config, with the hook's accounts and the companion address as the creator.
     const args = { name: 'Pair', symbol: 'PAIR', uri: 'ipfs://x', creatorFeeBps: 100, virtualQuote: 1_000_000_000n, rules: config!.config.rules };
     const inner = launch.createLaunch(companionCreatorAddress(mint), mint, k(), BRIDGED_SOL_MINT, 30, args, { launchConfig: made.address, customHook: config!.hookAccounts });
     const wrapped = companion.launch(me, mint, inner, args);

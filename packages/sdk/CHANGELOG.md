@@ -4,7 +4,95 @@ The public package is `@bordrless/sdk` on npm, published from the public reposit
 BordrlessDex/bordrless-sdk together with `@bordrless/shared` (shared first; the SDK depends on the
 same version of it). The monorepo is where both are written.
 
-## 0.14.1 (15 Oct 2026): payout terms after launch
+## 0.15.0 (16 Oct 2026; not yet on npm)
+
+Everything since the published 0.14.0 (npm `latest` for both packages, 15 Oct 2026 ~18:00 UTC),
+the 0.14.1 items below included. A changed constant and new exports, so a minor version. What an
+integrator on npm 0.14.0 gets wrong today: `checkLaunchRules` caps a launch's fee at 2%
+(`MAX_CREATOR_FEE_BPS` 200, `RULE_BOUNDS.maxRulesFeeBps` 300) where the site and the API take 5%,
+and `parseKeeperDeclaration` / `checkKeeperJson` refuse a keeper.json with `launcherShareBps`,
+`payoutTerms` or `mintWritable` ("the file has no field ...") that the Workshop takes.
+
+### Fee helpers and readers (shared and SDK)
+
+- shared `fees.ts`, re-exported by the SDK: `feeSplitOf` (creator fee + companion fee to
+  `creatorFeeBps` and the split, rounded as the launch form), `feesOfSplit` (back),
+  `launcherShareOfFees`, `scriptAuthorShare` and `claimBeneficiaryPart` (the companion's author
+  share after bordrless-programs `b91b673`: half of the launcher's part of the fee taken, capped at
+  the claim's beneficiary part), `SCRIPT_AUTHOR_SHARE_BPS`, types `LaunchFees`, `CompanionFeeParts`.
+- shared `SCRIPT_PAYOUT_OPEN` (the open payout terms, moved from the site).
+- SDK `launchFeesOf(launch, companion)`, `pairLauncherShareBps(inspection)`, `SCRIPT_APPROVER`.
+- SDK re-exports `keeperLaunchTerms`, `withLauncherShare`, `PAIR_DEFAULT_LAUNCHER_SHARE_BPS`,
+  `KEEPER_MAX_LAUNCHER_SHARE_BPS`, type `KeeperLaunchTerms`.
+- `explainProgramError`: a plain message for the companion's `NotTermsAuthority` (6094).
+- Workshop script template: vendored `bordrless-core` `MAX_CREATOR_FEE_BPS` 200 to 500 (as
+  `policy.ts`); its starter says how keeper.json `mintWritable` lets a script burn.
+
+### The companion upgrades of 15 Oct 2026 (live on mainnet)
+
+- **Payout terms after launch** (bordrless-programs `abfc783`): `set_payout_terms`, signed by the
+  launch's beneficiary (the launcher) or the script approver (`NotTermsAuthority`, 6094, otherwise),
+  replaces a script's payout terms within `create_script_v2`'s bounds; the window starts over and
+  the paid counters and the wallet-payouts flag are kept. `PayoutTermsSet` is emitted by both
+  `create_script_v2` and `set_payout_terms`. A window's cap is now `windowBps` of `max(windowPot,
+  potAfterScript + windowPaid)`, less `windowPaid`: fees arriving mid-window count, and it is never
+  below the old frozen cap.
+- **The author's share from the launcher's part only** (bordrless-programs `b91b673`, deployed 15
+  Oct 23:34 UTC): a script companion's claim pays the script's author `AUTHOR_SHARE_BPS` (half) of
+  the launcher's part of the creator fee the claim took (after the hook's SOL cut), out of that
+  part: never of the pot (the companion fee), the buyback, the holders or the hook's cut. Before it
+  the author was paid half of the whole claim, first. The bounty is taken from the whole claim;
+  `FeesClaimed.toBeneficiary` is net of the author's share, and `FeesClaimed.claimed` counts the
+  claim less it. The companion IDL's instructions, accounts and fields are unchanged by it.
+
+### In the SDK
+
+- From 0.14.1 (committed in the public repo, never published): `companion.setPayoutTerms(authority,
+  mint, { stepBps, holdingBps, windowBps, windowSecs })`; `payoutStepBudget` measures the window
+  against the live pot as above; the companion IDL with `set_payout_terms` and `NotTermsAuthority`
+  (6094).
+- Doc strings and the README: the creator fee (the launcher's part) and the companion fee (the
+  pot's part) of one on-chain fee, the site's 5% cap beside the launchpad's 10% (the launch form's rows 0 to 2% each, a
+  Workshop config's fee any quarter percent), a
+  pair's split fixed by its builder (`split_fixed`); the builders' shares (a hook's 0 to 50% of the
+  creator fee in 5% steps; a script's or a pair's half of the launcher's part, or nothing); payout
+  terms (keeper.json `payoutTerms`, the open terms a Workshop script launches with otherwise,
+  `setPayoutTerms`); keeper.json `mintWritable`; a native coin's keeper.json pays `owner`, not
+  `ownerQuoteHolding`; the companion PDA `["creator", mint]` named the companion address throughout.
+
+### In @bordrless/shared
+
+- **The fee cap is 5%** (the owner, 15 Oct 2026): `MAX_CREATOR_FEE_BPS` 200 → 500 and
+  `RULE_BOUNDS.maxRulesFeeBps` 300 → 500, the whole of each trade's fee (the creator fee and the
+  companion fee together); the launchpad's own cap (`Config.max_creator_fee_bps`) is 10%.
+  `FEE_STEP_BPS` (25: quarter-percent steps), `workshopConfigFeeOk`, `WORKSHOP_CONFIG_FEE_WORDS`.
+- **A pair's split**: `KEEPER_MAX_LAUNCHER_SHARE_BPS` (9,500: the pot keeps at least a twentieth),
+  `PAIR_DEFAULT_LAUNCHER_SHARE_BPS` (5,000, even until its builder sets it), `withLauncherShare`.
+- **Builder shares**: `WORKSHOP_AUTHOR_SHARE_STEP_BPS` (500) and `workshopAuthorShareOk(bps, kind)`
+  (a hook's any 5% step from 0 to half; a companion's or a pair's half or nothing).
+- **keeper.json** (version 1, all optional, left out of the normal form when absent or false, so a
+  declaration approved before hashes as it did): `launcherShareBps` (0 to 9,500 of the fee, the
+  launcher's, fixed for every launch), `payoutTerms` (`{ stepBps, holdingBps, windowBps, windowSecs }`
+  within the companion's bounds) and `mintWritable` (every step passes the coin's mint writable, so
+  a script can burn what it bought). `parseKeeperDeclaration` and `checkKeeperJson` take them;
+  `keeperLaunchTerms` carries `launcherShareBps` and `payoutTerms` (`KeeperLaunchTerms`);
+  `keeperDetails` says all three.
+- **Native-ready scripts**: `scriptNativeReady(files, keeper)`, `SCRIPT_NOT_NATIVE_REFUSAL`,
+  `NATIVE_NOT_READY_TEXT`; `WorkshopItem.nativeReady` and the pair's
+  `ConfigInspection.requiredCompanion.nativeReady`.
+- `HOOK_QUOTE_CUT_FLOOR_BPS` (1: a SOL cut's buy cap is above 0).
+- **Workshop API types**: `WorkshopSubmitRequest.creatorFeeBps` and `.launcherShareBps`,
+  `WorkshopConfigPrepareRequest.launcherShareBps`, `WorkshopItem.plannedFeeBps`, `.image`,
+  `.archived`, `.archivedAt`; `WorkshopArchiveRequest`, `WorkshopArchived`; `WorkshopCoin`,
+  `WorkshopCoinsResponse`, `WorkshopCoinsSort`, `WORKSHOP_COINS`; `WORKSHOP_IMAGE`; the reading's
+  card (`WorkshopReading.summary`: `WorkshopSummary`, `WorkshopSplitPart`, `WorkshopPurpose`,
+  `WORKSHOP_PURPOSES`, `WORKSHOP_PURPOSE_WORDS`).
+- Words: `scriptProblem` says the fee as the whole ("The script’s part and the rest of the fee must
+  add up to 100%.", "There is no creator fee or companion fee for the script to spend: set a
+  companion fee."); keeper.json's
+  `launcherShareBps` refusal says the pot gets at least a twentieth.
+
+## 0.14.1: payout terms after launch (committed in the public repo, never published; folded into the next release)
 
 For the companion upgrade of 15 Oct 2026 (bordrless-programs `abfc783`, deployed).
 
@@ -16,12 +104,12 @@ For the companion upgrade of 15 Oct 2026 (bordrless-programs `abfc783`, deployed
   be paid in it. Never less than before; a script computing the old cap still answers within it.
 - The companion IDL carries the instruction and `NotTermsAuthority` (6094).
 
-## Unreleased: native SOL (0.14.0)
+## 0.14.0: native SOL (published 15 Oct 2026)
 
 The off-chain side of moving Bordrless from bridged SOL (`A49oVh…`) to native SOL (bordrless-programs
-branch `native-sol`, `docs/native-sol-migration.md`; not deployed yet). Every export of 0.12.0 keeps
-its name and signature, and its behaviour on bridged pools and launches, with **one breaking change on
-native launches**:
+`4591354`, the native-sol merge, deployed to mainnet 15 Oct 2026; `docs/native-sol-migration.md`).
+Every export of 0.12.0 keeps its name and signature, and its behaviour on bridged pools and
+launches, with **one breaking change on native launches**:
 
 - **Breaking: `launch.swap` builds `swap_v2` for a native launch** (`LaunchKeys.native`, which
   `launchKeysOf` sets from a native `Launch`). The trader's wallet pays a buy in SOL and a sell
@@ -29,7 +117,8 @@ native launches**:
   launch should trade. Code that wraps SOL before `launch.swap` now leaves that bridged SOL unspent
   (no loss), and `router.swap(…, launch.swap(…))` throws for a native launch: use `router.swapV2`.
   **Escape hatch:** `launch.swapClassic` builds the classic `swap` with bridged SOL in holdings
-  whatever the launch's form. `docs/integration/04-trading.md` has the detail.
+  whatever the launch's form. `docs/native-sol-integrators.md` (`docs/integration/04-trading.md` in
+  the public repo) has the detail.
 
 Held coins (a companion whose Workshop script is not native-ready: its pool native, the rest bridged):
 `swap.bufferAll` (the DEX's `buffer_all`, sent before a held coin's step with `rebalance_pool` after
@@ -40,7 +129,7 @@ After the native-SOL audit (bordrless-programs `docs/native-sol-audit.md`):
 
 - `launch.swapV2` passes the bridge's accounts by default only when the launch is not native
   (`!keys.native`: a held or half-migrated coin), so native trades no longer write-lock the
-  bridge's global SOL accounts. `withBridge` still overrides.
+  bridge's global SOL accounts (O-1). `withBridge` still overrides.
 - `swap.swap` (classic) and the liquidity builders pass the trader / provider writable: on a native
   pool what the buffer can't cover of an old-path sell or a withdrawal is paid to it in SOL.
 - `swap.migratePoolToNative(admin, pool, target, allowForeignHook = false)` (the DEX refuses a
@@ -103,6 +192,7 @@ After the re-audit (bordrless-programs `docs/native-sol-reaudit.md`):
   `launchCreatorFeesOf`/`fetchLaunchCreatorFees`, `kitRewardVaultOf`/`fetchKitRewardVault`,
   `companionSolOf`/`fetchCompanionSol`, `vaultSlotSolOf`/`fetchVaultSlotsSol`,
   `rentExemptMinimum`, `NATIVE_POOL_FILTERS`.
+
 ## 0.13.0 (15 Oct 2026)
 
 - The companion's fee claim tells the hook's SOL cut apart (companion upgraded on mainnet 15 Oct):

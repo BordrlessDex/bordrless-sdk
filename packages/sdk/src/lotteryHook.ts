@@ -44,7 +44,7 @@ export const lotteryHook = {
    * `enter` for `owner`'s holding of `mint`: registers its whole balance for the current round when
    * it has not been written this round. Nobody signs; whoever pays the fee sends it. It changes
    * nothing for a holding written this round already or empty, and is refused for an owner that
-   * can't hold tickets (the launch, its pool, the companion's creator address, a program's account).
+   * can't hold tickets (the launch, its pool, the companion address, a program's account).
    */
   enter(mint: PublicKey, owner: PublicKey): TransactionInstruction {
     return build('enter', {}, [rw(a.lotteryStateAddress(mint)), ro(mint), rw(a.holdingAddress(mint, owner)), ro(a.LOTTERY_HOOK_AUTHORITY), ro(a.TOKEN_PROGRAM), ro(a.TOKEN_EVENT_AUTHORITY)]);
@@ -64,7 +64,7 @@ export interface LotteryState {
   launch: PublicKey;
   /** The launch pool, remembered from the launch account on the first transfer after the launch (the default key until then). */
   pool: PublicKey;
-  /** The companion's creator address: never holds tickets. */
+  /** The companion address: never holds tickets. */
   creator: PublicKey;
   preparedBy: PublicKey;
   preparedAt: number;

@@ -8,7 +8,8 @@
  * for a mint (its registry at `["bordrless-hook-accounts", mint]`). Every problem is one plain
  * sentence, the same the launch form shows. And the one-call way to make a config: a fresh keypair,
  * the instruction, and the key to paste (`buildCreateConfig`; `buildCreateListedConfig` for a listed
- * one, which pays its author half the creator fee of every launch someone else makes from it).
+ * one, which pays its author a share of the creator fee, up to half, of every launch someone else
+ * makes from it).
  */
 import { Keypair, PublicKey, type AccountInfo, type Connection, type TransactionInstruction } from '@solana/web3.js';
 import { HOOK_AUTHORITY_PROBLEM, HOOK_UPGRADE_AUTHORITIES, PROGRAM_IDS, TOKEN_HOOK_FLAGS_ALL, checkLaunchRules, hookAuthorityAccepted, kitModules, type LaunchRulesInput } from '@bordrless/shared';
@@ -284,9 +285,10 @@ export function buildCreateConfig(creator: PublicKey, args: CreateConfigArgs, ke
 
 /**
  * A listed `LaunchConfig` to create (`create_listed_config`), as `buildCreateConfig` plus the
- * author's share: `authorShareBps` (1 to `MAX_AUTHOR_SHARE_BPS`, 5,000; the Workshop lists at
- * exactly `AUTHOR_SHARE_BPS`, half) of the creator fee of every launch someone else makes from it,
- * paid to `creator` by every fee claim, fixed for ever. A listed config cannot launch through a
+ * author's share: `authorShareBps` (1 to `MAX_AUTHOR_SHARE_BPS`, 5,000) of the creator fee of every
+ * launch someone else makes from it, paid to `creator` by every fee claim, fixed for ever. A
+ * Workshop hook's builder chooses it in 5% steps up to `AUTHOR_SHARE_BPS`, half
+ * (`workshopAuthorShareOk` in @bordrless/shared); one who takes nothing gets a plain config. A listed config cannot launch through a
  * companion (the companion program requires no author share: a pair's config is a plain one).
  */
 export function buildCreateListedConfig(creator: PublicKey, args: CreateConfigArgs, authorShareBps: number, keypair: Keypair = Keypair.generate()): BuiltConfig {

@@ -49,8 +49,14 @@ export const LAUNCH_PROTOCOL_SHARE_BPS = 2_500;
 export const MAX_PROTOCOL_SHARE_BPS = 10_000;
 /** The largest flat protocol fee the DEX config may set (`bordrless_swap::constants::MAX_PROTOCOL_FEE_BPS`): 10% of the quote side. */
 export const MAX_PROTOCOL_FEE_BPS = 1_000;
-/** Largest creator fee a launch may choose. */
-export const MAX_CREATOR_FEE_BPS = 200;
+/**
+ * Largest fee a launch on the site may charge on each trade, the creator fee and the companion fee
+ * together (the owner, 2026-10-15: 5%, was 2%; the default on the forms 1%; the launch form's rows
+ * offer `CREATOR_FEE_CHOICES_BPS`, a Workshop config's fee any `FEE_STEP_BPS` step). This is the site's and the API's limit. The launchpad's own cap on chain
+ * (`Config.max_creator_fee_bps`, set by `pnpm admin creator-fee-cap <bps>`) is 10%: a launch or a
+ * config above the chain's is refused by it, one above this by the API.
+ */
+export const MAX_CREATOR_FEE_BPS = 500;
 /** The creator fee choices offered on the launch form. */
 export const CREATOR_FEE_CHOICES_BPS = [0, 50, 100, 200] as const;
 /** Seconds after creation during which the LP fee is elevated against snipers. */
@@ -353,7 +359,7 @@ export interface RuleBounds {
 export const RULE_BOUNDS: Readonly<RuleBounds> = {
   maxHolderFeeBps: 200,
   maxBurnBps: 100,
-  maxRulesFeeBps: 300,
+  maxRulesFeeBps: 500,
   minMaxWalletBps: 100,
   maxMaxWalletBps: 500,
   maxCreatorLockSecs: 90 * DAY_SECS,
@@ -489,9 +495,13 @@ export const COMPANION_SPLITS: Readonly<Record<CompanionTemplate, Readonly<Compa
 /** The templates in the order the launch form offers them. */
 export const COMPANION_TEMPLATE_LIST: readonly CompanionTemplate[] = ['buysItself', 'rugProofDev', 'buybackAndReward'];
 
-/** How long the launcher's first buy vests over, as the launch form offers it (days), and the default (the backend's too). */
+/**
+ * How long the launcher's first buy vests over when they turn a vest on, as the launch form offers it
+ * (days), and the default: none (the owner, 2026-10-15: a first buy is the launcher's at launch, on
+ * every kind of companion; it vests only when they choose it). The backend's default too.
+ */
 export const COMPANION_VEST_CHOICES_DAYS = [7, 30, 90] as const;
-export const COMPANION_DEFAULT_VEST_DAYS = 30;
+export const COMPANION_DEFAULT_VEST_DAYS = 0;
 
 /** The longest a first buy may vest over, days (the program's limit is a year). */
 export const COMPANION_MAX_VEST_DAYS = 365;
@@ -754,7 +764,7 @@ export function companionRequestSplit(raw: unknown): CompanionSplitBps | null {
 export function companionSplitProblem(split: CompanionSplitBps, rules: Pick<LaunchRulesInput, 'holderFeeBuyBps' | 'holderFeeSellBps' | 'creatorLockDays'>, creatorFeeBps: number): string | null {
   if (![split.buybackBps, split.holdersBps, split.beneficiaryBps].every(isShare)) return 'Each share of the creator fee is a whole number of basis points, 0 to 10,000.';
   if (split.buybackBps + split.holdersBps + split.beneficiaryBps !== 10_000) return 'The creator fee’s shares must add up to 100% (10,000 basis points).';
-  if (rules.creatorLockDays > 0) return 'A creator fee run by a program can’t come with the creator wallet lock: the program vests your first buy instead.';
+  if (rules.creatorLockDays > 0) return 'A creator fee run by a program can’t come with the creator wallet lock.';
   if (creatorFeeBps === 0) return 'There is no creator fee for a program to run: set one.';
   if (splitPaysHolders(split) && !rewardsOn(rules)) return 'A share of the creator fee for holders needs holder rewards on.';
   return null;
@@ -805,7 +815,7 @@ export function snowballProblem(s: SnowballRequest, split: CompanionSplitBps, ru
   if (!within(s.buyBps, B.minSizeBps, B.maxSizeBps) || !within(s.sellBps, B.minSizeBps, B.maxSizeBps)) return 'Each trade uses 1% to 100% of its SOL or its tokens.';
   if (!within(s.poolBps, B.minPoolBps, B.maxPoolBps)) return 'A trade can be up to 0.25% to 10% of the pool.';
   if (!within(s.interval, B.minInterval, B.maxInterval)) return 'Trades are 10 seconds to a day apart.';
-  if (rules.creatorLockDays > 0) return 'A creator fee run by a program can’t come with the creator wallet lock: the program vests your first buy instead.';
+  if (rules.creatorLockDays > 0) return 'A creator fee run by a program can’t come with the creator wallet lock.';
   if (creatorFeeBps === 0) return 'There is no creator fee to fill the market maker with: set one.';
   if (splitPaysHolders(split) && !rewardsOn(rules)) return 'A share of the creator fee for holders needs holder rewards on.';
   return null;
@@ -853,6 +863,9 @@ export function scriptRequestOf(companion: unknown): ScriptRequest | null | 'mal
 /** The companion program's bounds on payout terms (`PayoutTermsArgs::valid`): each share 1 to 10,000 basis points, the window 10 seconds to a day. */
 export const PAYOUT_TERMS_BOUNDS = { minWindowSecs: 10, maxWindowSecs: 86_400 } as const;
 
+/** A Workshop script's open payout terms (`create_script_v2` / `set_payout_terms`): none of the three limits binds (a step may pay the whole pot, one wallet all of a step, a window all of the pot); the window the shortest the program takes. What the site launches a script with when its keeper.json declares no `payoutTerms`. */
+export const SCRIPT_PAYOUT_OPEN: Readonly<PayoutTermsRequest> = { stepBps: 10_000, holdingBps: 10_000, windowBps: 10_000, windowSecs: PAYOUT_TERMS_BOUNDS.minWindowSecs };
+
 /** A script's payout terms as a request names them (`script.payout`); null without them; `'malformed'` when they are there and not four whole numbers. */
 function payoutTermsRequestOf(raw: unknown): PayoutTermsRequest | null | 'malformed' {
   if (raw === undefined || raw === null) return null;
@@ -872,20 +885,21 @@ export function payoutTermsWithin(t: PayoutTermsRequest): boolean {
  * Why a custom companion with this split can't run these rules at this fee, in the words the launch
  * form and the backend use (`companion_rules`); null when it can: the pot's part with the split adds
  * up to 10,000, the interval, the init data and the state are within the program's bounds, and what
- * any companion needs (`companionSplitProblem`'s rules). Whether the script is approved is the
- * backend's to check (`script_not_approved`).
+ * any companion needs (`companionSplitProblem`'s rules). `creatorFeeBps` is the launch's whole fee
+ * on each trade (the creator fee and the companion fee together); the split and `potBps` divide it.
+ * Whether the script is approved is the backend's to check (`script_not_approved`).
  */
 export function scriptProblem(s: ScriptRequest, split: CompanionSplitBps, rules: Pick<LaunchRulesInput, 'holderFeeBuyBps' | 'holderFeeSellBps' | 'creatorLockDays'>, creatorFeeBps: number): string | null {
   const B = SCRIPT_BOUNDS;
-  if (!(s.potBps > 0) || split.buybackBps + split.holdersBps + split.beneficiaryBps + s.potBps !== 10_000) return 'The script’s part and the rest of the creator fee must add up to 100%.';
+  if (!(s.potBps > 0) || split.buybackBps + split.holdersBps + split.beneficiaryBps + s.potBps !== 10_000) return 'The script’s part and the rest of the fee must add up to 100%.';
   if (!Number.isInteger(s.interval) || s.interval < B.minInterval || s.interval > B.maxInterval) return 'Steps are 10 seconds to a day apart.';
   const initLen = scriptInitDataLength(s.initData);
   if (initLen === null) return 'The script’s init data is hex or base64.';
   if (initLen > B.maxInitLen) return `The script’s init data is at most ${B.maxInitLen} bytes.`;
   if (!Number.isInteger(s.stateLen) || s.stateLen < 0 || s.stateLen > B.maxStateLen) return `The script’s state is 0 to ${B.maxStateLen.toLocaleString('en-US')} bytes.`;
   if (s.payout && !payoutTermsWithin(s.payout)) return 'The script’s payout limits are each 0.01% to 100%, over a window of 10 seconds to a day.';
-  if (rules.creatorLockDays > 0) return 'A creator fee run by a program can’t come with the creator wallet lock: the program vests your first buy instead.';
-  if (creatorFeeBps === 0) return 'There is no creator fee for the script to spend: set one.';
+  if (rules.creatorLockDays > 0) return 'A creator fee run by a program can’t come with the creator wallet lock.';
+  if (creatorFeeBps === 0) return 'There is no creator fee or companion fee for the script to spend: set a companion fee.';
   if (splitPaysHolders(split) && !rewardsOn(rules)) return 'A share of the creator fee for holders needs holder rewards on.';
   return null;
 }
@@ -922,7 +936,7 @@ export const payeesLeaveBps = (payees: readonly Pick<PayeeRequest, 'bps'>[]): nu
  * Why `set_payees` would refuse these payees (`BadPayees`), in the words the launch form and the
  * backend use (`companion_rules`); null when it would take them: 1 to 10 wallets, each named once,
  * each 0.01% to 100% of the launcher's part and 100% in all at most; none the default key, the
- * launcher (`beneficiary`) or one of `reserved` (the companion and its creator address, which the
+ * launcher (`beneficiary`) or one of `reserved` (the companion and its companion address, which the
  * backend derives for the mint). A split with no part for the launcher has nothing to share.
  */
 export function payeesProblem(payees: readonly PayeeRequest[], split: Pick<CompanionSplitBps, 'beneficiaryBps'>, beneficiary: string, reserved: readonly string[] = []): string | null {
@@ -962,7 +976,7 @@ export function walletPayoutsProblem(allow: boolean, script: Pick<ScriptRequest,
  * at most 1% of the supply, a loss of at least 0.0001 SOL, a wait of at most a day). The keeper's
  * batches (`batchPaying`, `batchMeasuring`) are what one step carries within the runtime's
  * instruction trace, measured by the programs' `loss_cover_vectors` (a measuring step carries one
- * fewer on a coin's first step, when the creator's holding is made on the way).
+ * fewer on a coin's first step, when the companion address's holding is made on the way).
  */
 export const LOSS_COVER_LIMITS = {
   minRoundSecs: 60,
@@ -989,8 +1003,8 @@ export const LOSS_COVER_LIMITS = {
  * the whole pot available to each step, each holding and each round, the whole loss covered when
  * the pot can, a holding of 100,000 tokens (6 decimals: base units) and a loss of 0.001 SOL at
  * least, a minute after its last buy (the owner, 2026-10-12; the first coin, LIFEVEST, was made with
- * half an hour, fixed in its script state), a round only once the pot holds 1 SOL, the hook's whole
- * fee row to the pot (the launcher's row 0: `potBps` is 10,000 less the launcher's part). The
+ * half an hour, fixed in its script state), a round only once the pot holds 1 SOL, the whole
+ * companion fee to the pot (`potBps` is 10,000 less the launcher's part, the creator fee). The
  * launcher sets `roundSecs`, `minPotLamports`, `coverBps` and `minHolding` (`LossCoverRequest`);
  * the rest is fixed here. There is no cooldown: a holding is measured or paid once a round.
  */
@@ -1042,7 +1056,7 @@ export function lossCoverTermsOf(s: LossCoverRequest): LossCoverTerms {
   return { roundSecs: s.roundSecs, stepSecs: D.stepSecs, stepBps: D.stepBps, holdingBps: D.holdingBps, roundBps: D.roundBps, coverBps: s.coverBps, minHolding: s.minHolding, minLossLamports: D.minLossLamports, minAgeSecs: D.minAgeSecs, minPotLamports: s.minPotLamports };
 }
 
-/** The pot's part of every fee claim for a Lossback coin: what the launcher's part of the split leaves (the hook's whole fee row). */
+/** The pot's part of every fee claim for a Lossback coin: what the launcher's part of the split leaves (the companion fee). */
 export const lossCoverPotBps = (split: CompanionSplitBps): number => 10_000 - split.buybackBps - split.holdersBps - split.beneficiaryBps;
 
 /**

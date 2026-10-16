@@ -5,8 +5,10 @@
  * assistant that knows the Bordrless programs; has it reviewed; pays the rent for Bordrless to build
  * and deploy the hook (Bordrless keeps its upgrade authority: the creator never holds it); makes the
  * config; and may list it on the marketplace, where every launch someone else makes from it pays
- * them half its creator fee, if it has one (`AUTHOR_SHARE_BPS`, `create_listed_config`,
- * docs/hooks-v2.md §5.7). That half is all a creator gets from listing.
+ * them a share of its creator fee, if it has one (`create_listed_config`, docs/hooks-v2.md §5.7):
+ * Studio lists at `AUTHOR_SHARE_BPS`, half; a Workshop hook's builder chooses 0 to 50% in 5% steps
+ * (`WORKSHOP_AUTHOR_SHARE_STEP_BPS`, `workshopAuthorShareOk`). That share is all a creator gets from
+ * listing.
  *
  * A Studio hook is written against one template (`STUDIO_TEMPLATE`): an Anchor program with a fixed
  * `Cargo.toml` and the standard `prepare` (`STUDIO_PREPARE`), so the site can prepare any Studio hook
@@ -602,10 +604,13 @@ export const MAX_AUTHOR_SHARE_BPS = 5_000;
 /**
  * The only share Studio lists with: a listed config's author gets half the creator fee of every
  * launch someone else makes from it (nothing when the config has no creator fee). It is not the
- * author's to choose. A config listed straight through the SDK may carry less, so the marketplace
- * always shows the share that is on chain. A Workshop builder may take nothing instead
- * (`WORKSHOP_AUTHOR_SHARES_BPS`): its config is then made with `create_config` (author share 0) and
- * still shown on the marketplace, with 0% to its builder.
+ * author's to choose in Studio. A config listed straight through the SDK may carry less, so the
+ * marketplace always shows the share that is on chain. A Workshop hook's builder chooses any 5% step
+ * from nothing to this half (`WORKSHOP_AUTHOR_SHARE_STEP_BPS`, `workshopAuthorShareOk`; 16 Oct 2026);
+ * nothing makes its config with `create_config` (author share 0), still shown on the marketplace with
+ * 0% to its builder. A companion's or a pair's builder takes this half or nothing
+ * (`WORKSHOP_AUTHOR_SHARES_BPS`), paid by the companion program out of the launcher's part of the
+ * creator fee, never of the pot.
  */
 export const AUTHOR_SHARE_BPS = 5_000;
 

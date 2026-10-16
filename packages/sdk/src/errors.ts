@@ -127,6 +127,7 @@ const EXPLANATIONS: Partial<Record<ProgramName, Readonly<Record<string, string>>
     VaultStillNative: 'Revert the coin’s hook vault to bridged first: the launch reverts after it.',
   },
   companion: {
+    NotTermsAuthority: 'Only the launch’s launcher (its beneficiary) or the script approver can change a script’s payout terms.',
     PotTooSmall: 'The pot is below the game’s minimum: the draw waits for more fees.',
     RoundNotOver: 'Only the round that just ended can be drawn, once.',
     DrawPending: 'A draw is in progress, or (retire) a jackpot round or streak epoch the pot can pay is still to be settled or closed.',

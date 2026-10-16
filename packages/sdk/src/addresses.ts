@@ -240,7 +240,7 @@ export const PAYOUT_AUTHORITY = pda([enc('payout-authority')], COMPANION_PROGRAM
 export const gameAddress = (mint: PublicKey): PublicKey => pda([enc('game'), mint.toBuffer()], COMPANION_PROGRAM);
 /** What the protocol says of a game hook (audited, pot cap, blocked): `PDA(["hook-status", hook])` under the companion. It need not exist. */
 export const hookStatusAddress = (hook: PublicKey): PublicKey => cached(`hs:${hook.toBase58()}`, () => pda([enc('hook-status'), hook.toBuffer()], COMPANION_PROGRAM));
-/** The payer of a game's oracle requests: `PDA(["oracle", mint])` under the companion, system-owned (ORAO's refunds land there, never with the creator address). */
+/** The payer of a game's oracle requests: `PDA(["oracle", mint])` under the companion, system-owned (ORAO's refunds land there, never with the companion address). */
 export const oraclePayerAddress = (mint: PublicKey): PublicKey => pda([enc('oracle'), mint.toBuffer()], COMPANION_PROGRAM);
 /** The companion's ProgramData: its upgrade authority (the protocol's) writes hook statuses. */
 export const COMPANION_PROGRAM_DATA = programDataAddress(COMPANION_PROGRAM);

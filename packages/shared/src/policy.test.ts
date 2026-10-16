@@ -231,7 +231,7 @@ const FAIR: LaunchRulesInput = { ...NO_RULES, holderFeeBuyBps: 50, holderFeeSell
 
 describe('v2 token rules: bounds, choices and presets', () => {
   it('holds the bounds and ceilings of §5.2', () => {
-    expect(RULE_BOUNDS).toEqual({ maxHolderFeeBps: 200, maxBurnBps: 100, maxRulesFeeBps: 300, minMaxWalletBps: 100, maxMaxWalletBps: 500, maxCreatorLockSecs: 90 * 86_400, maxEarlyWindowSecs: 300, maxEarlyLockSecs: 7 * 86_400 });
+    expect(RULE_BOUNDS).toEqual({ maxHolderFeeBps: 200, maxBurnBps: 100, maxRulesFeeBps: 500, minMaxWalletBps: 100, maxMaxWalletBps: 500, maxCreatorLockSecs: 90 * 86_400, maxEarlyWindowSecs: 300, maxEarlyLockSecs: 7 * 86_400 });
     expect(RULE_CEILINGS).toEqual({ maxHolderFeeBps: 500, maxBurnBps: 500, maxRulesFeeBps: 1_000, minMaxWalletBps: 1, maxMaxWalletBps: 9_999, maxCreatorLockSecs: 365 * 86_400, maxEarlyWindowSecs: 3_600, maxEarlyLockSecs: 30 * 86_400 });
     for (const key of Object.keys(RULE_BOUNDS) as (keyof RuleBounds)[]) {
       if (key === 'minMaxWalletBps') expect(RULE_BOUNDS[key] >= RULE_CEILINGS[key]).toBe(true);
@@ -326,8 +326,10 @@ describe('v2 token rules: bounds, choices and presets', () => {
     expect(checkLaunchRules(r({ burnSellBps: 101 }), 0)).toBe('Burn can be at most 1% per side.');
     // Creator + holders + burn per side, at the limit and one step over.
     expect(checkLaunchRules(r({ holderFeeSellBps: 200, burnSellBps: 50 }), 50)).toBeNull();
-    expect(checkLaunchRules(r({ holderFeeSellBps: 200, burnSellBps: 100 }), 50)).toBe('Creator fee, holder rewards and burn add up to 3.5% on sells; the most is 3%.');
-    expect(checkLaunchRules(r({ holderFeeBuyBps: 200 }), 200)).toBe('Creator fee, holder rewards and burn add up to 4% on buys; the most is 3%.');
+    // The bound is 5% a side since the creator fee's cap rose to 5% (2026-10-15).
+    expect(checkLaunchRules(r({ holderFeeSellBps: 200, burnSellBps: 100 }), 200)).toBeNull();
+    expect(checkLaunchRules(r({ holderFeeSellBps: 200, burnSellBps: 100 }), 250)).toBe('Creator fee, holder rewards and burn add up to 5.5% on sells; the most is 5%.');
+    expect(checkLaunchRules(r({ holderFeeBuyBps: 200 }), 350)).toBe('Creator fee, holder rewards and burn add up to 5.5% on buys; the most is 5%.');
     expect(checkLaunchRules(r({ maxWalletBps: 99 }), 0)).toBe('Max wallet must be off or between 1% and 5%.');
     expect(checkLaunchRules(r({ maxWalletBps: 501 }), 0)).toBe('Max wallet must be off or between 1% and 5%.');
     expect(checkLaunchRules(r({ maxWalletBps: 500 }), 0)).toBeNull();
@@ -1085,7 +1087,9 @@ describe('companion templates', () => {
     expect(COMPANION_TEMPLATE_LIST.filter(companionPaysHolders)).toEqual(['rugProofDev', 'buybackAndReward']);
     // The token that buys itself has no dev at all: no first buy.
     expect(COMPANION_TEMPLATE_LIST.filter(companionTakesFirstBuy)).toEqual(['rugProofDev', 'buybackAndReward']);
-    expect(COMPANION_VEST_CHOICES_DAYS).toContain(COMPANION_DEFAULT_VEST_DAYS);
+    // No vest by default (the owner, 2026-10-15): the first buy is the launcher's at launch; the choices are for a vest they turn on.
+    expect(COMPANION_DEFAULT_VEST_DAYS).toBe(0);
+    expect(COMPANION_VEST_CHOICES_DAYS.every((d) => d > 0)).toBe(true);
   });
 
   it('names the template of a split, and none for any other', () => {

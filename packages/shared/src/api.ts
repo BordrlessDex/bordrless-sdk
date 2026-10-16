@@ -356,6 +356,8 @@ export type RequiredCompanion =
       verdict?: 'pass' | 'warn' | 'fail' | null;
       /** What a launch with the pair's script takes from its keeper.json (`WorkshopItem.keeper`): how often a step runs, whether it pays wallets. Absent for a preset and from older servers. */
       keeper?: KeeperLaunchTerms | null;
+      /** Whether the pair's script is ready for native-SOL coins (`WorkshopItem.nativeReady`): false holds the config off new coins. Absent from older servers. */
+      nativeReady?: boolean | null;
     };
 
 /** Live figures of a launch's token rules; each null when the launch lacks the rule or it is not tracked. */
@@ -755,8 +757,8 @@ export interface LaunchPrepareRequest {
    * launch's creator is then a program, a companion, that buys the token back and burns it,
    * streams to holders or pays the launcher, by `split` (basis points summing to 10,000), with no
    * keeper. A `template` names one of the three preset splits (kept for older clients). The
-   * launcher is the beneficiary; a first buy is then the companion's, vesting to them over
-   * `vestDays` (0 to 365, default 30). Refused (`companion_rules`) with the creator wallet lock, a
+   * launcher is the beneficiary; a first buy is then the companion's, handed to them with the launch
+   * (`vestDays` 0, the default) or vesting to them over `vestDays` (1 to 365) when they chose a vest. Refused (`companion_rules`) with the creator wallet lock, a
    * launch config (listed or not, with or without a hook), no creator fee, a share for holders
    * without holder rewards, or a split that doesn't add up.
    */
@@ -775,7 +777,7 @@ export type CompanionRequest = ({ split: CompanionSplitBps; vestDays?: number; g
  * before the launch, the mint signing:
  * - `payees`: up to 10 wallets that share the launcher's part of the creator fee (the split's
  *   `beneficiaryBps`), each a fixed share of that part (1 to 10,000 basis points, 10,000 in all at
- *   most); the launcher keeps the rest. Not the launcher, the companion or its creator address, each
+ *   most); the launcher keeps the rest. Not the launcher, the companion or its companion address, each
  *   named once. Bounds: `payeesProblem`. The setup carries `set_payees`, in its own transaction when
  *   the setup leaves no room (a Lossback or custom hook's setup).
  * - `allowWalletPayouts`: a custom hook's script with payout terms (`script.payout`, made with
@@ -940,7 +942,9 @@ export interface ScriptRequest {
  * A script's payout terms as a launch request names them (the companion's `PayoutTerms`, made by
  * `create_script_v2`): the most one step pays (`stepBps` of the pot at the step's start), the most
  * one holding or wallet gets of a step's budget (`holdingBps`), and the most a window pays
- * (`windowBps` of the pot at the window's first step), the window `windowSecs` long (10 s to a day).
+ * (`windowBps` of `max(windowPot, potAfterScript + windowPaid)`, less what the window has paid,
+ * since the companion upgrade of 15 Oct 2026), the window `windowSecs` long (10 s to a day). The
+ * launch's beneficiary or the script approver may replace them after the launch (`set_payout_terms`).
  */
 export interface PayoutTermsRequest {
   stepBps: number;
@@ -955,7 +959,7 @@ export interface ScriptSummary {
   address: Address;
   /** The script program (a Workshop companion item's, deployed under Bordrless's key). */
   program: Address;
-  /** Its author, paid half of what every fee claim takes from the launch; null when none (or the author launched it themselves: no extra share). */
+  /** Its author, paid half of the launcher's part of the creator fee every claim takes from the launch, out of that part (never of the pot; since the companion upgrade of 15 Oct 2026); null when none (or the author launched it themselves: no extra share). */
   author: Address | null;
   /** The least time between steps, seconds. */
   interval: number;

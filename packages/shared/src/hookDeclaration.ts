@@ -42,6 +42,9 @@ export const HOOK_DECLARATION_LIMITS = {
   maxCutBps: 1_000,
 } as const;
 
+/** The least a SOL cut's buy cap may be, bps: the launchpad asks the hook on every buy, so the cap is above 0 (the hook may still answer 0). */
+export const HOOK_QUOTE_CUT_FLOOR_BPS = 1;
+
 /** The caps of a hook's SOL cut, bps of a buy's SOL in and a sell's SOL out: the SDK's `QuoteCutCaps`, as `create_quote_cut_config` takes them. */
 export interface HookQuoteCut {
   maxBuyBps: number;
@@ -90,7 +93,7 @@ export function hookDeclarationOf(value: unknown): HookDeclarationParse {
     if (q.maxBuyBps === undefined) fail('quoteCut.maxBuyBps is required: the most of a buy’s SOL the hook may take.');
     if (q.maxSellBps === undefined) fail('quoteCut.maxSellBps is required: the most of a sell’s SOL the hook may take (0 for none).');
     // The launchpad asks the hook on every buy (it may answer 0 there): a config's buy cap is above 0 (`QuoteCut::valid`).
-    const maxBuyBps = capOf(q.maxBuyBps, 'quoteCut.maxBuyBps', 1, 'the launchpad asks the hook on every buy, so the buy cap is above 0 (the hook may still answer 0)');
+    const maxBuyBps = capOf(q.maxBuyBps, 'quoteCut.maxBuyBps', HOOK_QUOTE_CUT_FLOOR_BPS, 'the launchpad asks the hook on every buy, so the buy cap is above 0 (the hook may still answer 0)');
     const maxSellBps = capOf(q.maxSellBps, 'quoteCut.maxSellBps', 0, '0 and the launchpad never asks the hook on sells');
     return { ok: true, declaration: { version: 1, quoteCut: { maxBuyBps, maxSellBps } } };
   } catch (error) {

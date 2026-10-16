@@ -203,7 +203,10 @@ describe.skipIf(STALE)('launch-fees.json: the TypeScript mirror computes exactly
     expect([big(c.bps), big(c.scale), big(c.tokenSupply), big(c.minEligible)]).toEqual([BPS, SCALE, TOKEN_SUPPLY, MIN_ELIGIBLE]);
     expect([c.lpFeeBps, c.protocolFeeBps, c.launchProtocolShareBps, c.shareStreamSecs]).toEqual([LP_FEE_BPS, PROTOCOL_FEE_BPS, LAUNCH_PROTOCOL_SHARE_BPS, SHARE_STREAM_SECS]);
     expect([big(c.minLaunchSupply), big(c.maxLaunchSupply), big(c.minShareLamports)]).toEqual([MIN_LAUNCH_SUPPLY, MAX_LAUNCH_SUPPLY, MIN_SHARE_LAMPORTS]);
-    expect(c.ruleBounds).toEqual(RULE_BOUNDS);
+    // The site's per-side bound (creator fee, holder rewards and burn together) is 5% since the creator fee's cap rose to 5% (the owner,
+    // 2026-10-15): above the core's init default the vectors carry (3%), below what the launchpad's config was set to on 13 Oct (10%).
+    expect({ ...RULE_BOUNDS, maxRulesFeeBps: c.ruleBounds.maxRulesFeeBps }).toEqual(c.ruleBounds);
+    expect(RULE_BOUNDS.maxRulesFeeBps).toBe(500);
     expect(c.ruleCeilings).toEqual(RULE_CEILINGS);
   });
 

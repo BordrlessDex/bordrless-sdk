@@ -7,3 +7,4 @@ export * from './programs.ts';
 export * from './rules.ts';
 export * from './studio.ts';
 export * from './workshop.ts';
+export * from './fees.ts';

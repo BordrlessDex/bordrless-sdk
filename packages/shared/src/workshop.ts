@@ -39,8 +39,9 @@
  * while the code on chain stays that build. Nothing is deployed, no key of Bordrless's is involved,
  * no author share, nothing on the Workshop's shelves; the item's page is public once matched.
  */
-import type { Address, Amount, PreparedTx } from './api.ts';
-import type { KeeperLaunchTerms } from './keeper.ts';
+import type { Address, Amount, LaunchStatus, PreparedTx } from './api.ts';
+import type { KeeperDeclaration, KeeperLaunchTerms } from './keeper.ts';
+import { MAX_CREATOR_FEE_BPS } from './policy.ts';
 import { AUTHOR_SHARE_BPS, type StudioFile, type StudioSimQuoteCut } from './studio.ts';
 
 export type WorkshopKind = 'hook' | 'companion' | 'pair';
@@ -112,11 +113,17 @@ export const WORKSHOP_LIMITS = {
   bytes: 120_000,
   /** The name, in characters. */
   name: 32,
-  /** The builder's own words. */
-  notes: 600,
+  /** The builder's own words, in characters: no limit a builder writing about their item meets (the owner, 16 Oct 2026: no word limit; the forms show no count), only a guard against pasted junk. */
+  notes: 5_000,
   /** Submissions one wallet may make in a day. */
   perDay: 6,
 } as const;
+
+/** An item's picture (`POST /v1/workshop/:id/image`): the most bytes and the image types taken. */
+export const WORKSHOP_IMAGE = { maxBytes: 4 * 1024 * 1024, types: ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] } as const;
+
+/** Why an approved item is off the Workshop: its builder archived it, or its script waits on a native-SOL update (`nativeReady` false). */
+export type WorkshopArchived = 'builder' | 'native';
 
 /** A submission's file path: a Rust source under src/, lower-case names (the builder's rule). */
 export const WORKSHOP_PATH = /^src\/[a-z0-9_]+(\/[a-z0-9_]+)*\.rs$/;
@@ -127,7 +134,25 @@ export const workshopPathOk = (path: string): boolean => WORKSHOP_PATH.test(path
  * and detail at most `findingTitle` and `findingDetail` characters; `rules` the most rules it keeps,
  * each condition and line at most `ruleWhen` and `ruleText` characters.
  */
-export const WORKSHOP_READING_LIMITS = { title: 48, does: 160, totalText: 80, description: 600, watch: 5, watchText: 140, findings: 12, findingTitle: 120, findingDetail: 400, rules: 8, ruleWhen: 60, ruleText: 100 } as const;
+export const WORKSHOP_READING_LIMITS = { title: 48, does: 220, totalText: 80, description: 600, watch: 5, watchText: 140, findings: 12, findingTitle: 120, findingDetail: 400, rules: 8, ruleWhen: 60, ruleText: 100, summaryText: 340, splitParts: 6, splitLabel: 24 } as const;
+
+/**
+ * What a share of the money a hook or companion collects goes to (the owner, 15 Oct 2026: "where it
+ * goes as in what that % contributes to", a word or two per purpose): bought back and burned, burned
+ * outright, paid to holders, the coin's launcher, the hook's builder, kept in the pot for later,
+ * locked for ever, or something else named by its label.
+ */
+export type WorkshopPurpose = 'buybacks' | 'burn' | 'holders' | 'launcher' | 'builder' | 'pot' | 'locked' | 'other';
+export const WORKSHOP_PURPOSES: readonly WorkshopPurpose[] = ['buybacks', 'burn', 'holders', 'launcher', 'builder', 'pot', 'locked', 'other'];
+/** A purpose in the card's words. */
+export const WORKSHOP_PURPOSE_WORDS: Readonly<Record<WorkshopPurpose, string>> = { buybacks: 'Buybacks & burns', burn: 'Burned', holders: 'Holders', launcher: 'The launcher', builder: 'The builder', pot: 'Kept in the pot', locked: 'Locked for ever', other: 'Other' };
+
+/** One share of what a hook or companion collects: its purpose, its share in basis points of the whole (the parts sum to 10,000), and for `other` a few words. */
+export interface WorkshopSplitPart {
+  to: WorkshopPurpose;
+  bps: number;
+  label?: string;
+}
 
 export type WorkshopWatchSeverity = 'high' | 'medium' | 'low';
 
@@ -161,11 +186,31 @@ export interface WorkshopReadingRule {
 }
 
 /**
+ * The reading in the one shape every card shows (the owner, 15 Oct 2026: "how much is taken on buys,
+ * how much on sells and what decides it, then where it goes and what it does"), three plain
+ * sentences a trader reads top down, each at most `WORKSHOP_READING_LIMITS.summaryText` characters:
+ * `buys`, how much a buy pays and what decides it (who pays, what moves the rate), "Nothing is
+ * taken." when buys are free; `sells`, the same for sells; `transfers`, the same for a plain
+ * transfer, only when one pays; `goes`, where what is taken goes and what is done with it (the pot's
+ * steps, how much, how often, the limits that make it wait), absent for a hook that takes nothing. A
+ * companion's has `goes` alone. Absent from readings written before 15 Oct 2026: a card then lists
+ * the rules.
+ */
+export interface WorkshopSummary {
+  buys?: string;
+  sells?: string;
+  transfers?: string;
+  goes?: string;
+  /** Where what it collects goes, by purpose, shares summing to 10,000 (the card's bar, 2026-10-15); empty for a hook that takes nothing. */
+  split?: WorkshopSplitPart[];
+}
+
+/**
  * What Bordrless's AI wrote about a submission from its source: a title, what it does in one
  * sentence, the most it takes (`total`: for a hook, the largest cut of one trade in basis points of
  * its amount, null when the code reads it from an account it doesn't bound; for a companion, the most
- * of its pot one step spends), a plain description, and what a launcher should watch for. Read by
- * AI from the code, not an audit.
+ * of its pot one step spends), its `summary` in the card's shape, a plain description, and what a
+ * launcher should watch for. Read by AI from the code, not an audit.
  *
  * The reading is the Workshop's one AI pass over the code (the owner, 2026-10-13: no separate
  * security review): it also judges it, `verdict` (`pass`: nothing above low; `warn`: a medium
@@ -189,6 +234,8 @@ export interface WorkshopReading {
    * from readings written before: the site then shows `does` and `total`.
    */
   rules?: WorkshopReadingRule[];
+  /** The card's shape (`WorkshopSummary`, 2026-10-15): what buys and sells pay and what decides it, where it goes and what it does. Absent from readings written before. */
+  summary?: WorkshopSummary;
   /** The largest cut the trading test measured (bps of one transfer) when this reading was written, so the reading's figures were held to it; null when the test had not run; absent from readings written before 2026-10-13. */
   measuredBps?: number | null;
 }
@@ -270,10 +317,26 @@ export interface WorkshopItem {
   /**
    * What a launch with its script takes from its keeper.json (a companion's, a pair's companion
    * half's; `keeperLaunchTerms`, 2026-10-13): how often a step runs and whether it pays wallets. The
-   * launch page sets both from here, never as the launcher's choice. Null for a hook; absent from
-   * older servers.
+   * launch page sets both from here, never as the launcher's choice. Its `launcherShareBps` is the
+   * split its builder fixed, by keeper.json or on the config page (`WorkshopConfigPrepareRequest`,
+   * 2026-10-15); null when the launcher chooses. Null for a hook; absent from older servers.
    */
   keeper?: KeeperLaunchTerms | null;
+  /**
+   * Whether its script is ready for native-SOL coins (`scriptNativeReady` of its source and
+   * keeper.json, and not on `NATIVE_SCRIPT_HOLD`): false holds it off new coins, by the site and
+   * the launch API (`script_not_native_ready`), until its builder updates it. Null for a hook;
+   * absent from older servers.
+   */
+  nativeReady?: boolean | null;
+  /** The creator fee its builder set for its launch config at the submission (`WorkshopSubmitRequest.creatorFeeBps`), where the config page starts; null when none. Absent from older servers. */
+  plannedFeeBps?: number | null;
+  /** Its picture (an IPFS URL its builder uploaded); null when none. Absent from older servers. */
+  image?: string | null;
+  /** Why it is off the Workshop: archived by its builder, or held for native SOL; null when on it. Absent from older servers. */
+  archived?: WorkshopArchived | null;
+  /** When its builder archived it, unix seconds; null when not. Absent from older servers. */
+  archivedAt?: number | null;
 }
 
 /** What a reading-lane item's match compared, and who can change the program (`WorkshopDetail.match`). */
@@ -374,6 +437,15 @@ export interface WorkshopFigures {
   paid: number | null;
   /** SOL in its pot now (its pots', summed), lamports. */
   pot: Amount | null;
+  /** Of `paidOut`, what went to holders (`ScriptPayout`, the step payouts), lamports; and the holders paid, each once. Absent from older servers. */
+  toHolders?: Amount | null;
+  holders?: number | null;
+  /** Of `paidOut`, what went to wallets the script names (`ScriptWalletPayout`: a builder's, a fixed one), lamports. Absent from older servers. */
+  toWallets?: Amount | null;
+  /** SOL its companion spent buying the coin on its own pool and keeping it (buybacks: its buys that added no liquidity; the launcher's first buy at the launch is not one), lamports. Absent from older servers. */
+  boughtBack?: Amount | null;
+  /** SOL its companion put into the coin's pool as liquidity (the SOL side of what it added, and the buys that paired with it), lamports. Absent from older servers. */
+  toLiquidity?: Amount | null;
   /** The transfers its hook's cuts applied to (a `Transferred` event with a delta above 0), over every coin; null without a hook half, or when it can't be read. Absent from older servers. */
   cuts?: number | null;
   /** Its hook's token cuts coin by coin, the newest first, at most `WORKSHOP_FIGURES_COINS` (the rest are counted in `coins`); empty without a hook half or before any launch. Absent from older servers. */
@@ -392,6 +464,36 @@ export const WORKSHOP_FIGURES_COINS = 5;
 
 export interface WorkshopListResponse {
   items: WorkshopItem[];
+  total: number;
+}
+
+/** `POST /v1/workshop/:id/archive`, as its builder: true takes an approved item off the Workshop and refuses new launches with it (coins launched keep running); false restores it. */
+export interface WorkshopArchiveRequest {
+  archived: boolean;
+}
+
+/** The order of `GET /v1/workshop/:id/coins`: the highest market cap first, or the newest. */
+export type WorkshopCoinsSort = 'mcap' | 'new';
+
+/** Page sizes of the coins endpoints: an item's strip, the Workshop's strip, a dialog page, and the most one read takes. */
+export const WORKSHOP_COINS = { item: 24, shelf: 40, page: 12, max: 48 } as const;
+
+/** A coin launched with a Workshop item. */
+export interface WorkshopCoin {
+  mint: Address;
+  name: string;
+  symbol: string;
+  image: string | null;
+  /** Its market cap in USD; null without a pool or a SOL price. */
+  mcapUsd: number | null;
+  status: LaunchStatus;
+  /** Unix seconds. */
+  createdAt: number;
+}
+
+/** `GET /v1/workshop/:id/coins` and `GET /v1/workshop/coins`: a page of coins and how many there are in all. */
+export interface WorkshopCoinsResponse {
+  coins: WorkshopCoin[];
   total: number;
 }
 
@@ -417,7 +519,15 @@ export interface WorkshopSubmitRequest {
   scriptFiles?: StudioFile[];
   /** The program's address when the builder deployed it themselves (the reading lane). */
   program?: Address;
-  /** What its builder takes (`WORKSHOP_AUTHOR_SHARES_BPS`): `AUTHOR_SHARE_BPS` when absent, 0 to take nothing. A companion's or a pair's script is approved on chain with it; a hook's is its config step's first choice. */
+  /**
+   * The creator fee its launch config will charge (a hook's; a pair's, the whole of each trade's fee),
+   * set at the submission and where its config page starts (16 Oct 2026): any whole quarter of a
+   * percent to the cap (`workshopConfigFeeOk`). Absent: chosen at the config step. Not for a companion.
+   */
+  creatorFeeBps?: number;
+  /** A pair's split of that fee, the launcher's share (`WorkshopConfigPrepareRequest.launcherShareBps`), fixed for every launch with its config. */
+  launcherShareBps?: number | null;
+  /** What its builder takes (`workshopAuthorShareOk`): `AUTHOR_SHARE_BPS` when absent, 0 to take nothing. A companion's or a pair's script is approved on chain with it; a hook's is its config step's first choice. */
   authorShareBps?: number;
 }
 
@@ -459,8 +569,21 @@ export interface WorkshopDeployRequest {
   paymentSignature: string;
 }
 
-/** The creator fees a hook's builder may list its config with (they earn `AUTHOR_SHARE_BPS` of it). */
+/** The creator fees a composed config is listed with (the rules lane's choices; a Workshop config's fee moves in `FEE_STEP_BPS`). */
 export const WORKSHOP_CONFIG_FEES_BPS: readonly number[] = [50, 100, 200];
+
+/**
+ * The step the creator fee and the companion fee move in on a Workshop item's config page and on
+ * the launch page (the owner, 2026-10-15: "a clean slider that moves in 0.25% intervals", each said
+ * as a share of a trade, never of the other): a quarter of a percent.
+ */
+export const FEE_STEP_BPS = 25;
+
+/** Whether a Workshop config's creator fee (the whole of each trade's fee) is one its page makes: a whole number of steps, from one to the launchpad's cap. */
+export const workshopConfigFeeOk = (bps: number): boolean => Number.isInteger(bps) && bps >= FEE_STEP_BPS && bps <= MAX_CREATOR_FEE_BPS && bps % FEE_STEP_BPS === 0;
+
+/** The creator fee's choices in words: "a whole quarter of a percent, 0.25% to 2%". */
+export const WORKSHOP_CONFIG_FEE_WORDS = `a whole quarter of a percent, ${FEE_STEP_BPS / 100}% to ${MAX_CREATOR_FEE_BPS / 100}%`;
 
 /**
  * What a Workshop builder may take of the creator fee of others' launches (the owner, 2026-10-13):
@@ -469,9 +592,32 @@ export const WORKSHOP_CONFIG_FEES_BPS: readonly number[] = [50, 100, 200];
  */
 export const WORKSHOP_AUTHOR_SHARES_BPS: readonly number[] = [AUTHOR_SHARE_BPS, 0];
 
+/** The step a hook's builder share moves in on its slider (the owner, 16 Oct 2026): 5% of the creator fee. */
+export const WORKSHOP_AUTHOR_SHARE_STEP_BPS = 500;
+
+/**
+ * Whether a builder's share is one the Workshop takes for its kind: a hook's any 5% step from
+ * nothing to half (its launch config's share; the launchpad takes 1 to `MAX_AUTHOR_SHARE_BPS`,
+ * half, and 0 is a config made without one); a companion's or a pair's half or nothing (the
+ * companion program pays a script's author exactly `AUTHOR_SHARE_BPS` of each claim).
+ */
+export const workshopAuthorShareOk = (bps: number, kind: WorkshopKind): boolean =>
+  kind === 'hook' ? Number.isInteger(bps) && bps >= 0 && bps <= AUTHOR_SHARE_BPS && bps % WORKSHOP_AUTHOR_SHARE_STEP_BPS === 0 : WORKSHOP_AUTHOR_SHARES_BPS.includes(bps);
+
 /** `POST /v1/workshop/:id/config/prepare`: the builder's listed launch config on their deployed hook (a pair's: on its hook, requiring its script). */
 export interface WorkshopConfigPrepareRequest {
+  /** The whole of each trade's fee, basis points: a whole number of `FEE_STEP_BPS` up to the launchpad's cap (`workshopConfigFeeOk`). */
   creatorFeeBps: number;
+  /**
+   * A pair's: the launcher's share of each trade's fee on every launch with the config, basis points
+   * of the whole, 0 to `KEEPER_MAX_LAUNCHER_SHARE_BPS` (the owner, 2026-10-15: the config page's two
+   * sliders, X% to the creator fee and Y% to the companion fee, send X + Y as `creatorFeeBps` and
+   * X / (X + Y) here), fixed for every launch with it (the API refuses any other split, `split_fixed`).
+   * Absent or null: the launcher splits the fee on the launch page. One the script's keeper.json fixes
+   * (`launcherShareBps`) must be that one (`split_fixed`). A hook's config has no companion fee to
+   * split with (launchers add a fee hook on the launch page): refused (`no_split`).
+   */
+  launcherShareBps?: number | null;
   /**
    * A hook's: what its builder takes (`WORKSHOP_AUTHOR_SHARES_BPS`); the item's recorded choice when
    * absent. 0 makes the config with `create_config` (no author share), still on the shelves and the
@@ -506,3 +652,32 @@ export const NATIVE_SCRIPT_HOLD: Readonly<Record<string, string>> = {
 
 /** Why a script can't launch on native SOL (its name on `NATIVE_SCRIPT_HOLD`), or null when it can. */
 export const nativeScriptHold = (program: string): string | null => NATIVE_SCRIPT_HOLD[program] ?? null;
+
+/** Why a new script is refused at the Workshop (the owner, 16 Oct 2026: new submissions must be native; scripts approved before keep their coins). */
+export const SCRIPT_NOT_NATIVE_REFUSAL = 'Its companion script has no native-SOL path, and every coin since 15 Oct 2026 trades in SOL: trade with swap_v2_with_base_slice and pay in lamports from the companion address, behind launch.is_native() if it should run on older coins too (the script starter shows both).';
+
+/** What a launcher reads of a script built before native-SOL coins (the owner through bordless-fa, 16 Oct 2026). */
+export const NATIVE_NOT_READY_TEXT = 'This companion was built before native-SOL coins; its builder is updating it.';
+
+const NATIVE_BRANCH = /\bis_native\s*\(|\bswap_v2\w*\s*\(/;
+const CLASSIC_SWAP = /\bswap_with_base_slice\s*\(|\bswap_with_bridge\s*\(|\blaunch_client\s*::\s*swap\s*\(|\bclient\s*::\s*swap\s*\(/;
+const BRIDGED_SOL = /\bBRIDGED_SOL_MINT\b/;
+
+/**
+ * Whether a companion script's source is ready for a native-SOL coin (every coin launched since 15
+ * Oct 2026: the pot is the companion address's own lamports, the swap is `swap_v2` with no bridge
+ * accounts). A source with a native branch (`is_native`, or the `swap_v2` client) is. One that
+ * trades the classic swap, moves bridged SOL, or whose keeper.json pays holders' bridged-SOL
+ * holdings (`payTo: "ownerQuoteHolding"`) without such a branch is not: on a native coin every
+ * such step fails (bordless-fa's survey of the approved scripts, 16 Oct 2026). Null without a
+ * script source. The companion program's own list (`NATIVE_SCRIPT_HOLD`) is read beside this.
+ */
+export function scriptNativeReady(files: readonly StudioFile[] | null | undefined, keeper: KeeperDeclaration | null | undefined): boolean | null {
+  if (!files) return null;
+  // The code alone: a comment that shows a classic swap (a starter's header) says nothing of what the script does.
+  const text = files.filter((f) => f.path.endsWith('.rs')).map((f) => f.content.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ')).join('\n');
+  if (!text) return null;
+  if (NATIVE_BRANCH.test(text)) return true;
+  const paysBridged = keeper?.holdings?.payTo === 'ownerQuoteHolding';
+  return !CLASSIC_SWAP.test(text) && !BRIDGED_SOL.test(text) && !paysBridged;
+}

@@ -8,7 +8,7 @@
  * | DEX pool | quote vault | pool lamports above rent, plus a bridged-SOL buffer in the vault | `Pool.quoteNative` |
  * | launch | `holding(bridged, launch)` | launch lamports above rent | `Launch.isNative` |
  * | kit reward vault | `holding(bridged, kit config)` | kit config lamports above `lamportsBase` | `KitConfig.isNative` |
- * | companion | `holding(bridged, creator)` | creator PDA lamports above rent(0) | `Companion.nativeSol` |
+ * | companion | `holding(bridged, companion address)` | companion address lamports above rent(0) | `Companion.nativeSol` |
  * | hook_vault slot | `holding(bridged, slot owner)` | slot owner lamports above rent(0) | `Vault.isNative` |
  *
  * A native pool trades with `swap_v2` (`swap.swapV2`, `launch.swapV2`, or `launch.swap` with `native` or `poolNative` keys). The
@@ -206,7 +206,7 @@ export async function fetchKitRewardVault(connection: Pick<Connection, 'getMulti
 
 // ---- companions and hook_vault slots ------------------------------------------------------------------
 
-/** A companion's SOL (everything it sets aside): its creator PDA's lamports above rent(0) when native, the creator's holding of bridged SOL otherwise. */
+/** A companion's SOL (everything it sets aside): its companion address's (`companionCreatorAddress(mint)`) lamports above rent(0) when native, that address's holding of bridged SOL otherwise. */
 export function companionSolOf(companion: Partial<Pick<Companion, 'nativeSol'>>, creatorLamports: bigint | number, creatorHoldingInfo: Pick<AccountInfo<Buffer>, 'data'> | null): bigint {
   if (companion.nativeSol) return lamportsAboveRent(creatorLamports, 0);
   return creatorHoldingInfo ? decodeHolding(creatorHoldingInfo.data).amount : 0n;
@@ -309,7 +309,7 @@ export interface KitNativeSetEvent {
   ts: number;
 }
 
-/** companion `CompanionNativeSet` (read with the companion among `eventsOf`'s programs): `spare` the creator PDA's spare lamports booked to the beneficiary. */
+/** companion `CompanionNativeSet` (read with the companion among `eventsOf`'s programs): `spare` the companion address's spare lamports booked to the beneficiary. */
 export interface CompanionNativeSetEvent {
   kind: 'companion.CompanionNativeSet';
   companion: string;

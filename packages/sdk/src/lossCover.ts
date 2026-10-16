@@ -5,7 +5,7 @@
  * - **The hook** (`programs/loss_cover_hook`, `6KMdXC…`) keeps, in each holding's 64 bytes of hook
  *   data (`LossCoverRecord`), the average entry price, the tokens that basis covers, the cover paid
  *   and the round it was last recorded in; its state (`LossCoverState`, `["state", mint]`) the
- *   launch, the pool, the creator address and a slow reference price. `lossCoverHook.prepare` (the
+ *   launch, the pool, the companion address and a slow reference price. `lossCoverHook.prepare` (the
  *   mint signing, before the launch) makes the state and the registry, whose extras are the state
  *   (w), the launch (r) and the pool (r): `lossCoverHook.accounts(mint, lpFeeBps)`. A buy's entry
  *   is what it paid the curve (`lossCoverTradePrice`), with no cap (since the hook's upgrade of
@@ -349,7 +349,11 @@ export interface PayoutTermsArgs {
   stepBps: number;
   /** The most one holding gets of a step's budget. */
   holdingBps: number;
-  /** The most a window pays, of the pot as it stood at the window's first step. */
+  /**
+   * The most a window pays: `windowBps` of `max(windowPot, potAfterScript + windowPaid)` less
+   * `windowPaid` (since the companion upgrade of 2026-10-15, `payoutStepBudget`; before it, of the
+   * pot as it stood at the window's first step).
+   */
   windowBps: number;
   /** The window: `floor(now / windowSecs)` (a round, or a day). */
   windowSecs: number;
@@ -532,7 +536,7 @@ export interface ScriptPayoutEvent {
   potAfter: bigint;
 }
 
-/** `PayoutTermsSet`: `create_script_v2` wrote the terms. */
+/** `PayoutTermsSet`: `create_script_v2` wrote the terms, or `set_payout_terms` (2026-10-15) replaced them. */
 export interface PayoutTermsSetEvent {
   companion: PublicKey;
   mint: PublicKey;
@@ -765,7 +769,7 @@ export interface LossCoverOwed {
 
 /**
  * What a holding is owed and would be paid at a step now, as `companion_step` computes it (3.3 of
- * the design): the owner not excluded (the launch, the pool, the creator address, the beneficiary,
+ * the design): the owner not excluded (the launch, the pool, the companion address, the beneficiary,
  * the default key, an address off the curve), a record of version 1 covering the whole balance,
  * not yet measured this round, above the least holding, old enough, under water by at least the
  * least loss; then `pay = min(uncovered * b / lPrev, uncovered, b - roundPaid)`. The round is

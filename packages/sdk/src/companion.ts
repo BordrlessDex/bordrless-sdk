@@ -103,9 +103,9 @@ export interface Companion {
   referenceAt: number;
   /** v2: the game's token hook (`createGame`); null for a companion without a game (every v1 companion reads null). */
   gameHook: PublicKey | null;
-  /** v2: the pot's part of every fee claim, next to `split` (the four sum to 10,000); 0 without a game. */
+  /** v2: the pot's part of every fee claim (the companion fee), next to `split` (the four sum to 10,000): a game's, a Snowball's or a script's; 0 for a companion with none of them. */
   potBps: number;
-  /** v2: bridged SOL held for the game's pot (in the creator's holding). */
+  /** v2: SOL set aside for the pot (a game's, a Snowball's or a script's): lamports on the companion address on a native companion (`nativeSol`), bridged SOL in the companion address's holding otherwise. */
   pendingPot: bigint;
   /** v2: the game's round length (its hook's header must state it); 0 without a game. */
   roundSecs: number;
@@ -125,8 +125,8 @@ export interface Companion {
    */
   quoteCutClaimed?: bigint | null;
   /**
-   * Native SOL (phase 3, `Companion.native_sol`, one byte past `quoteCutClaimed`): the companion's SOL is lamports on its creator
-   * address (`creatorAddress(mint)`) above the rent-exempt minimum of an empty account, not bridged SOL in the creator's holding.
+   * Native SOL (phase 3, `Companion.native_sol`, one byte past `quoteCutClaimed`): the companion's SOL is lamports on its companion
+   * address (`companionCreatorAddress(mint)`) above the rent-exempt minimum of an empty account, not bridged SOL in that address's holding.
    * False for a 300- or 308-byte companion (not grown for the flag). Optional only so a companion written out by hand need not name it.
    */
   nativeSol?: boolean;
@@ -619,7 +619,7 @@ export const companion = {
   },
   /**
    * The accounts a native companion's steps call besides a bridged one's (`bordrless_companion::client::native_accounts`): the
-   * launchpad's `claim_creator_fees_sol`, the creator address's `swap_v2` on the launch pool (System Program, DEX) and the kit's
+   * launchpad's `claim_creator_fees_sol`, the companion address's `swap_v2` on the launch pool (System Program, DEX) and the kit's
    * `share_sol`. Every step looks its accounts up by key, so appending these to any step serves a native companion
    * (`companion.native`); a bridged one ignores them.
    */

@@ -20,18 +20,22 @@
  *   script, the payer paying its rent). The script's `companion_init` then runs once with
  *   `[creator (signer, writable), mint, state (writable; the system program's id, read-only,
  *   without a state), system program]`, then `scriptExtra`.
- * - `companion.claimFeesScript(cranker, mint, author)`: a script companion's fee claim first pays
- *   the script's author `SCRIPT_LIMITS.authorShareBps` of what it took from the launch, as SOL
- *   (`scriptClaimAuthor` says whether the author's wallet goes along), then splits the rest, the
- *   pot's part to `Companion.pendingPot`. An immutable script has no author: no share.
+ * - `companion.claimFeesScript(cranker, mint, author)`: a script companion's fee claim splits what
+ *   it took from the launch, the pot's part to `Companion.pendingPot`, and pays the script's author
+ *   `SCRIPT_LIMITS.authorShareBps` of the launcher's part of the creator fee it took (after the
+ *   hook's SOL cut), as SOL, out of that part alone: never of the pot's part (the companion fee),
+ *   the buyback's, the holders' or the hook's cut (the companion upgrade of 15 Oct 2026; before it
+ *   the author was paid half of the whole claim, first). The bounty is taken from the whole claim;
+ *   `FeesClaimed.toBeneficiary` is net of the author's share. `scriptClaimAuthor` says whether the
+ *   author's wallet goes along. An immutable script has no author: no share.
  * - `companion.scriptStep(cranker, keys, scriptProgram, extra)` (anyone, from a minute after the
  *   launch, once an interval (`scriptDue`), while the approval holds for the code the script runs,
  *   or the script is immutable): the script's `companion_step` with `[creator (signer, writable),
  *   mint, launch, companion, pool, state (writable; the system program's id, read-only, without a
  *   state)]`, then `extra`. The companion then checks that the script spent at most the pot and
- *   left the dev bag, the creator address's lamports and its custody as they were, and pays the
+ *   left the dev bag, the companion address's lamports and its custody as they were, and pays the
  *   sender `SCRIPT_LIMITS.bounty` from the pot.
- * - No signature reaches a script but the creator address's: every account after those it is
+ * - No signature reaches a script but the companion address's: every account after those it is
  *   handed is forwarded with its writability and never as a signer, and the payer and the sender
  *   are never passed to it.
  * - `inspectScriptProgram(connection, program)` reads what the chain would say of a script before
@@ -66,7 +70,8 @@ export const APPROVAL_KINDS = { tokenHook: 0, script: 1 } as const;
  * The program's script bounds (`constants.rs`): steps 10 seconds to a day apart, at most 512 bytes
  * handed to `companion_init`, at most 10,240 bytes of state (what one instruction may allocate),
  * the sender's bounty from the pot (lamports, paid when the pot holds it), no step in the launch's
- * first minute, and the author's share of what each fee claim takes from the launch (none when the
+ * first minute, and the author's share of the launcher's part of the creator fee each claim takes
+ * from the launch, paid out of that part (since the companion upgrade of 15 Oct 2026; none when the
  * author is the launcher, or the script is immutable and has none).
  */
 export const SCRIPT_LIMITS = {
@@ -129,7 +134,7 @@ export interface Script {
   version: number;
   bump: number;
   mint: PublicKey;
-  /** The script: an approved or immutable program, called with the creator address signing. */
+  /** The script: an approved or immutable program, called with the companion address signing. */
   program: PublicKey;
   /** The least time between two steps, seconds. */
   interval: number;

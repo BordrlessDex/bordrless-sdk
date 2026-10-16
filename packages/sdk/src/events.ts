@@ -98,7 +98,8 @@ export function decodeEventPayload(program: ProgramName, payload: Buffer): { nam
   payload = padOldEvent(program, payload);
   try {
     const ev = CODERS[program].events.decode(payload.toString('base64')) as { name: string; data: unknown } | null;
-    // The companion's payout events (`ScriptPayout`, `PayoutTermsSet`; docs/loss-cover.md §1) until its IDL on disk carries them.
+    // The companion's payout events (`ScriptPayout`, `PayoutTermsSet`; docs/loss-cover.md §1): the IDL on disk carries them now;
+    // this fallback stays for an older companion IDL that did not.
     if (!ev) return program === 'companion' ? decodeCompanionPayoutEvent(payload) : null;
     return { name: ev.name, data: flatten(ev.data) as Record<string, unknown> };
   } catch {

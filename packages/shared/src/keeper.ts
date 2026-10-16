@@ -33,7 +33,8 @@
  * is wrong; `keeperWords` says a declaration in plain words. No Solana dependencies: the keeper's own
  * reading of a declaration is apps/server/src/keeper/scriptExtras.ts.
  */
-import { SCRIPT_BOUNDS, TOKEN_DECIMALS } from './policy.ts';
+import type { PayoutTermsRequest } from './api.ts';
+import { PAYOUT_TERMS_BOUNDS, SCRIPT_BOUNDS, TOKEN_DECIMALS, payoutTermsWithin } from './policy.ts';
 import { HOOK_DATA_LEN, PROGRAM_IDS } from './programs.ts';
 import { decimalWords } from './rules.ts';
 
@@ -128,6 +129,13 @@ export interface KeeperDeclaration {
   swapAccounts: boolean;
   /** A step without the swap accounts carries the token's custom hook accounts (its program, the token program's signer for it, its registry's extras): what moving the token inside a step needs. */
   hookAccounts: boolean;
+  /**
+   * Default false. The coin's mint is passed writable in every step: what a script that burns the coin (the token program's
+   * `burn`) needs. With the swap accounts the mint already in them is made writable (their order unchanged); without them
+   * it is appended last. Without it the mint is writable only on a launch with a burn rate, and a burn elsewhere fails the
+   * whole step (`MintNotWritable`). A burn may take the coin down to the dev bag still held, never into it (`ScriptTookDevBag`).
+   */
+  mintWritable?: boolean;
   /** Each step carries the companion's payout accounts (`companion.payoutAccounts`): a script whose answers the companion pays and its hook records. */
   payouts: boolean;
   /** The round the keeper's cursor rotates by; null: none (the cursor never starts over). */
@@ -153,7 +161,30 @@ export interface KeeperDeclaration {
   stateLen?: number;
   /** What `companion_init` gets at a site launch, hex (at most `SCRIPT_BOUNDS.maxInitLen` bytes). Absent: nothing. Left out of the normal form when absent. */
   initData?: string;
+  /**
+   * The launcher's share of each trade's fee on every launch with it, basis points of the whole (0
+   * to `KEEPER_MAX_LAUNCHER_SHARE_BPS`; the pot gets the rest, at least a twentieth), fixed by the
+   * builder (LiquidityTek, 15 Oct 2026: "0.5% to the launcher and 1.5% to the engine" of a 2% fee is
+   * 2,500). Absent: a pair's split is the one its builder set on the config page, else even
+   * (`withLauncherShare`, `PAIR_DEFAULT_LAUNCHER_SHARE_BPS`), never the launcher's to adjust; a
+   * companion on its own leaves it to the launcher on the launch page. Left out of the normal form
+   * when absent.
+   */
+  launcherShareBps?: number;
+  /**
+   * The payout terms a launch makes the script with (`create_script_v2`'s `PayoutTermsArgs`; 16 Oct
+   * 2026, LiquidityTek's script holds the chain's terms to exact figures): `stepBps`, `holdingBps`
+   * and `windowBps` (1 to 10,000) and `windowSecs` (`PAYOUT_TERMS_BOUNDS`, 10 s to a day). Absent:
+   * a Workshop script launches with open terms (`SCRIPT_PAYOUT_OPEN` in the site: a step may pay the
+   * whole pot, the window the shortest the program takes). Either way the launch's beneficiary or
+   * the script approver may replace them after the launch (`set_payout_terms`). Left out of the
+   * normal form when absent.
+   */
+  payoutTerms?: PayoutTermsRequest;
 }
+
+/** The most of the fee a declaration (or the config page) may fix for the launcher: the pot gets at least a twentieth, a quarter of a percent of the largest fee (the companion program wants a part). */
+export const KEEPER_MAX_LAUNCHER_SHARE_BPS = 9_500;
 
 export type KeeperParse = { ok: true; declaration: KeeperDeclaration } | { ok: false; problem: string };
 
@@ -317,7 +348,7 @@ function holdingsOf(v: unknown, swapAccounts: boolean, payouts: boolean): Keeper
 /** The declaration in a parsed JSON value, held to the schema and its bounds: its normal form, or why not, in one sentence. */
 export function keeperDeclarationOf(value: unknown): KeeperParse {
   try {
-    const root = fieldsOf(value, 'the file', ['version', 'holdings', 'swapAccounts', 'hookAccounts', 'payouts', 'roundSecs', 'wallets', 'stepSecs', 'stateLen', 'initData'], 'one object');
+    const root = fieldsOf(value, 'the file', ['version', 'holdings', 'swapAccounts', 'hookAccounts', 'mintWritable', 'payouts', 'roundSecs', 'wallets', 'stepSecs', 'stateLen', 'initData', 'launcherShareBps', 'payoutTerms'], 'one object');
     if (root.version !== KEEPER_VERSION) fail(`version is ${KEEPER_VERSION}, the only one there is.`);
     const wallets = walletsOf(root.wallets, 'wallets');
     // A script that pays wallets alone brings no holdings.
@@ -325,13 +356,16 @@ export function keeperDeclarationOf(value: unknown): KeeperParse {
     if (noHoldings && wallets.length === 0) fail('holdings is required: which holdings each step brings.');
     const swapAccounts = flagOf(root.swapAccounts, 'swapAccounts', null);
     const hookAccounts = flagOf(root.hookAccounts, 'hookAccounts', false);
+    const mintWritable = flagOf(root.mintWritable, 'mintWritable', false);
     const payouts = flagOf(root.payouts, 'payouts', false);
     const holdings = noHoldings ? null : holdingsOf(root.holdings, swapAccounts, payouts);
     const roundSecs = root.roundSecs === undefined || root.roundSecs === null ? null : secondsOf(root.roundSecs, 'roundSecs');
     const stepSecs = root.stepSecs === undefined || root.stepSecs === null ? null : stepSecsOf(root.stepSecs);
     const stateLen = root.stateLen === undefined || root.stateLen === null ? null : stateLenOf(root.stateLen);
     const initData = root.initData === undefined || root.initData === null ? null : initDataOf(root.initData);
-    return { ok: true, declaration: { version: 1, holdings, swapAccounts, hookAccounts, payouts, roundSecs, ...(wallets.length > 0 ? { wallets } : {}), ...(stepSecs !== null ? { stepSecs } : {}), ...(stateLen !== null ? { stateLen } : {}), ...(initData !== null ? { initData } : {}) } };
+    const launcherShareBps = root.launcherShareBps === undefined || root.launcherShareBps === null ? null : launcherShareOf(root.launcherShareBps);
+    const payoutTerms = root.payoutTerms === undefined || root.payoutTerms === null ? null : payoutTermsOf(root.payoutTerms);
+    return { ok: true, declaration: { version: 1, holdings, swapAccounts, hookAccounts, ...(mintWritable ? { mintWritable } : {}), payouts, roundSecs, ...(wallets.length > 0 ? { wallets } : {}), ...(stepSecs !== null ? { stepSecs } : {}), ...(launcherShareBps !== null ? { launcherShareBps } : {}), ...(payoutTerms !== null ? { payoutTerms } : {}), ...(stateLen !== null ? { stateLen } : {}), ...(initData !== null ? { initData } : {}) } };
   } catch (error) {
     if (error instanceof KeeperProblem) return { ok: false, problem: error.message };
     throw error;
@@ -348,6 +382,24 @@ function stateLenOf(v: unknown): number {
 function initDataOf(v: unknown): string {
   if (typeof v !== 'string' || !/^([0-9a-fA-F]{2})*$/.test(v) || v.length / 2 > SCRIPT_BOUNDS.maxInitLen) return fail(`initData is what companion_init gets, as hex: an even number of hex digits, at most ${SCRIPT_BOUNDS.maxInitLen} bytes.`);
   return v.toLowerCase();
+}
+
+/** `payoutTerms`: the four whole numbers within the companion program's bounds (`payoutTermsWithin`). */
+function payoutTermsOf(v: unknown): PayoutTermsRequest {
+  const t = fieldsOf(v, 'payoutTerms', ['stepBps', 'holdingBps', 'windowBps', 'windowSecs'], '{ "stepBps", "holdingBps", "windowBps", "windowSecs" }');
+  const whole = (x: unknown): x is number => typeof x === 'number' && Number.isInteger(x);
+  if (!whole(t.stepBps) || !whole(t.holdingBps) || !whole(t.windowBps) || !whole(t.windowSecs) || !payoutTermsWithin({ stepBps: t.stepBps, holdingBps: t.holdingBps, windowBps: t.windowBps, windowSecs: t.windowSecs })) {
+    return fail(`payoutTerms is the script’s payout terms as the companion program takes them: stepBps, holdingBps and windowBps whole numbers from 1 to 10,000, windowSecs from ${PAYOUT_TERMS_BOUNDS.minWindowSecs} to ${group(PAYOUT_TERMS_BOUNDS.maxWindowSecs)} seconds.`);
+  }
+  return { stepBps: t.stepBps, holdingBps: t.holdingBps, windowBps: t.windowBps, windowSecs: t.windowSecs };
+}
+
+/** `launcherShareBps`: a whole number of basis points of the fee, 0 to the most the launcher may be fixed (the pot keeps a part). */
+function launcherShareOf(v: unknown): number {
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > KEEPER_MAX_LAUNCHER_SHARE_BPS) {
+    return fail(`launcherShareBps is the launcher’s share of each trade’s fee on every launch, fixed: a whole number of basis points from 0 to ${group(KEEPER_MAX_LAUNCHER_SHARE_BPS)} (the pot gets the rest, at least a twentieth).`);
+  }
+  return v;
 }
 
 /** `stepSecs`: a whole number of seconds within the companion's step bounds. */
@@ -377,7 +429,7 @@ export function keeperStepSecs(d: Pick<KeeperDeclaration, 'stepSecs' | 'roundSec
   return DEFAULT_STEP_SECS;
 }
 
-/** What a launch takes from a script's declaration (the launch page's, 2026-10-13): how often a step runs, and whether its script pays wallets (its launch then allows wallet payouts, within the payout terms the site fixes). */
+/** What a launch takes from a script's declaration (the launch page's, 2026-10-13): how often a step runs, and whether its script pays wallets (its launch then allows wallet payouts, within its payout terms: the declaration's `payoutTerms`, else open terms). */
 export interface KeeperLaunchTerms {
   stepSecs: number;
   wallets: boolean;
@@ -387,13 +439,31 @@ export interface KeeperLaunchTerms {
   initData: string;
   /** It pays holders through the companion's payout path (`payouts`): a launch makes its payout terms. */
   payouts: boolean;
+  /** The launcher's share of the fee, fixed for every launch (`launcherShareBps`), basis points; null when the launcher chooses. Absent from older servers. */
+  launcherShareBps?: number | null;
+  /** The payout terms the launch makes the script with (`payoutTerms`); null: the script launches with open terms (`SCRIPT_PAYOUT_OPEN` in the site). Absent from older servers. */
+  payoutTerms?: PayoutTermsRequest | null;
 }
 
 /** The state a site launch asks for when keeper.json says nothing: room for most scripts' state (rent about 0.008 SOL, the launcher's), harmless to one that keeps none. */
 export const KEEPER_DEFAULT_STATE_LEN = 1_024;
 
+/**
+ * The terms with the launcher's share a pair's builder fixed on the Workshop's config page
+ * (`workshop_items.launcher_share_bps`, 2026-10-15) when the declaration fixes none: keeper.json's
+ * wins, being part of the approved source.
+ */
+export const withLauncherShare = (terms: KeeperLaunchTerms, share: number | null | undefined, fallback: number | null = null): KeeperLaunchTerms => (terms.launcherShareBps !== null && terms.launcherShareBps !== undefined ? terms : { ...terms, launcherShareBps: share ?? fallback });
+
+/**
+ * How a pair's config splits the fee until its builder sets the split (the owner, 2026-10-15: a
+ * config built with a creator fee and a companion fee is never the launcher's to adjust): evenly,
+ * half the fee the launcher's creator fee, half the pot's companion fee.
+ */
+export const PAIR_DEFAULT_LAUNCHER_SHARE_BPS = 5_000;
+
 /** A declaration's launch terms; a script with none steps every `DEFAULT_STEP_SECS`, pays no wallet, gets `KEEPER_DEFAULT_STATE_LEN` bytes of state and no init data. */
-export const keeperLaunchTerms = (d: KeeperDeclaration | null | undefined): KeeperLaunchTerms => ({ stepSecs: keeperStepSecs(d), wallets: (d?.wallets?.length ?? 0) > 0, stateLen: d?.stateLen ?? KEEPER_DEFAULT_STATE_LEN, initData: d?.initData ?? '', payouts: d?.payouts === true });
+export const keeperLaunchTerms = (d: KeeperDeclaration | null | undefined): KeeperLaunchTerms => ({ stepSecs: keeperStepSecs(d), wallets: (d?.wallets?.length ?? 0) > 0, stateLen: d?.stateLen ?? KEEPER_DEFAULT_STATE_LEN, initData: d?.initData ?? '', payouts: d?.payouts === true, launcherShareBps: d?.launcherShareBps ?? null, payoutTerms: d?.payoutTerms ?? null });
 
 /** Bytes of a text in UTF-8 (a lone surrogate counts as its replacement character, 3). */
 export function utf8Length(text: string): number {
@@ -516,10 +586,13 @@ export function keeperWords(d: KeeperDeclaration, decimals: number = TOKEN_DECIM
  * The rest of the declaration, a sentence each, for the review and the operator: what else each
  * step carries, and where a round's or an epoch's length comes from.
  */
+const pctWord = (bps: number): string => `${(bps / 100).toLocaleString('en-US', { maximumFractionDigits: 2 })}%`;
+
 export function keeperDetails(d: KeeperDeclaration): string[] {
   const out: string[] = [];
   const carries = [d.payouts ? 'the companion’s payout accounts' : null, d.swapAccounts ? 'the launch pool’s swap accounts' : d.hookAccounts ? 'the token’s hook accounts' : null].filter((x): x is string => x !== null);
   if (carries.length > 0) out.push(`Each step also carries ${carries.join(' and ')}.`);
+  if (d.mintWritable) out.push('The coin’s mint is passed writable in every step (the script may burn the coin).');
   const other = d.holdings ? (d.swapAccounts ? d.holdings.perStep.withoutSwapAccounts : d.holdings.perStep.withSwapAccounts) : null;
   if (other !== null) out.push(`${d.swapAccounts ? 'Without' : 'With'} the swap accounts a step would bring up to ${other}.`);
   if (d.wallets) out.push(`The wallets (with the companion’s payout terms): ${d.wallets.map((w) => (typeof w === 'string' ? w : `the public key at byte ${w.state.offset} of the script’s state`)).join(', ')}.`);
@@ -530,6 +603,8 @@ export function keeperDetails(d: KeeperDeclaration): string[] {
     out.push(`An epoch is ${typeof e.secs === 'number' ? `${e.secs} seconds` : `${field(e.secs.state)} in seconds`}${e.fieldUnitSecs ? `; the hook data counts units of ${e.fieldUnitSecs} seconds` : ''}.`);
   }
   if (d.stepSecs !== undefined) out.push(`A step runs every ${d.stepSecs} seconds.`);
+  if (d.payoutTerms) out.push(`Its payout terms: a step pays at most ${pctWord(d.payoutTerms.stepBps)} of the pot, one holding or wallet at most ${pctWord(d.payoutTerms.holdingBps)} of a step, and a window of ${group(d.payoutTerms.windowSecs)} seconds at most ${pctWord(d.payoutTerms.windowBps)} of the pot.`);
+  if (d.launcherShareBps !== undefined) out.push(`Every launch keeps ${(d.launcherShareBps / 100).toLocaleString('en-US', { maximumFractionDigits: 2 })}% of each trade’s fee for the launcher, fixed; the pot gets the rest.`);
   if (d.roundSecs !== null) out.push(`A round of the keeper’s (what it says once a round: a wait, nobody to bring) is ${typeof d.roundSecs === 'number' ? `${d.roundSecs} seconds` : `${field(d.roundSecs.state)} in seconds`}.`);
   return out;
 }

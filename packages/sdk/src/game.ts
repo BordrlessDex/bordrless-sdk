@@ -248,7 +248,7 @@ export function drawIndex(randomness: Uint8Array, k: number, total: bigint): big
 /** Where a holding's mint sits: after the discriminator, `version` and `bump`. */
 export const HOLDING_MINT_OFFSET = 10;
 
-/** The owners a game passes as never holding tickets besides off-curve keys: the launch and the companion's creator address (the pool is off the curve). */
+/** The owners a game passes as never holding tickets besides off-curve keys: the launch and the companion address (the pool is off the curve). */
 const defaultExcluded = (mint: PublicKey): PublicKey[] => [launchAddress(mint), companionCreatorAddress(mint)];
 
 /** A holding found to hold a draw's ticket. */

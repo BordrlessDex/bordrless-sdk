@@ -128,10 +128,11 @@ describe('keeper.json', () => {
     expect(problemOf(`{"version":1,"x":"${'a'.repeat(KEEPER_LIMITS.bytes)}"}`)).toBe('keeper.json is at most 4,096 bytes; this one is 4,116.');
     expect(problemOf([])).toBe('keeper.json: the file is one object.');
     expect(problemOf({ ...whale(), version: 2 })).toBe('keeper.json: version is 1, the only one there is.');
-    expect(problemOf({ ...whale(), extra: true })).toBe('keeper.json: the file has no field "extra" (it takes version, holdings, swapAccounts, hookAccounts, payouts, roundSecs, wallets, stepSecs, stateLen, initData).');
+    expect(problemOf({ ...whale(), extra: true })).toBe('keeper.json: the file has no field "extra" (it takes version, holdings, swapAccounts, hookAccounts, mintWritable, payouts, roundSecs, wallets, stepSecs, stateLen, initData, launcherShareBps, payoutTerms).');
     expect(problemOf({ ...whale(), holdings: undefined })).toBe('keeper.json: holdings is required: which holdings each step brings.');
     expect(problemOf({ ...whale(), swapAccounts: 'yes' })).toBe('keeper.json: swapAccounts is true or false.');
     expect(problemOf({ ...whale(), hookAccounts: 1 })).toBe('keeper.json: hookAccounts is true or false.');
+    expect(problemOf({ ...whale(), mintWritable: 'yes' })).toBe('keeper.json: mintWritable is true or false.');
     expect(problemOf(holdings({ minBalance: '0' }))).toMatch(/^keeper\.json: holdings\.minBalance is a whole number of base units from 1 to 18,446,744,073,709,551,615/);
     expect(problemOf(holdings({ minBalance: '18446744073709551616' }))).toMatch(/^keeper\.json: holdings\.minBalance is a whole number/);
     expect(problemOf(holdings({ minBalance: 1.5 }))).toMatch(/^keeper\.json: holdings\.minBalance is a whole number/);
@@ -207,6 +208,18 @@ describe('keeper.json', () => {
     expect(declarationOf(JSON.stringify(filter({ against: { epoch: { secs: 300 } } }))).holdings!.hookData?.against).toEqual({ epoch: { secs: 300, fieldUnitSecs: null } });
   });
 
+  it('takes the launcher’s fixed share of the fee from the builder (launcherShareBps, 0 to 9,500; LiquidityTek, 15 Oct 2026), left out of the normal form when absent', () => {
+    const fixed = declarationOf(JSON.stringify({ ...whale(), launcherShareBps: 2_500 }));
+    expect(fixed.launcherShareBps).toBe(2_500);
+    expect(keeperLaunchTerms(fixed).launcherShareBps).toBe(2_500);
+    expect(keeperLaunchTerms(declarationOf(JSON.stringify(whale()))).launcherShareBps).toBeNull();
+    expect(canonicalKeeperJson(declarationOf(JSON.stringify(whale())))).not.toContain('launcherShareBps');
+    expect(keeperDetails(fixed)).toContain('Every launch keeps 25% of each trade’s fee for the launcher, fixed; the pot gets the rest.');
+    expect(declarationOf(JSON.stringify({ ...whale(), launcherShareBps: 9_500 })).launcherShareBps).toBe(9_500);
+    expect(problemOf({ ...whale(), launcherShareBps: 9_501 })).toContain('launcherShareBps is the launcher’s share');
+    expect(problemOf({ ...whale(), launcherShareBps: 25.5 })).toContain('launcherShareBps');
+  });
+
   it('takes how often a step runs from the builder (stepSecs, 10 s to a day), left out of the normal form when absent', () => {
     const fast = declarationOf(JSON.stringify({ ...whale(), stepSecs: 10 }));
     expect(fast.stepSecs).toBe(10);
@@ -225,7 +238,33 @@ describe('keeper.json', () => {
     expect(keeperStepSecs({ roundSecs: 3_600 })).toBe(120);
     expect(keeperStepSecs({ roundSecs: { state: { offset: 41, width: 4 } } })).toBe(DEFAULT_STEP_SECS);
     expect(keeperStepSecs(null)).toBe(DEFAULT_STEP_SECS);
-    expect(keeperLaunchTerms(declarationOf(WHALE_BAIT_KEEPER_JSON))).toEqual({ stepSecs: DEFAULT_STEP_SECS, wallets: false, stateLen: 1_024, initData: '', payouts: false });
-    expect(keeperLaunchTerms({ ...declarationOf(WHALE_BAIT_KEEPER_JSON), roundSecs: 300, wallets: ['11111111111111111111111111111111'] })).toEqual({ stepSecs: 10, wallets: true, stateLen: 1_024, initData: '', payouts: false });
+    expect(keeperLaunchTerms(declarationOf(WHALE_BAIT_KEEPER_JSON))).toEqual({ stepSecs: DEFAULT_STEP_SECS, wallets: false, stateLen: 1_024, initData: '', payouts: false, launcherShareBps: null, payoutTerms: null });
+    expect(keeperLaunchTerms({ ...declarationOf(WHALE_BAIT_KEEPER_JSON), roundSecs: 300, wallets: ['11111111111111111111111111111111'] })).toEqual({ stepSecs: 10, wallets: true, stateLen: 1_024, initData: '', payouts: false, launcherShareBps: null, payoutTerms: null });
   });
+});
+
+describe('the payout terms a script declares (payoutTerms, 16 Oct 2026)', () => {
+  it('takes the four whole numbers within the companion program’s bounds, carries them to the launch terms and the details, and refuses the rest', () => {
+    const terms = { stepBps: 1_000, holdingBps: 10_000, windowBps: 2_500, windowSecs: 86_400 };
+    const d = declarationOf(JSON.stringify({ ...whale(), payoutTerms: terms }));
+    expect(d.payoutTerms).toEqual(terms);
+    expect(keeperLaunchTerms(d).payoutTerms).toEqual(terms);
+    expect(keeperLaunchTerms(declarationOf(JSON.stringify(whale()))).payoutTerms).toBeNull();
+    expect(canonicalKeeperJson(declarationOf(JSON.stringify(whale())))).not.toContain('payoutTerms');
+    expect(keeperDetails(d)).toContain('Its payout terms: a step pays at most 10% of the pot, one holding or wallet at most 100% of a step, and a window of 86,400 seconds at most 25% of the pot.');
+    for (const bad of [{ ...terms, stepBps: 0 }, { ...terms, holdingBps: 10_001 }, { ...terms, windowSecs: 5 }, { ...terms, windowSecs: 1.5 }, { stepBps: 1_000 }, 7]) expect(problemOf({ ...whale(), payoutTerms: bad })).toContain('payoutTerms');
+    expect(problemOf({ ...whale(), payoutTerms: { ...terms, extra: 1 } })).toBe('keeper.json: payoutTerms has no field "extra" (it takes stepBps, holdingBps, windowBps, windowSecs).');
+  });
+
+describe('mintWritable', () => {
+  it('is off unless set, kept only when true, and said in the details', () => {
+    const off = keeperDeclarationOf(whale());
+    const on = keeperDeclarationOf({ ...whale(), mintWritable: true });
+    expect(on.ok).toBe(true);
+    expect(off.ok && off.declaration.mintWritable).toBeFalsy();
+    expect(on.ok && on.declaration.mintWritable).toBe(true);
+    if (on.ok) expect(keeperDetails(on.declaration).join(' ')).toContain('mint is passed writable');
+  });
+});
+
 });

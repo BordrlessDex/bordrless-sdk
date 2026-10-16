@@ -265,7 +265,7 @@ export interface RulesState {
   paidTotal: bigint;
   records: bigint;
   flags: number;
-  /** The bump of the companion's creator address for the mint (`["creator", mint]`), exempt from every rule. */
+  /** The bump of the companion address for the mint (`["creator", mint]`), exempt from every rule. */
   creatorBump: number;
   bytes: Uint8Array;
   set: RuleSet | null;
