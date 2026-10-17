@@ -10,9 +10,11 @@
  * 3. **Deploy**: the builder pays what deploying it costs (its rent, the fees and Bordrless's fee,
  *    quoted first; Bordrless's fee goes to the revenue wallet) and Bordrless deploys it with
  *    Bordrless's upgrade key. The builder never holds the upgrade authority.
- * 4. **Credit**: a hook's builder makes its launch config, listed, and earns `AUTHOR_SHARE_BPS` (half)
- *    of the creator fee of every launch someone else makes with it, fixed on chain. A companion's
- *    builder is paid the same half by the companion program. A builder may take nothing instead
+ * 4. **Credit**: a hook's builder makes its launch config, listed, and earns the share they chose
+ *    (nothing to half, in 5% steps) of the creator fee of every launch someone else makes with it,
+ *    fixed on chain. A companion's (or a pair's script's) builder is paid `AUTHOR_SHARE_BPS` (half)
+ *    of the launcher's part of the creator fee by the companion program; never of the companion fee,
+ *    the pot or a hook's cut. A builder may take nothing instead
  *    (`authorShareBps` 0, the owner, 2026-10-13): a hook's config is then made unlisted on chain
  *    (`create_config`, no author share) and still shown on the shelves and the marketplace as theirs;
  *    a companion's (or a pair's) script is approved on chain naming no author (the default key).
@@ -130,11 +132,14 @@ export const WORKSHOP_PATH = /^src\/[a-z0-9_]+(\/[a-z0-9_]+)*\.rs$/;
 export const workshopPathOk = (path: string): boolean => WORKSHOP_PATH.test(path);
 
 /**
- * The longest each part of the AI's reading may be; `findings` the most findings it keeps, each title
- * and detail at most `findingTitle` and `findingDetail` characters; `rules` the most rules it keeps,
- * each condition and line at most `ruleWhen` and `ruleText` characters.
+ * The longest each part of the AI's reading may be; `title` what the reader asks for, `titleMax` the
+ * most a title is kept whole at (the owner, 16 Oct 2026: the shelf card's one sentence is never cut
+ * off; a model that writes a few characters over the ask keeps its title whole); `findings` the most
+ * findings it keeps, each title and detail at most `findingTitle` and `findingDetail` characters;
+ * `rules` the most rules it keeps, each condition and line at most `ruleWhen` and `ruleText`
+ * characters.
  */
-export const WORKSHOP_READING_LIMITS = { title: 48, does: 220, totalText: 80, description: 600, watch: 5, watchText: 140, findings: 12, findingTitle: 120, findingDetail: 400, rules: 8, ruleWhen: 60, ruleText: 100, summaryText: 340, splitParts: 6, splitLabel: 24 } as const;
+export const WORKSHOP_READING_LIMITS = { title: 48, titleMax: 80, does: 220, totalText: 80, description: 600, watch: 5, watchText: 140, findings: 12, findingTitle: 120, findingDetail: 400, rules: 8, ruleWhen: 60, ruleText: 100, summaryText: 340, splitParts: 6, splitLabel: 24 } as const;
 
 /**
  * What a share of the money a hook or companion collects goes to (the owner, 15 Oct 2026: "where it
@@ -238,6 +243,8 @@ export interface WorkshopReading {
   summary?: WorkshopSummary;
   /** The largest cut the trading test measured (bps of one transfer) when this reading was written, so the reading's figures were held to it; null when the test had not run; absent from readings written before 2026-10-13. */
   measuredBps?: number | null;
+  /** Written by an operator through `POST /admin/workshop/:id/reading` (17 Oct 2026: the assistant's credit run out), held to the reader's own parse; absent from the model's readings. It changes no approval. */
+  byHand?: true;
 }
 
 /** The reading's judgement of the code: `pass` (nothing above low), `warn` (a medium finding), `fail` (a high or critical one). */
@@ -307,9 +314,11 @@ export interface WorkshopItem {
    */
   matched?: boolean | null;
   /**
-   * What its builder takes of the creator fee of every launch someone else makes with it, bps of the
-   * fee (`WORKSHOP_AUTHOR_SHARES_BPS`): `AUTHOR_SHARE_BPS` (half), or 0 when they chose to take
-   * nothing (a hook's config made unlisted on chain, a script approved naming no author). Recorded at
+   * What its builder takes of every launch someone else makes with it, bps: a hook's, any 5% step
+   * from 0 to `AUTHOR_SHARE_BPS` (half) of the creator fee of each launch from its config; a
+   * companion's or a pair's, `AUTHOR_SHARE_BPS` (half) of the launcher's part of the creator fee
+   * (`WORKSHOP_AUTHOR_SHARES_BPS`), never of the companion fee. 0 when they chose to take nothing (a
+   * hook's config made unlisted on chain, a script approved naming no author). Recorded at
    * the submission; a hook's is chosen again at its config step, until the config is made. 0 for a
    * reading-lane item (it pays nobody). Absent from older servers: `AUTHOR_SHARE_BPS`.
    */
@@ -331,12 +340,31 @@ export interface WorkshopItem {
   nativeReady?: boolean | null;
   /** The creator fee its builder set for its launch config at the submission (`WorkshopSubmitRequest.creatorFeeBps`), where the config page starts; null when none. Absent from older servers. */
   plannedFeeBps?: number | null;
+  /**
+   * Its launch config's creator fee as the chain holds it (`LaunchConfig.creatorFeeBps`; a config
+   * never changes), basis points of each trade: what every launch from the config charges besides its
+   * hook's own cut; a pair's is split between the launcher's creator fee and the pot's companion fee
+   * by `keeper.launcherShareBps` (`pairFeeParts`). Null without a config (a companion) or while it
+   * can't be read. Absent from older servers.
+   */
+  configFeeBps?: number | null;
   /** Its picture (an IPFS URL its builder uploaded); null when none. Absent from older servers. */
   image?: string | null;
   /** Why it is off the Workshop: archived by its builder, or held for native SOL; null when on it. Absent from older servers. */
   archived?: WorkshopArchived | null;
   /** When its builder archived it, unix seconds; null when not. Absent from older servers. */
   archivedAt?: number | null;
+}
+
+/**
+ * A pair's config fee in two parts (the owner, 2026-10-15: the config's terms): the launcher's
+ * creator fee, its share (`launcherShareBps`, bps of the whole) of `totalBps` rounded to the nearest
+ * bp, as the launch page reads a split back (`rowsOfSplit`); the companion fee, the pot's, the rest.
+ * The one rule the launch page's fixed split and the Workshop draw, so they never disagree.
+ */
+export function pairFeeParts(totalBps: number, launcherShareBps: number): { creatorBps: number; companionBps: number } {
+  const creatorBps = Math.round((totalBps * launcherShareBps) / 10_000);
+  return { creatorBps, companionBps: totalBps - creatorBps };
 }
 
 /** What a reading-lane item's match compared, and who can change the program (`WorkshopDetail.match`). */
@@ -379,6 +407,8 @@ export interface WorkshopDetail extends WorkshopItem {
   /** A pair: the executable hash of the companion script's build Bordrless approved (what its deploy and its on-chain approval are bound to); null before approval, and for a hook or a companion. Absent from older servers. */
   approvedScriptHash?: string | null;
   notes: string;
+  /** The image its builder added under their words (`POST /v1/workshop/:id/notes/image`), an IPFS gateway URL; null when none. Shown with their words. Absent from older servers. */
+  notesImage?: string | null;
   /** Its source: a hook's, a companion's, or a pair's hook's. */
   files: StudioFile[];
   /** A pair's companion script source; empty for a hook or a companion. Absent from older servers. */
@@ -401,6 +431,19 @@ export interface WorkshopDetail extends WorkshopItem {
   deploy: WorkshopDeploySummary | null;
   /** A pair's companion script deploy. Absent from older servers. */
   scriptDeploy?: WorkshopDeploySummary | null;
+  /**
+   * What deploying it will cost, estimated from its approved build's size at today's rent (a pair:
+   * both halves), before any quote (a builder, 16 Oct 2026: "it would be nice if the amount of SOL
+   * the wallet needed to deploy was displayed"); null once deployed, or before a build. Absent from
+   * older servers. The quote (`POST /v1/workshop/:id/deploy/quote`) is what is paid.
+   */
+  deployCost?: WorkshopDeployCost | null;
+  /**
+   * When its checks go on, unix seconds, while they are held back (a builder's ten builds a UTC day
+   * used up, the builder busy; 17 Oct 2026: Fair Exit sat on "waiting" with nothing said); null when
+   * nothing holds them. Absent from older servers.
+   */
+  checksResumeAt?: number | null;
   /** A listed config's creator fee, once made. */
   creatorFeeBps: number | null;
   /** Bordrless's note on a rejection or a revocation, or why the checks stopped it. */
@@ -582,13 +625,14 @@ export const FEE_STEP_BPS = 25;
 /** Whether a Workshop config's creator fee (the whole of each trade's fee) is one its page makes: a whole number of steps, from one to the launchpad's cap. */
 export const workshopConfigFeeOk = (bps: number): boolean => Number.isInteger(bps) && bps >= FEE_STEP_BPS && bps <= MAX_CREATOR_FEE_BPS && bps % FEE_STEP_BPS === 0;
 
-/** The creator fee's choices in words: "a whole quarter of a percent, 0.25% to 2%". */
+/** The creator fee's choices in words: "a whole quarter of a percent, 0.25% to 5%". */
 export const WORKSHOP_CONFIG_FEE_WORDS = `a whole quarter of a percent, ${FEE_STEP_BPS / 100}% to ${MAX_CREATOR_FEE_BPS / 100}%`;
 
 /**
- * What a Workshop builder may take of the creator fee of others' launches (the owner, 2026-10-13):
- * `AUTHOR_SHARE_BPS` (half, the default), or nothing. Nothing in between: the shelves read "50%" or
- * "0%" to the builder, and the backend refuses any other share (`author_share`).
+ * What a companion's or a pair's builder may take of others' launches (the owner, 2026-10-13):
+ * `AUTHOR_SHARE_BPS` (half of the launcher's part of the creator fee, the default), or nothing; the
+ * backend refuses any other share for them (`author_share`). A hook's builder takes any
+ * `WORKSHOP_AUTHOR_SHARE_STEP_BPS` step from nothing to half (`workshopAuthorShareOk`).
  */
 export const WORKSHOP_AUTHOR_SHARES_BPS: readonly number[] = [AUTHOR_SHARE_BPS, 0];
 
@@ -599,7 +643,8 @@ export const WORKSHOP_AUTHOR_SHARE_STEP_BPS = 500;
  * Whether a builder's share is one the Workshop takes for its kind: a hook's any 5% step from
  * nothing to half (its launch config's share; the launchpad takes 1 to `MAX_AUTHOR_SHARE_BPS`,
  * half, and 0 is a config made without one); a companion's or a pair's half or nothing (the
- * companion program pays a script's author exactly `AUTHOR_SHARE_BPS` of each claim).
+ * companion program pays a script's author exactly `AUTHOR_SHARE_BPS` of the launcher's part of
+ * each creator fee claim).
  */
 export const workshopAuthorShareOk = (bps: number, kind: WorkshopKind): boolean =>
   kind === 'hook' ? Number.isInteger(bps) && bps >= 0 && bps <= AUTHOR_SHARE_BPS && bps % WORKSHOP_AUTHOR_SHARE_STEP_BPS === 0 : WORKSHOP_AUTHOR_SHARES_BPS.includes(bps);
@@ -615,7 +660,7 @@ export interface WorkshopConfigPrepareRequest {
    * X / (X + Y) here), fixed for every launch with it (the API refuses any other split, `split_fixed`).
    * Absent or null: the launcher splits the fee on the launch page. One the script's keeper.json fixes
    * (`launcherShareBps`) must be that one (`split_fixed`). A hook's config has no companion fee to
-   * split with (launchers add a fee hook on the launch page): refused (`no_split`).
+   * split with (launchers add a companion with the launch page's Companion fee row): refused (`no_split`).
    */
   launcherShareBps?: number | null;
   /**

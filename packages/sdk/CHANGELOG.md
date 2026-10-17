@@ -4,7 +4,7 @@ The public package is `@bordrless/sdk` on npm, published from the public reposit
 BordrlessDex/bordrless-sdk together with `@bordrless/shared` (shared first; the SDK depends on the
 same version of it). The monorepo is where both are written.
 
-## 0.15.0 (16 Oct 2026; not yet on npm)
+## 0.16.0 (17 Oct 2026; on GitHub, not yet on npm; includes everything of the unpublished 0.15.0)
 
 Everything since the published 0.14.0 (npm `latest` for both packages, 15 Oct 2026 ~18:00 UTC),
 the 0.14.1 items below included. A changed constant and new exports, so a minor version. What an
@@ -47,6 +47,12 @@ and `parseKeeperDeclaration` / `checkKeeperJson` refuse a keeper.json with `laun
 
 ### In the SDK
 
+- **`kit.claimSolFor(payer, owner, mint)`** (bordrless-programs `kit-claim-sol-for`; the kit IDL with
+  `claim_sol_for`): a native kit's `claim_sol` pushed by anyone, `payer` signing and paying the fee,
+  `owner` writable and not signing, paid to the holding's owner with `claim_sol`'s checks
+  (`NotAHolder`, `NothingToClaim`, `RecipientBelowRent`). Bordrless's keeper uses it to pay holders.
+  `KitConfig.creatorIsCompanion` is decoded, and `kitExcludes` excludes a companion creator as the
+  kit does (it had only the pool and the launch).
 - From 0.14.1 (committed in the public repo, never published): `companion.setPayoutTerms(authority,
   mint, { stepBps, holdingBps, windowBps, windowSecs })`; `payoutStepBudget` measures the window
   against the live pot as above; the companion IDL with `set_payout_terms` and `NotTermsAuthority`
@@ -62,6 +68,8 @@ and `parseKeeperDeclaration` / `checkKeeperJson` refuse a keeper.json with `laun
 
 ### In @bordrless/shared
 
+- `RewardPosition.autoPaid` (optional; true when the API's keeper pushes the position's rewards
+  to the wallet: a native kit, with the push on).
 - **The fee cap is 5%** (the owner, 15 Oct 2026): `MAX_CREATOR_FEE_BPS` 200 → 500 and
   `RULE_BOUNDS.maxRulesFeeBps` 300 → 500, the whole of each trade's fee (the creator fee and the
   companion fee together); the launchpad's own cap (`Config.max_creator_fee_bps`) is 10%.
@@ -87,6 +95,37 @@ and `parseKeeperDeclaration` / `checkKeeperJson` refuse a keeper.json with `laun
   `WorkshopCoinsResponse`, `WorkshopCoinsSort`, `WORKSHOP_COINS`; `WORKSHOP_IMAGE`; the reading's
   card (`WorkshopReading.summary`: `WorkshopSummary`, `WorkshopSplitPart`, `WorkshopPurpose`,
   `WORKSHOP_PURPOSES`, `WORKSHOP_PURPOSE_WORDS`).
+- **keeper.json `view` (16 Oct 2026)**: up to 6 figures a coin's page shows live from the script's
+  accounts (`KeeperViewField`: a label of up to 24 characters; `account` `"script"`, the script's own
+  state, or `{ "hook": [seeds] }`, an account of the coin's custom hook at the address those seeds
+  give under its program, `"mint"` standing for the coin's mint; the bytes' `offset` and `width`,
+  1, 2, 4 or 8, or 32 for a wallet; and `as`: `number`, `lamports`, `tokens`, `bps`, `time`, `secs`,
+  `wallet` or `flag`; `KEEPER_VIEW_AS`, `KEEPER_LIMITS.view`, `.viewLabel`, `.viewSeeds`,
+  `.viewSeedBytes`). Served raw as `ScriptSummary.view` (`ScriptViewFigure`) on the coin's companion
+  status; left out of the normal form when empty.
+- **keeper.json `pools` (17 Oct 2026)**: up to 3 plain DEX pools each step brings beside the launch
+  pool (`KeeperPool`: `base` and `quote` `"coin"`, `"sol"` (only as a quote) or a mint's address;
+  `feeBps` the pool's LP fee in basis points, any whole number the DEX takes, 0 to
+  `KEEPER_MAX_POOL_FEE_BPS` (9,000), 25 when absent, part of its address; `liquidity`
+  brings its LP mint and LP holdings too; `KeeperPoolMint`, `KEEPER_LIMITS.pools`). Never the coin's
+  own launch pool, never the same pool twice; `keeperDetails` says each. Bordrless's keeper then
+  brings, after the swap accounts, each pool's classic-swap accounts for the companion address, the
+  system and swap programs, each mint's token hook accounts, and with liquidity the LP mint and the
+  LP holdings of the launch (the locked one) and of the companion address, and makes the coin an
+  address lookup table of its own so the step fits one transaction (docs/scripts.md).
+- `WorkshopReading.byHand` (optional, 17 Oct 2026): a reading an operator wrote and stored through
+  `POST /admin/workshop/:id/reading` while the model could not run; the model's readings never set it.
+- **Checks held back, said (17 Oct 2026)**: `WorkshopDetail.checksResumeAt` (optional, unix seconds): when an item's checks go on while a wait holds them (a wallet's builds of the day used up); `WorkshopReading.byHand` (optional): a reading an operator wrote through `POST /admin/workshop/:id/reading`.
+- **Deploy cost on the item (16 Oct 2026)**: `WorkshopDetail.deployCost` (optional; `WorkshopDeployCost`): what deploying its approved build will cost at today's rent, a pair's both halves, null once deployed, so a builder funds the wallet before the quote.
+- **The Workshop rework (16 Oct 2026)**: `WorkshopItem.configFeeBps` (its launch config's creator
+  fee as the chain holds it; null without a config), `WorkshopDetail.notesImage` (an image under the
+  builder's words), `pairFeeParts(totalBps, launcherShareBps)` (a pair's fee as the launcher's
+  creator fee, its share rounded to the nearest bp, and the companion fee, the rest),
+  `WORKSHOP_READING_LIMITS.titleMax` (80: the most a reading's title is kept whole at), and in the
+  API `POST /v1/workshop/:id/notes/image` and `POST /v1/workshop/:id/notes/image/clear` (the image
+  under the builder's words, set and removed). `RewardPosition.autoPaid` (optional; true when the
+  API's keeper pays the position's holder rewards to the wallet by itself: a native kit, with the
+  push on; read as false when absent).
 - Words: `scriptProblem` says the fee as the whole ("The script’s part and the rest of the fee must
   add up to 100%.", "There is no creator fee or companion fee for the script to spend: set a
   companion fee."); keeper.json's

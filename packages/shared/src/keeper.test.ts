@@ -128,7 +128,7 @@ describe('keeper.json', () => {
     expect(problemOf(`{"version":1,"x":"${'a'.repeat(KEEPER_LIMITS.bytes)}"}`)).toBe('keeper.json is at most 4,096 bytes; this one is 4,116.');
     expect(problemOf([])).toBe('keeper.json: the file is one object.');
     expect(problemOf({ ...whale(), version: 2 })).toBe('keeper.json: version is 1, the only one there is.');
-    expect(problemOf({ ...whale(), extra: true })).toBe('keeper.json: the file has no field "extra" (it takes version, holdings, swapAccounts, hookAccounts, mintWritable, payouts, roundSecs, wallets, stepSecs, stateLen, initData, launcherShareBps, payoutTerms).');
+    expect(problemOf({ ...whale(), extra: true })).toBe('keeper.json: the file has no field "extra" (it takes version, holdings, swapAccounts, hookAccounts, mintWritable, payouts, roundSecs, wallets, stepSecs, stateLen, initData, launcherShareBps, payoutTerms, view, pools).');
     expect(problemOf({ ...whale(), holdings: undefined })).toBe('keeper.json: holdings is required: which holdings each step brings.');
     expect(problemOf({ ...whale(), swapAccounts: 'yes' })).toBe('keeper.json: swapAccounts is true or false.');
     expect(problemOf({ ...whale(), hookAccounts: 1 })).toBe('keeper.json: hookAccounts is true or false.');
@@ -267,4 +267,66 @@ describe('mintWritable', () => {
   });
 });
 
+});
+
+describe('view (the figures a coin’s page shows live, 16 Oct 2026)', () => {
+  const base = { version: 1, holdings: null, swapAccounts: false, wallets: ['HZ32BY2FGHJrFDxjJRPNncW8BsWNxqxMqQPhFTypwBJ6'] };
+  const problemOf = (v: unknown): string | null => { const p = keeperDeclarationOf(v); return p.ok ? null : p.problem; };
+  it('reads each figure: its label, the script’s state or a hook account by its seeds, the bytes and how they read; left out of the normal form when empty', () => {
+    const view = [
+      { label: ' Round ends ', account: { hook: ['state', 'mint'] }, offset: 88, width: 8, as: 'time' },
+      { label: 'Leader', account: { hook: ['state', 'mint'] }, offset: 48, width: 32, as: 'wallet' },
+      { label: 'Steps', account: 'script', offset: 0, width: 4, as: 'number' },
+    ];
+    const p = keeperDeclarationOf({ ...base, view });
+    expect(p.ok && p.declaration.view).toEqual([{ ...view[0], label: 'Round ends' }, view[1], view[2]]);
+    const none = keeperDeclarationOf({ ...base, view: [] });
+    expect(none.ok && 'view' in none.declaration).toBe(false);
+  });
+  it('refuses more than six figures, a wrong width, an unknown reading, bad seeds and a long label, each in one sentence', () => {
+    const f = (over: Record<string, unknown>) => ({ ...base, view: [{ label: 'Pot', account: 'script', offset: 0, width: 8, as: 'lamports', ...over }] });
+    expect(problemOf({ ...base, view: Array.from({ length: 7 }, () => ({ label: 'x', account: 'script', offset: 0, width: 8, as: 'number' })) })).toBe('keeper.json: view is a list of at most 6 figures a coin’s page shows from the script’s accounts.');
+    expect(problemOf(f({ width: 3 }))).toBe('keeper.json: view[0].width is the figure’s bytes: 1, 2, 4 or 8 (32 for a wallet, with "as": "wallet").');
+    expect(problemOf(f({ as: 'wallet', width: 8 }))).toBe('keeper.json: view[0].width is 32 for a wallet.');
+    expect(problemOf(f({ as: 'money' }))).toBe('keeper.json: view[0].as is how the figure reads: number, lamports, tokens, bps, time, secs, wallet, flag.');
+    expect(problemOf(f({ account: { hook: [] } }))).toBe('keeper.json: view[0].account.hook is the seeds of the hook’s account under its program: 1 to 4 strings of at most 32 bytes, "mint" for the coin’s mint.');
+    expect(problemOf(f({ label: 'x'.repeat(25) }))).toBe('keeper.json: view[0].label is the figure’s name, 1 to 24 characters.');
+    expect(problemOf(f({ offset: -1 }))).toBe('keeper.json: view[0].offset is where the figure’s bytes start: a whole number from 0 to 10,240.');
+  });
+});
+
+describe('pools (DEX pools a step brings beside the launch pool, 17 Oct 2026)', () => {
+  const WBORDR = 'APpT4aqDoXAVz6S9wVWCJdqayFcs4tvfj5jToffVncwv';
+  const pools = (list: unknown) => keeperDeclarationOf({ ...whale(), pools: list });
+
+  it('reads each pool by its two mints and fee tier (25 bps and no liquidity by default, bridged SOL as "sol"), says it in the details, and leaves it out of the normal form when empty', () => {
+    const r = pools([{ base: 'coin', quote: WBORDR, liquidity: true }, { base: WBORDR, quote: 'A49oVhX22ExMwTEtFC6Y8nhBdZ4LJDGhdXLDn4c2f59i', feeBps: 100 }]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.declaration.pools).toEqual([{ base: 'coin', quote: WBORDR, feeBps: 25, liquidity: true }, { base: WBORDR, quote: 'sol', feeBps: 100, liquidity: false }]);
+    const details = keeperDetails(r.declaration).join(' ');
+    expect(details).toContain('the DEX pool of the coin and the mint APpT…ncwv at a 0.25% LP fee, with its LP mint and LP holdings');
+    expect(details).toContain('the DEX pool of the mint APpT…ncwv and SOL at a 1% LP fee.');
+    expect(canonicalKeeperJson(r.declaration)).toContain('"pools":[{"base":"coin","feeBps":25,"liquidity":true,"quote":"APpT');
+    const none = pools([]);
+    expect(none.ok && 'pools' in none.declaration).toBe(false);
+  });
+
+  it('refuses SOL as a base, the launch pool, a pool of one mint, a fee past the DEX’s most, a bad mint, a repeat, an unknown field and more than three, each in one sentence', () => {
+    const problem = (list: unknown): string => {
+      const r = pools(list);
+      return r.ok ? '' : r.problem;
+    };
+    expect(problem([{ base: 'sol', quote: 'coin' }])).toContain('never "sol"');
+    expect(problem([{ base: 'coin', quote: 'sol' }])).toContain('launch pool');
+    expect(problem([{ base: WBORDR, quote: WBORDR }])).toContain('the same mint');
+    // Any fee the DEX takes, not only the site's tiers (a builder's wBORDR/SOL pool is at 30 bps, 17 Oct 2026).
+    expect(problem([{ base: WBORDR, quote: 'sol', feeBps: 30 }])).toBe('');
+    expect(problem([{ base: 'coin', quote: WBORDR, feeBps: 9_001 }])).toContain('0 to 9,000');
+    expect(problem([{ base: 'coin', quote: WBORDR, feeBps: 2.5 }])).toContain('whole number');
+    expect(problem([{ base: 'coin', quote: 'nope' }])).toContain('base58');
+    expect(problem([{ base: 'coin', quote: WBORDR }, { base: 'coin', quote: WBORDR, liquidity: true }])).toContain('named twice');
+    expect(problem([{ base: 'coin', quote: WBORDR, swap: true }])).toContain('no field "swap"');
+    expect(problem([1, 2, 3, 4])).toContain('at most 3');
+  });
 });

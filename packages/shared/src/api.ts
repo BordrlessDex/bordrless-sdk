@@ -4,7 +4,7 @@
  * read is null, never zero.
  */
 import type { RulesReadout } from './rules.ts';
-import type { KeeperLaunchTerms } from './keeper.ts';
+import type { KeeperLaunchTerms, KeeperViewAs } from './keeper.ts';
 import type { WorkshopFigures, WorkshopReading } from './workshop.ts';
 
 export type Address = string;
@@ -954,7 +954,16 @@ export interface PayoutTermsRequest {
 }
 
 /** A custom companion's script as its token page shows it (`CompanionSummary.script`), read from the chain and the Workshop. */
+/** A figure a coin's page shows live from the script's accounts (keeper.json `view`): its label, how it reads (`KeeperViewAs`) and its raw value as the chain holds it (digits, a base58 wallet), null when the account or the bytes aren't there. */
+export interface ScriptViewFigure {
+  label: string;
+  as: KeeperViewAs;
+  value: string | null;
+}
+
 export interface ScriptSummary {
+  /** The figures its keeper.json `view` declares, read within a second of the chain; null without any (absent from older servers). */
+  view?: ScriptViewFigure[] | null;
   /** Its account, `PDA(["script", mint])` under the companion program. */
   address: Address;
   /** The script program (a Workshop companion item's, deployed under Bordrless's key). */
@@ -1454,6 +1463,13 @@ export interface RewardPosition {
   claimable: Amount;
   /** Lamports the wallet has claimed here, all time; null when not tracked. */
   claimed: Amount | null;
+  /**
+   * Bordrless's keeper pays these rewards to the wallet by itself (`claim_sol_for`): true when the API runs the holder-rewards
+   * push (`HOLDER_PUSH_OPEN=1`) and the token's kit is native (rewards held as SOL). It pays a position once it reaches the
+   * keeper's minimum (`HOLDER_PUSH_MIN_LAMPORTS`, 0.001 SOL by default), about every 15 minutes, and never one that would leave
+   * the wallet below rent; the holder can still claim at any time. Optional only for older servers (read as false).
+   */
+  autoPaid?: boolean;
 }
 
 export interface RewardsList {

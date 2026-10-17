@@ -648,7 +648,7 @@ takes it from here, never from the launcher: without it a thirtieth of a fixed `
 minute, `keeperStepSecs`); `wallets`, up to 12 addresses or keys in your state a step brings
 for wallet answers; `payoutTerms`, the payout terms the launch makes your script with ("Paying
 through the companion", below); `mintWritable`, the coin's mint writable in every step (below);
-and `launcherShareBps`, the launcher's share of each trade's fee fixed for
+`pools`, up to 3 other DEX pools each step brings (below); and `launcherShareBps`, the launcher's share of each trade's fee fixed for
 every launch with your script (0 to 9,500 of 10,000; "0.5% to the launcher and 1.5% to the engine"
 of a 2% fee is 2500). The fee a launch charges on each trade is one number on chain, split by the
 companion at every claim: the launcher's share is their **creator fee**, paid to their wallet, and
@@ -669,6 +669,34 @@ coin's mint writable, which a script that burns the coin (the token program's `b
 without them the mint is appended last. Without the flag the mint is writable only on a launch with
 a burn rate, and a burn elsewhere fails the whole step (`MintNotWritable`). A burn may take the coin
 down to the dev bag still held, never into it (`ScriptTookDevBag`).
+
+**A script that trades or fills other pools: `pools`** (17 Oct 2026; default none). A step brings
+only the coin's own launch pool (`swapAccounts`) unless keeper.json names more: up to 3 plain DEX
+pools (no pool hook), each by its two mints and its LP fee tier, which give its address
+(`poolAddress(base, quote, feeBps, null)`): `{ "base": "coin", "quote": "<wBORDR mint>",
+"liquidity": true }` for a coin/wBORDR pool, `{ "base": "<wBORDR mint>", "quote": "sol" }` for
+wBORDR against SOL (`"coin"` is the coin's mint, `"sol"` is SOL and only ever a quote; `feeBps` is
+the pool's LP fee in basis points, any whole number from 0 to 9,000 the DEX takes, 25 when absent:
+name the fee the pool was made with, since it is part of the pool's address). Each step then carries, after the swap accounts, that pool's swap
+accounts for the companion address (the pool, both mints, both vaults, the companion address's
+holdings of both mints, the DEX's fixed accounts), the system program, the swap program, each mint's
+token hook accounts, and with `liquidity` its LP mint and the LP holdings of the launch (the locked
+one: mint LP into it and it is locked for good, as LiquidityTek does) and of the companion address.
+A pool that does not exist yet is named all the same, so a script may create it. Find each account
+by key. A step with other pools would not fit one transaction (a native step is 1,119 of its 1,232
+bytes already), so a coin whose script declares pools gets an address lookup table of its own, made
+and extended by Bordrless's keeper as its steps need (the first such step, and any step that brings new
+fixed accounts, waits one pass). The reading says every pool a script brings.
+
+**Figures on the coin's card: `view`** (16 Oct 2026; default none). Up to 6 figures a coin's page
+shows live from your script's accounts, each `{ "label", "account", "offset", "width", "as" }`: a
+label of up to 24 characters; `"account": "script"` (your state) or `{ "hook": ["state", "mint"] }`
+(an account of the coin's custom hook at the address those seeds give under its program, each seed
+a literal of up to 32 bytes or `"mint"` for the coin's mint); the bytes' `offset` and `width` (1, 2,
+4 or 8, unsigned little-endian; 32 for a wallet); and `as`, how they read: `number`, `lamports` (as
+SOL), `tokens` (of the coin), `bps` (a percentage), `time` (unix seconds, as how long until or
+since), `secs` (a length of time), `wallet` (base58) or `flag` (Yes or No). A game's round and its
+current winner belong there. Served raw as `ScriptSummary.view` on the coin's companion status.
 
 **Native coins.** Every coin launched since 15 Oct 2026 trades in SOL: the pot is the companion
 address's lamports above its rent, a script trades with `swap_v2` and pays a wallet with a system

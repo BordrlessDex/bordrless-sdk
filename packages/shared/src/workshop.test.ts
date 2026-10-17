@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { keeperLaunchTerms, withLauncherShare } from './keeper.ts';
-import { FEE_STEP_BPS, WORKSHOP_CONFIG_FEE_WORDS, workshopConfigFeeOk } from './workshop.ts';
+import { FEE_STEP_BPS, WORKSHOP_CONFIG_FEE_WORDS, pairFeeParts, workshopConfigFeeOk } from './workshop.ts';
 
 describe('a Workshop config’s creator fee', () => {
   it('is a whole number of quarter-percent steps, one to the launchpad’s cap', () => {
@@ -21,5 +21,20 @@ describe('the launcher’s share fixed on the config page', () => {
     const fixed = { ...plain, launcherShareBps: 1_000 };
     expect(withLauncherShare(fixed, 2_500)).toBe(fixed);
     expect(withLauncherShare(fixed, null)).toBe(fixed);
+  });
+});
+
+describe('a pair’s fee in two parts', () => {
+  it('rounds the launcher’s creator fee to the nearest bp, the companion fee the rest', () => {
+    expect(pairFeeParts(200, 1_000)).toEqual({ creatorBps: 20, companionBps: 180 });
+    expect(pairFeeParts(200, 5_000)).toEqual({ creatorBps: 100, companionBps: 100 });
+    // A tie: the creator fee rounds half up (12.5 → 13), as the launch page reads a split back.
+    expect(pairFeeParts(25, 5_000)).toEqual({ creatorBps: 13, companionBps: 12 });
+    expect(pairFeeParts(150, 3_333)).toEqual({ creatorBps: 50, companionBps: 100 });
+    expect(pairFeeParts(0, 5_000)).toEqual({ creatorBps: 0, companionBps: 0 });
+    for (const total of [25, 75, 125, 200, 500]) for (const share of [0, 2_500, 5_000, 9_500]) {
+      const parts = pairFeeParts(total, share);
+      expect(parts.creatorBps + parts.companionBps).toBe(total);
+    }
   });
 });

@@ -141,6 +141,10 @@ describe('v2 accounts (programs-summary §3 and §6)', () => {
     const holder = { snapshot: 0n, owed: 0n, earlyLocked: 0n };
     expect(rewardsClaimable(kitRewardsOf(config), 21_000_000n, 1_800_000_100, 1_000_000_000_000n, holder)).toEqual({ claimable: 7_000_000n, payable: 7_000_000n });
     expect([kitExcludes(config, pool), kitExcludes(config, a.launchAddress(mintKey)), kitExcludes(config, k())]).toEqual([true, true, false]);
+    // The creator is a holder like anyone, unless it is the launch's companion (`creator_is_companion`): then excluded too.
+    expect([config.creatorIsCompanion, kitExcludes(config, config.creator)]).toEqual([false, false]);
+    const companionCreator = decodeKitConfig(await encodeAccount('kit', 'kitConfig', { ...value, creatorIsCompanion: true }));
+    expect([companionCreator.creatorIsCompanion, kitExcludes(companionCreator, companionCreator.creator), kitExcludes(companionCreator, k())]).toEqual([true, true, false]);
     // §4.15: the kit as hook, no hook or mint authority, its flags, the config's launch and pool.
     const mint = decodeMint(await encodeAccount('token', 'mint', { version: 1, decimals: 6, supply: bn(10n ** 15n), maxSupply: bn(10n ** 15n), mintAuthority: null, freezeAuthority: null, hookAuthority: null, metadataAuthority: null, hookProgram: a.KIT_PROGRAM, hookFlags: kitMintFlags(15), name: 'N', symbol: 'S', uri: 'u', createdAt: bn(1), creator: k(), hookSignerBump: 255, reserved: Array(31).fill(0) }));
     const launch = { mint: mintKey, pool } as Parameters<typeof isVerifiedKitToken>[2];

@@ -586,6 +586,21 @@ describe('builders hold to the v2 IDLs (programs-summary §3)', () => {
     expect(keyAt(noRewards, 7)).toBe(a.KIT_PROGRAM.toBase58());
     holdToIdl('kit', 'graduate', kit.graduate(caller.address, mint), 0);
   });
+
+  it('kit: claim_sol_for is claim_sol pushed by a payer, the owner writable and not signing', () => {
+    const [payer, owner, mint] = [k(), k(), k()];
+    const pushed = kit.claimSolFor(payer, owner, mint);
+    holdToIdl('kit', 'claim_sol_for', pushed, 0);
+    expect(pushed.data.length).toBe(8);
+    expect(CODERS.kit.instruction.decode(pushed.data)?.name).toBe('claimSolFor');
+    expect(metaOf(pushed.keys[0]!)).toEqual([payer.toBase58(), true, false]);
+    expect(metaOf(pushed.keys[1]!)).toEqual([owner.toBase58(), false, true]);
+    // After the payer, the accounts of the owner's own claim_sol, the owner no longer signing.
+    const own = kit.claimSol(owner, mint);
+    holdToIdl('kit', 'claim_sol', own, 0);
+    expect(pushed.keys.slice(1).map(metaOf)).toEqual(own.keys.map((m) => metaOf({ ...m, isSigner: false })));
+    expect(pushed.keys.slice(2, 6).map((m) => m.pubkey.toBase58())).toEqual([a.kitConfigAddress(mint), mint, a.holdingAddress(mint, owner), a.KIT_HOOK_AUTHORITY].map(String));
+  });
 });
 
 describe('the launch-pool swap recipe (programs-summary §2.6)', () => {

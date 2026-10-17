@@ -34,8 +34,8 @@
  * reading of a declaration is apps/server/src/keeper/scriptExtras.ts.
  */
 import type { PayoutTermsRequest } from './api.ts';
-import { PAYOUT_TERMS_BOUNDS, SCRIPT_BOUNDS, TOKEN_DECIMALS, payoutTermsWithin } from './policy.ts';
-import { HOOK_DATA_LEN, PROGRAM_IDS } from './programs.ts';
+import { PAYOUT_TERMS_BOUNDS, POOL_FEE_TIER_DEFAULT_BPS, SCRIPT_BOUNDS, TOKEN_DECIMALS, payoutTermsWithin } from './policy.ts';
+import { FIXED_ADDRESSES, HOOK_DATA_LEN, PROGRAM_IDS } from './programs.ts';
 import { decimalWords } from './rules.ts';
 
 /** The file, at the root of the submitted source (beside `src/`): a companion script's, or a pair's companion half's. */
@@ -56,12 +56,45 @@ export const KEEPER_LIMITS = {
   maxUnitSecs: 31_536_000,
   /** Wallets a step may bring (about 12 fit one transaction beside the protocol's lookup table on a plain coin; the keeper brings fewer when they do not). */
   wallets: 12,
+  /** Figures a coin's page shows live from the script's accounts (`view`), and the most characters a figure's label has. */
+  view: 6,
+  viewLabel: 24,
+  /** Seeds a hook account's address is made of (`view[].account.hook`), and the most bytes one literal seed has. */
+  viewSeeds: 4,
+  viewSeedBytes: 32,
+  /** DEX pools a step brings beside the launch pool (`pools`). Each costs a step about nine accounts of its own. */
+  pools: 3,
 } as const;
 
 const U64_MAX = (1n << 64n) - 1n;
 
 /** Bytes of an unsigned little-endian field. */
 export type KeeperWidth = 1 | 2 | 4 | 8;
+
+/**
+ * How a coin's page shows a figure of the script's state (keeper.json `view`, 16 Oct 2026; the
+ * owner: a game's round and its current winner belong on the card): a plain `number`; `lamports`
+ * as SOL; `tokens` of the coin; `bps` as a percentage; `time`, unix seconds, as how long until
+ * it (or since); `secs`, a length of time; a `wallet` (32 bytes, base58; all zeros reads as none);
+ * a `flag` (0 or not).
+ */
+export type KeeperViewAs = 'number' | 'lamports' | 'tokens' | 'bps' | 'time' | 'secs' | 'wallet' | 'flag';
+export const KEEPER_VIEW_AS: readonly KeeperViewAs[] = ['number', 'lamports', 'tokens', 'bps', 'time', 'secs', 'wallet', 'flag'];
+
+/**
+ * One figure a coin's page shows live, read from an account of the coin's: the script's own state
+ * (`"script"`), or an account of the coin's custom hook at the address its seeds give under the hook
+ * program (`{ "hook": ["state", "mint"] }`: each seed a literal, or `"mint"` for the coin's mint).
+ * `offset` and `width` say the bytes (32 for a wallet); `as` says how they read. Shown with the
+ * script's figures on the coin's Rules card, within a second of the chain.
+ */
+export interface KeeperViewField {
+  label: string;
+  account: 'script' | { hook: string[] };
+  offset: number;
+  width: KeeperWidth | 32;
+  as: KeeperViewAs;
+}
 const WIDTHS: readonly number[] = [1, 2, 4, 8];
 
 /** An unsigned little-endian field of the script's own state account (`PDA(["script-state", mint])` under the companion), read fresh at each step. */
@@ -120,6 +153,32 @@ export interface KeeperHoldings {
  */
 export type KeeperWallet = string | { state: { offset: number } };
 
+/** A mint a pool is named by (`pools[].base`, `.quote`): `"coin"`, the coin's own mint; `"sol"`, SOL (bridged SOL, the DEX's quote mint for it); or a mint's address in base58. */
+export type KeeperPoolMint = 'coin' | 'sol' | string;
+
+/**
+ * A DEX pool each step brings beside the launch pool (17 Oct 2026; a builder's pair that adds a
+ * coin/wBORDR pool's liquidity asked for it): a plain pool, with no pool hook, at the address its
+ * two mints and its LP fee tier give (`poolAddress(base, quote, feeBps, null)`), whether or not it
+ * exists yet (a script may create it). The step carries the pool's swap accounts for the companion
+ * address as the SDK's `swap.swap` lists them (the pool, both mints, both vaults, the companion
+ * address's holdings of both mints, the DEX's fixed accounts), the system program, the swap
+ * program, each mint's token hook accounts, and with `liquidity` the pool's LP mint and the LP
+ * holdings of the launch (the one graduation locks for good, where LiquidityTek mints its LP) and
+ * of the companion address. The script finds what it needs among them by key.
+ */
+export interface KeeperPool {
+  base: KeeperPoolMint;
+  quote: KeeperPoolMint;
+  /** The pool's LP fee, basis points, part of its address: any whole number the DEX takes, 0 to `KEEPER_MAX_POOL_FEE_BPS` (25 when absent; a builder's wBORDR/SOL pool is at 30, 17 Oct 2026). */
+  feeBps: number;
+  /** The step also brings the pool's LP mint and LP holdings: a script that adds liquidity to it. Default false. */
+  liquidity: boolean;
+}
+
+/** The most a pool's LP fee can be on the DEX (`bordrless_swap::constants::MAX_LP_FEE_BPS`, 90%): what `pools[].feeBps` is held to. The site's create-pool form offers 25, 100 and 200; a pool made another way may have any fee. */
+export const KEEPER_MAX_POOL_FEE_BPS = 9_000;
+
 /** A declaration in its normal form: what `parseKeeperDeclaration` answers, what the Workshop stores and hashes, what the keeper reads. */
 export interface KeeperDeclaration {
   version: 1;
@@ -161,6 +220,10 @@ export interface KeeperDeclaration {
   stateLen?: number;
   /** What `companion_init` gets at a site launch, hex (at most `SCRIPT_BOUNDS.maxInitLen` bytes). Absent: nothing. Left out of the normal form when absent. */
   initData?: string;
+  /** Figures a coin's page shows live from the script's accounts (`KeeperViewField`, 16 Oct 2026); absent: none. Left out of the normal form when empty. */
+  view?: KeeperViewField[];
+  /** DEX pools each step brings beside the launch pool (`KeeperPool`, 17 Oct 2026), at most `KEEPER_LIMITS.pools`; absent: none. Left out of the normal form when empty. */
+  pools?: KeeperPool[];
   /**
    * The launcher's share of each trade's fee on every launch with it, basis points of the whole (0
    * to `KEEPER_MAX_LAUNCHER_SHARE_BPS`; the pot gets the rest, at least a twentieth), fixed by the
@@ -326,6 +389,37 @@ function walletsOf(v: unknown, at: string): KeeperWallet[] {
   return out;
 }
 
+const BRIDGED_SOL = FIXED_ADDRESSES.bridgedSolMint;
+
+/** `pools`: at most `KEEPER_LIMITS.pools` plain DEX pools, each by its two mints and its fee tier, none the launch pool, none named twice. */
+function poolsOf(v: unknown): KeeperPool[] {
+  if (!Array.isArray(v) || v.length > KEEPER_LIMITS.pools) return fail(`pools is a list of at most ${KEEPER_LIMITS.pools} DEX pools a step brings beside the launch pool, each { "base", "quote", "feeBps", "liquidity" }.`);
+  const seen = new Set<string>();
+  return v.map((item: unknown, i) => {
+    const at = `pools[${i}]`;
+    const p = fieldsOf(item, at, ['base', 'quote', 'feeBps', 'liquidity'], '{ "base", "quote", "feeBps", "liquidity" }: a DEX pool by its two mints and its LP fee tier');
+    const mintOf = (x: unknown, side: 'base' | 'quote'): KeeperPoolMint => {
+      if (x === 'coin' || x === 'sol') return x;
+      if (typeof x !== 'string' || !isBase58Key(x)) return fail(`${at}.${side} is "coin" (the coin’s mint), "sol" (SOL), or a mint’s address in base58.`);
+      if (x === BRIDGED_SOL) return 'sol';
+      if (x === DEFAULT_KEY || PROTOCOL_KEYS.includes(x)) return fail(`${at}.${side} is the default key or a Bordrless program, not a mint.`);
+      return x;
+    };
+    const base = mintOf(p.base, 'base');
+    const quote = mintOf(p.quote, 'quote');
+    if (base === 'sol') fail(`${at}.base is never "sol": SOL is a pool’s quote on the DEX.`);
+    if (base === quote) fail(`${at}: base and quote are the same mint.`);
+    if (base === 'coin' && quote === 'sol') fail(`${at} is the coin’s own launch pool: ask for it with swapAccounts.`);
+    const feeBps: unknown = p.feeBps === undefined || p.feeBps === null ? POOL_FEE_TIER_DEFAULT_BPS : p.feeBps;
+    if (typeof feeBps !== 'number' || !Number.isInteger(feeBps) || feeBps < 0 || feeBps > KEEPER_MAX_POOL_FEE_BPS) return fail(`${at}.feeBps is the pool’s LP fee in basis points, part of its address: a whole number from 0 to ${group(KEEPER_MAX_POOL_FEE_BPS)} (${POOL_FEE_TIER_DEFAULT_BPS} when absent).`);
+    const liquidity = flagOf(p.liquidity, `${at}.liquidity`, false);
+    const key = `${base}/${quote}/${feeBps}`;
+    if (seen.has(key)) fail(`${at} is named twice.`);
+    seen.add(key);
+    return { base, quote, feeBps, liquidity };
+  });
+}
+
 /** `holdings`, held to the schema beside the flags it depends on. */
 function holdingsOf(v: unknown, swapAccounts: boolean, payouts: boolean): KeeperHoldings {
   const h = fieldsOf(v, 'holdings', ['minBalance', 'maxBalance', 'hookData', 'payTo', 'perStep'], '{ "minBalance", "maxBalance", "hookData", "payTo", "perStep" }');
@@ -348,7 +442,7 @@ function holdingsOf(v: unknown, swapAccounts: boolean, payouts: boolean): Keeper
 /** The declaration in a parsed JSON value, held to the schema and its bounds: its normal form, or why not, in one sentence. */
 export function keeperDeclarationOf(value: unknown): KeeperParse {
   try {
-    const root = fieldsOf(value, 'the file', ['version', 'holdings', 'swapAccounts', 'hookAccounts', 'mintWritable', 'payouts', 'roundSecs', 'wallets', 'stepSecs', 'stateLen', 'initData', 'launcherShareBps', 'payoutTerms'], 'one object');
+    const root = fieldsOf(value, 'the file', ['version', 'holdings', 'swapAccounts', 'hookAccounts', 'mintWritable', 'payouts', 'roundSecs', 'wallets', 'stepSecs', 'stateLen', 'initData', 'launcherShareBps', 'payoutTerms', 'view', 'pools'], 'one object');
     if (root.version !== KEEPER_VERSION) fail(`version is ${KEEPER_VERSION}, the only one there is.`);
     const wallets = walletsOf(root.wallets, 'wallets');
     // A script that pays wallets alone brings no holdings.
@@ -365,11 +459,40 @@ export function keeperDeclarationOf(value: unknown): KeeperParse {
     const initData = root.initData === undefined || root.initData === null ? null : initDataOf(root.initData);
     const launcherShareBps = root.launcherShareBps === undefined || root.launcherShareBps === null ? null : launcherShareOf(root.launcherShareBps);
     const payoutTerms = root.payoutTerms === undefined || root.payoutTerms === null ? null : payoutTermsOf(root.payoutTerms);
-    return { ok: true, declaration: { version: 1, holdings, swapAccounts, hookAccounts, ...(mintWritable ? { mintWritable } : {}), payouts, roundSecs, ...(wallets.length > 0 ? { wallets } : {}), ...(stepSecs !== null ? { stepSecs } : {}), ...(launcherShareBps !== null ? { launcherShareBps } : {}), ...(payoutTerms !== null ? { payoutTerms } : {}), ...(stateLen !== null ? { stateLen } : {}), ...(initData !== null ? { initData } : {}) } };
+    const view = root.view === undefined || root.view === null ? [] : viewOf(root.view);
+    const pools = root.pools === undefined || root.pools === null ? [] : poolsOf(root.pools);
+    return { ok: true, declaration: { version: 1, holdings, swapAccounts, hookAccounts, ...(mintWritable ? { mintWritable } : {}), payouts, roundSecs, ...(wallets.length > 0 ? { wallets } : {}), ...(stepSecs !== null ? { stepSecs } : {}), ...(launcherShareBps !== null ? { launcherShareBps } : {}), ...(payoutTerms !== null ? { payoutTerms } : {}), ...(stateLen !== null ? { stateLen } : {}), ...(initData !== null ? { initData } : {}), ...(view.length > 0 ? { view } : {}), ...(pools.length > 0 ? { pools } : {}) } };
   } catch (error) {
     if (error instanceof KeeperProblem) return { ok: false, problem: error.message };
     throw error;
   }
+}
+
+/** `view`: at most `KEEPER_LIMITS.view` figures, each a label, an account, the bytes and how they read. */
+function viewOf(v: unknown): KeeperViewField[] {
+  if (!Array.isArray(v) || v.length > KEEPER_LIMITS.view) return fail(`view is a list of at most ${KEEPER_LIMITS.view} figures a coin’s page shows from the script’s accounts.`);
+  return v.map((item, i) => {
+    const at = `view[${i}]`;
+    const f = fieldsOf(item, at, ['label', 'account', 'offset', 'width', 'as'], '{ "label", "account", "offset", "width", "as" }');
+    if (typeof f.label !== 'string' || f.label.trim().length === 0 || f.label.length > KEEPER_LIMITS.viewLabel) fail(`${at}.label is the figure’s name, 1 to ${KEEPER_LIMITS.viewLabel} characters.`);
+    let account: KeeperViewField['account'];
+    if (f.account === 'script') account = 'script';
+    else {
+      const a = fieldsOf(f.account, `${at}.account`, ['hook'], '"script", or { "hook": [seeds] }');
+      const seeds = a.hook;
+      if (!Array.isArray(seeds) || seeds.length === 0 || seeds.length > KEEPER_LIMITS.viewSeeds || !seeds.every((x) => typeof x === 'string' && x.length > 0 && utf8Length(x) <= KEEPER_LIMITS.viewSeedBytes)) {
+        fail(`${at}.account.hook is the seeds of the hook’s account under its program: 1 to ${KEEPER_LIMITS.viewSeeds} strings of at most ${KEEPER_LIMITS.viewSeedBytes} bytes, "mint" for the coin’s mint.`);
+      }
+      account = { hook: seeds as string[] };
+    }
+    if (typeof f.offset !== 'number' || !Number.isInteger(f.offset) || f.offset < 0 || f.offset > SCRIPT_BOUNDS.maxStateLen) fail(`${at}.offset is where the figure’s bytes start: a whole number from 0 to ${group(SCRIPT_BOUNDS.maxStateLen)}.`);
+    const as = f.as;
+    if (typeof as !== 'string' || !KEEPER_VIEW_AS.includes(as as KeeperViewAs)) fail(`${at}.as is how the figure reads: ${KEEPER_VIEW_AS.join(', ')}.`);
+    const width = f.width;
+    const wallet = as === 'wallet';
+    if (typeof width !== 'number' || (wallet ? width !== 32 : !WIDTHS.includes(width))) fail(wallet ? `${at}.width is 32 for a wallet.` : `${at}.width is the figure’s bytes: 1, 2, 4 or 8 (32 for a wallet, with "as": "wallet").`);
+    return { label: (f.label as string).trim(), account, offset: f.offset as number, width: width as KeeperViewField['width'], as: as as KeeperViewAs };
+  });
 }
 
 /** `stateLen`: a whole number of bytes, 0 to the companion's most. */
@@ -587,12 +710,15 @@ export function keeperWords(d: KeeperDeclaration, decimals: number = TOKEN_DECIM
  * step carries, and where a round's or an epoch's length comes from.
  */
 const pctWord = (bps: number): string => `${(bps / 100).toLocaleString('en-US', { maximumFractionDigits: 2 })}%`;
+/** A pool's mint in words: "the coin", "SOL", or "the mint APpT…ncwv". */
+const poolMintWord = (m: KeeperPoolMint): string => (m === 'coin' ? 'the coin' : m === 'sol' ? 'SOL' : `the mint ${m.slice(0, 4)}…${m.slice(-4)}`);
 
 export function keeperDetails(d: KeeperDeclaration): string[] {
   const out: string[] = [];
   const carries = [d.payouts ? 'the companion’s payout accounts' : null, d.swapAccounts ? 'the launch pool’s swap accounts' : d.hookAccounts ? 'the token’s hook accounts' : null].filter((x): x is string => x !== null);
   if (carries.length > 0) out.push(`Each step also carries ${carries.join(' and ')}.`);
   if (d.mintWritable) out.push('The coin’s mint is passed writable in every step (the script may burn the coin).');
+  for (const p of d.pools ?? []) out.push(`Each step also brings the DEX pool of ${poolMintWord(p.base)} and ${poolMintWord(p.quote)} at a ${pctWord(p.feeBps)} LP fee${p.liquidity ? ', with its LP mint and LP holdings (the script may add liquidity to it)' : ''}.`);
   const other = d.holdings ? (d.swapAccounts ? d.holdings.perStep.withoutSwapAccounts : d.holdings.perStep.withSwapAccounts) : null;
   if (other !== null) out.push(`${d.swapAccounts ? 'Without' : 'With'} the swap accounts a step would bring up to ${other}.`);
   if (d.wallets) out.push(`The wallets (with the companion’s payout terms): ${d.wallets.map((w) => (typeof w === 'string' ? w : `the public key at byte ${w.state.offset} of the script’s state`)).join(', ')}.`);

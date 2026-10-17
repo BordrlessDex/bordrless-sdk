@@ -409,6 +409,12 @@ export interface KitConfig {
   isNative?: boolean;
   /** A native kit's lamport base (`reserved[1..9]`): the config's lamports that are not rewards. 0 for a bridged kit. */
   lamportsBase?: bigint;
+  /**
+   * The launch's creator is its companion's creator address (`PDA(["creator", mint], COMPANION_ID)`), decided at `init`: the
+   * companion holds the dev bag and its buybacks, so the kit excludes it like the pool and the launch (`kitExcludes`). Absent
+   * from configs decoded by older code.
+   */
+  creatorIsCompanion?: boolean;
 }
 
 export interface TaxConfig {
@@ -703,6 +709,7 @@ export const decodeKitConfig = (data: Buffer): KitConfig => {
     streamNext: big(r.streamNext),
     isNative: Number((r.reserved as number[])[0]) === 1,
     lamportsBase: u64At(r.reserved as number[], 1),
+    creatorIsCompanion: Boolean(r.creatorIsCompanion),
   };
 };
 
@@ -809,8 +816,12 @@ export function kitRewardsOf(c: KitConfig): KitRewards {
 /** A holding's hook data read as the kit's (§4.4): snapshot, owed, early_locked. */
 export const kitHookDataOf = (holding: Pick<Holding, 'hookData'>): KitHookData => decodeKitHookData(holding.hookData);
 
-/** Whether the pool or the launch owns this: they earn no rewards, are never capped and cannot claim (§4.5). */
-export const kitExcludes = (c: Pick<KitConfig, 'pool' | 'launch'>, owner: PublicKey): boolean => owner.equals(c.pool) || owner.equals(c.launch);
+/**
+ * Whether the kit excludes `owner` (`KitConfig::is_excluded`): the pool, the launch, or the creator when it is the launch's
+ * companion (`creatorIsCompanion`). They earn no rewards, are never capped and cannot claim (§4.5; `NotAHolder`).
+ */
+export const kitExcludes = (c: Pick<KitConfig, 'pool' | 'launch'> & Partial<Pick<KitConfig, 'creator' | 'creatorIsCompanion'>>, owner: PublicKey): boolean =>
+  owner.equals(c.pool) || owner.equals(c.launch) || (c.creatorIsCompanion === true && c.creator !== undefined && owner.equals(c.creator));
 
 /**
  * §4.15: a token is a Bordrless launch with kit rules only when a `Launch` exists at `["launch",

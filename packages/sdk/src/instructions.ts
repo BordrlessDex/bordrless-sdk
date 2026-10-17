@@ -1079,6 +1079,16 @@ export const kit = {
     const keys = [rw(owner, true), rw(a.kitConfigAddress(mint)), ro(mint), rw(a.holdingAddress(mint, owner)), ro(a.KIT_HOOK_AUTHORITY), ...tokenFixed()];
     return ix(a.KIT_PROGRAM, 'kit', 'claimSol', {}, withEvents(a.KIT_PROGRAM, keys));
   },
+  /**
+   * `claim_sol_for` of a native kit: `owner`'s holder rewards pushed to its wallet in SOL by `payer`, who signs and pays the
+   * fee and nothing else (`owner` does not sign; the SOL can only go to the holding's owner). Refused as `claim_sol` is: an
+   * excluded owner (`NotAHolder`), nothing to pay (`NothingToClaim`), or a wallet the pay would leave below rent
+   * (`RecipientBelowRent`).
+   */
+  claimSolFor(payer: PublicKey, owner: PublicKey, mint: PublicKey): TransactionInstruction {
+    const keys = [ro(payer, true), rw(owner), rw(a.kitConfigAddress(mint)), ro(mint), rw(a.holdingAddress(mint, owner)), ro(a.KIT_HOOK_AUTHORITY), ...tokenFixed()];
+    return ix(a.KIT_PROGRAM, 'kit', 'claimSolFor', {}, withEvents(a.KIT_PROGRAM, keys));
+  },
   /** `share_sol(amount)`: `sharer` shares `amount` lamports of its own with the holders of a native kit's `mint`, as `share`. */
   shareSol(sharer: PublicKey, mint: PublicKey, amount: bigint): TransactionInstruction {
     return ix(a.KIT_PROGRAM, 'kit', 'shareSol', { amount: bn(amount) }, withEvents(a.KIT_PROGRAM, [rw(sharer, true), rw(a.kitConfigAddress(mint)), ro(a.SYSTEM_PROGRAM)]));
