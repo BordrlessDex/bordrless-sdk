@@ -1,7 +1,9 @@
 # 6. The bridge
 
 The bridge holds SPL tokens, Token-2022 tokens and SOL, and issues Bordrless-standard tokens for them
-one for one. It's how SOL enters the standard: **every launch is priced in bridged SOL**.
+one for one. Bridged SOL is every launch's `quote_mint` (in every pool's address), but since 15 Oct
+2026 almost every pool holds its SOL natively, as lamports, and trades with `swap_v2` without the
+bridge ([Trading](04-trading.md#native-sol-pools-swap_v2)).
 
 ## Bridged SOL
 
@@ -18,8 +20,9 @@ bridge.unwrapSol(user, amount);          // bridged SOL -> SOL; 2^64 - 1 unwraps
 bridge.unwrapSolAbove(user, keep);       // unwrap everything above `keep`
 ```
 
-Trades with SOL wrap before and unwrap after, in the same transaction ([Trading](04-trading.md)).
-A wallet's bridged-SOL holding is its SOL: show it as SOL, and value it at 1:1.
+Only trades on a pool still on bridged SOL wrap before and unwrap after, in the same transaction
+(pool `4PvPnTBy…`, coin `5DMBPNoY…`; [Trading](04-trading.md)); don't wrap for a native pool. A
+wallet's bridged-SOL holding is its SOL: show it as SOL, and value it at 1:1.
 
 ## Bridged SPL and Token-2022 tokens
 

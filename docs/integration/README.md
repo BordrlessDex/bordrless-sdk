@@ -3,6 +3,16 @@
 For trading terminals, aggregators, indexers, wallets and portfolio trackers that want to show and
 trade Bordrless tokens.
 
+**Changed 2026-10-15 and 16 (SDK 0.14.0): native SOL.** Pools, launches, kits, companions and hook
+vaults hold SOL as lamports (pools keep bridged SOL `A49oVh…` as their `quote_mint` and in their
+seeds, so no address changed). Trade them with `swap_v2`: the wallet pays a buy in SOL and a sell
+pays SOL to the wallet, **no wrap and no unwrap**; `launch.swap` builds it for native pools. New
+launches are native since 16 Oct 2026. Two exceptions stay on bridged SOL: pool
+`4PvPnTByfrnhA1nNmsaou7GrdQsqJNrkinqLHp2JHFX7` (forever) and, for now, the coin
+`5DMBPNoYAmbiNnRyRkWS7BetnfvAzbUqXyXNiw6Hn7hh`. Read `quoteNative` / `isNative` rather than
+assuming either ([Trading](04-trading.md#native-sol-pools-swap_v2)). Later SDK versions (0.15.0 to
+0.17.0) are GitHub releases, not yet on npm ([CHANGELOG](../../packages/sdk/CHANGELOG.md)).
+
 **Changed 2026-10-13 (SDK 0.10.0):** apps can charge their own fee on swaps they route (the
 router: at most 1%, `router.swap`); a custom hook may take a SOL cut on every trade of its coin, so
 a trade on such a coin passes four more accounts (`launch.swap` adds them; `quoteCutExtras`);
@@ -34,7 +44,7 @@ here is public and permissionless: read the chain, build transactions with
 [`@bordrless/sdk`](../../packages/sdk), and send them yourself.
 
 ```sh
-npm install @bordrless/sdk@0.10.0 @bordrless/shared@0.10.0 @solana/web3.js
+npm install @bordrless/sdk@0.14.0 @bordrless/shared@0.14.0 @solana/web3.js
 ```
 
 ## Integration checklist
@@ -44,11 +54,12 @@ For a terminal that lists, prices and trades Bordrless tokens:
 1. **Detect a Bordrless token**: its mint is owned by the token program `2XoEW…vr22`, and a
    launchpad token has a `Launch` at `launchAddress(mint)`
    ([The standard](01-the-standard.md#tokens-and-holdings), [Every launch](02-reading-tokens.md#every-launch)).
-2. **Price it** from its pool's real plus virtual reserves, in bridged SOL (1:1 with SOL)
-   ([One token's page](02-reading-tokens.md#one-tokens-page)).
+2. **Price it** from its pool's real plus virtual reserves (the pool's books, in SOL, whichever form
+   the pool is in; never a vault's balance) ([One token's page](02-reading-tokens.md#one-tokens-page)).
 3. **Quote and simulate** every swap: `quoteLaunchSwap` is exact for launch rules; simulate any
    token with a custom hook ([Quoting exactly](04-trading.md#quoting-exactly)).
-4. **Build and send**: wrap or unwrap SOL in the same transaction, pass the hook's accounts (four
+4. **Build and send**: `launch.swap` (`swap_v2` on a native pool: SOL straight from and to the
+   wallet, no wrap; only a bridged pool wraps and unwraps in the same transaction), pass the hook's accounts (four
    more on a coin whose hook takes a SOL cut, [Trading](04-trading.md#coins-whose-hook-takes-a-sol-cut)), use a
    v0 transaction with the protocol lookup table, set a compute-unit limit from the simulation, and
    let the wallet sign and send ([A buy, end to end](04-trading.md#a-buy-end-to-end),
@@ -60,9 +71,9 @@ For a terminal that lists, prices and trades Bordrless tokens:
    [Who can upgrade a hook](05-hooks-and-risk.md#who-can-upgrade-a-hook), [Risk labels](05-hooks-and-risk.md#risk-labels)).
 6. **Index** trades, fees and launches from event CPIs, not logs; skip failed transactions
    ([Indexing trades](03-indexing-trades.md)).
-7. **Handle bridged SOL**: show a wallet's bridged-SOL holding as SOL; unwrap sell proceeds
+7. **Handle bridged SOL** left over: show a wallet's bridged-SOL holding as SOL that can be unwrapped
    ([The bridge](06-bridge.md#bridged-sol)).
-8. **Get ready for native SOL** (timeline TBD): detect `quoteNative` / `isNative`, trade native
+8. **Native SOL** (live since 15 Oct 2026; new launches native since 16 Oct): detect `quoteNative` / `isNative`, trade native
    pools with `swap_v2` (an old `swap` sell the buffer can't cover is paid the rest in SOL only when
    sent top level by the holding's owner on a native launch; otherwise it fails with `BufferShort`), index `SwappedNative`, read SOL as lamports where the flags say so
    ([Native SOL pools](04-trading.md#native-sol-pools-swap_v2), [Indexing](03-indexing-trades.md#native-sol-swaps-swap_v2),
@@ -77,7 +88,7 @@ For a terminal that lists, prices and trades Bordrless tokens:
 | [3. Indexing trades](03-indexing-trades.md) | Decoding `Swapped` and every other event, streaming new launches and trades, candles, companion and game events |
 | [4. Trading](04-trading.md) | Quoting exactly, building buys and sells, slippage, graduation, compute and priority fees, errors |
 | [5. Hooks and what to show users](05-hooks-and-risk.md) | Launch rules, custom hooks, Half-Life, game hooks, Studio hooks, who can upgrade a hook, risk labels, strategies and the vault, which tokens can refuse or tax a transfer |
-| [6. The bridge](06-bridge.md) | Bridged SOL (the quote of every launch) and wrapping SPL tokens one for one |
+| [6. The bridge](06-bridge.md) | Bridged SOL (the `quote_mint` of every launch, held as native SOL by almost every pool) and wrapping SPL tokens one for one |
 | [7. Without TypeScript](07-other-languages.md) | Raw layouts, instruction data and the Rust client crates |
 
 ## Runnable examples
@@ -114,15 +125,17 @@ Node 23.6 or later runs the `.ts` files directly (Node 22.6+ with `--experimenta
 | Half-Life hook | `53SpmtkdPWQ63mWoDeXk8P9tuwiT4ed2Wx4fwfy5NSF8` |
 | Companion (a launch's creator as a program; game coins) | `6ZUM1gWBH9hBBNoJoaVAGwSftyZ6CUda6vUZTW9MsJuo` |
 | Lottery hook | `HqFWsCBQ416DAfevJ9TspyT5yXGGoYTCpcreiGkCgWcr` |
-| Bridged SOL (quote of every launch) | `A49oVhX22ExMwTEtFC6Y8nhBdZ4LJDGhdXLDn4c2f59i` |
+| Bridged SOL (every launch's `quote_mint`; native pools hold lamports) | `A49oVhX22ExMwTEtFC6Y8nhBdZ4LJDGhdXLDn4c2f59i` |
+| Router (an app's integrator fee) | `7M5GTuzhByzBbrJURzLtbBrFjcsC8aHu816qWTXAYD85` |
 | Protocol lookup table | `4vxVcYLdkqT1rMfGHjAu4kMa9XSEhUdQU5ThVfU5grGQ` |
 
 The programs are verified builds of
 [bordrless-programs](https://github.com/BordrlessDex/bordrless-programs), which has the full
 protocol spec (`docs/hooks-v2.md`), the companion and game references (`docs/companions.md`,
-`docs/games.md`) and the IDLs. Every program above is upgradeable by one key, the protocol's
-`5xsibKwtiN6ruxsYrEyWVpV3KcwuzSPbQd1n28a7spEd` (read from mainnet on 2026-10-09): check
-`solana program show <address>`.
+`docs/games.md`) and the IDLs. Every program above but the token program is upgradeable by one key,
+the protocol's `5xsibKwtiN6ruxsYrEyWVpV3KcwuzSPbQd1n28a7spEd`; the token program's upgrade
+authority is a Squads multisig vault, `5wni4K2qdSfTr6JspbLXDStfbq1XSmzMpF75RSpwsjBH` (7-day time
+lock) (read from mainnet on 2026-10-18): check `solana program show <address>`.
 
 ## Need help, or an API key?
 

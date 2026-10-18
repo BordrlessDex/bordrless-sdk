@@ -2,11 +2,14 @@
  * Quote and build a buy on a launch pool, then simulate it to read exactly what the wallet would
  * receive. Nothing is signed or sent: simulation needs no signature, only a wallet that holds the SOL.
  *
- * The transaction is what the Bordrless site sends for a buy with SOL: create the wallet's bridged-SOL
- * holding, wrap the SOL on the bridge, create its holding of the token, swap on the launch pool (with
- * the token's hook accounts), as a v0 transaction through the protocol lookup table. A sell is the
- * same with direction 0, the token amount in, and `bridge.unwrapSolAbove` after to turn the bridged
- * SOL back into SOL.
+ * The transaction is what the Bordrless site sends for a buy with SOL: create the wallet's holding of
+ * the token and swap on the launch pool (with the token's hook accounts), as a v0 transaction through
+ * the protocol lookup table. On a native pool (`Pool.quoteNative`: every launch pool but two since
+ * 15 and 16 Oct 2026) `launch.swap` builds `swap_v2`, which takes the SOL straight from the wallet: no
+ * wrap. On a pool still on bridged SOL it builds the classic `swap`, and the transaction first creates
+ * the wallet's bridged-SOL holding and wraps the SOL on the bridge. A sell is the same with direction 0
+ * and the token amount in; on a bridged pool, `bridge.unwrapSolAbove` after turns the bridged SOL back
+ * into SOL (a native sell pays SOL to the wallet).
  *
  *   RPC_URL=... node examples/quote-buy.ts <mint> <SOL to spend> <wallet>
  */
@@ -63,11 +66,13 @@ const minOut = mulDivFloor(quote.delivered, BPS - slippageBps, BPS);
 // 2. The transaction. A token with its creator's own hook (Half-Life, "Build your own") needs that
 //    hook's accounts, read from its registry; the kit's are derived.
 const customHook = launch.customHook ? await fetchCustomHookAccounts(connection, launch.customHook, mint) : null;
-const keys = launchKeysOf(launch, customHook);
+//    `poolNative` makes `launch.swap` build `swap_v2` for any native pool (a held coin's too).
+const native = pool.quoteNative === true;
+const keys = launchKeysOf(launch, customHook, { poolNative: native });
 const ixs = [
   setComputeUnitLimit(400_000),
-  token.createHolding(wallet, launch.quoteMint, wallet),
-  bridge.wrapSol(wallet, lamports),
+  // Only a pool still on bridged SOL is paid in bridged SOL: wrapping for a native pool would leave it unspent.
+  ...(native ? [] : [token.createHolding(wallet, launch.quoteMint, wallet), bridge.wrapSol(wallet, lamports)]),
   token.createHolding(wallet, mint, wallet),
   launchIx.swap(keys, wallet, wallet, 1, lamports, minOut),
 ];
@@ -90,6 +95,7 @@ if (afterData === undefined) throw new Error('the simulation did not return the 
 const received = decodeHolding(Buffer.from(afterData, 'base64')).amount - (before ? decodeHolding(before.data).amount : 0n);
 
 console.log({
+  pool: native ? 'native SOL (swap_v2)' : 'bridged SOL (swap)',
   spend: `${units(lamports, SOL_DECIMALS)} SOL`,
   quoted: `${units(quote.delivered, tokenMint.decimals)} ${tokenMint.symbol}`,
   simulated: `${units(received, tokenMint.decimals)} ${tokenMint.symbol}`,

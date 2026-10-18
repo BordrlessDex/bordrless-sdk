@@ -60,11 +60,13 @@ Bordrless is paid in one of two ways, fixed per pool (`Pool.feeModel`):
 A launch is the account `["launch", mint]` under the launchpad (`launchAddress(mint)`). It points
 to its pool and keeps everything about the token's market:
 
-- `pool`, `quoteMint` (always **bridged SOL**, 9 decimals; see [The bridge](06-bridge.md)), `status`
-  (0 on the curve, 1 graduated);
+- `pool`, `quoteMint` (always **bridged SOL**, 9 decimals, part of the pool's address; since 15 Oct
+  2026 almost every launch pool holds it as native SOL, lamports on the pool: `Pool.quoteNative`,
+  `Launch.isNative`, [Native SOL](02-reading-tokens.md#native-sol)), `status` (0 on the curve, 1 graduated);
 - the curve: `virtualQuote`, `virtualBase`, `curveTokens` (750,000,000), `reserveTokens`
   (250,000,000), `graduationQuote`;
-- fees: `lpFeeBps` (0.3%), `creatorFeeBps` (0–10%; the site offers up to 2%), and the sniper fee `sniperStartBps` (80%) falling
+- fees: `lpFeeBps` (0.3%), `creatorFeeBps` (0–10%; the site and the API take up to 5%, the creator
+  fee and a companion fee together), and the sniper fee `sniperStartBps` (80%) falling
   linearly to `lpFeeBps` over `sniperWindowSecs` (30 s) after `createdAt`;
 - the token rules (`rules`, `modules`), an optional `customHook`, and the `config` (`LaunchConfig`)
   it was made from, if any, with `authorShareBps` when that config pays its author part of the
@@ -118,7 +120,7 @@ encoded. Decode them with the SDK (`decodeMint`, `decodeHolding`, `decodePool`, 
 | `KitConfig` | 431 | `bf93e526a1148293` | |
 | `Wrapper` | 221 | `a10b6d77563da388` | |
 | `HalfLifeState` | 251 | `2b0e53c31ce2df53` | |
-| `Companion` | 300 | `bd15f745f5640a0f` | |
+| `Companion` | 300, 308 or 309 (native) | `bd15f745f5640a0f` | |
 | `Game` | 486 | `1b5aa67d4a647912` | |
 | `HookStatus` | 124 | `a575cfc68c7a0d76` | |
 | `ShareReceipt` | 126 | `52ebecd6eea75371` | `game` 10, `epoch` 42, `owner` 46, `payer` 78 |

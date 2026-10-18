@@ -66,8 +66,9 @@ Notes:
 - **Price includes the virtual reserves.** That's the curve's price. After graduation the virtual
   reserves are zero, and the formula still holds.
 - **Liquidity** is the real SOL in the pool (`quoteReserve`). Protocol fees waiting to be collected
-  (a launch pool's LP fee among them) sit in the same vault but are tracked apart
-  (`protocolFeesQuote`): don't count them. Anyone may pay them out to Bordrless as SOL with
+  (a launch pool's LP fee among them) sit beside it (in the pool's lamports on a native pool, the
+  quote vault on a bridged one) but are tracked apart (`protocolFeesQuote`): don't count them, and
+  never read liquidity from a balance ([Native SOL](#native-sol)). Anyone may pay them out to Bordrless as SOL with
   `swap.collectProtocolFeesSol(cranker, pool, feeCollector)`.
 - **USD** is the SOL price times these figures. Bridged SOL is SOL one for one
   ([The bridge](06-bridge.md)).
@@ -137,8 +138,9 @@ Label it "Creator: companion (fees run by a program)" rather than a wallet. Its 
 - **Buybacks** are swaps whose `trader` is `companionCreatorAddress(mint)` (so is the dev buy); the
   tokens a buyback buys are burned in the same instruction. Label them, rather than counting them
   as organic buys.
-- The creator address's bridged SOL is fees waiting to be spent (`pendingBuyback`,
-  `pendingBeneficiary`, `pendingPot`): it is not liquidity.
+- The creator address's SOL (lamports on a native companion, `Companion.nativeSol`; bridged SOL on an
+  older one) is fees waiting to be spent (`pendingBuyback`, `pendingBeneficiary`, `pendingPot`): it
+  is not liquidity.
 
 Every step but the dev buy is permissionless and pays its sender a small bounty. The design:
 [docs/companions.md](https://github.com/BordrlessDex/bordrless-programs/blob/main/docs/companions.md).
@@ -184,8 +186,9 @@ holding of `BRIDGED_SOL_MINT` is the wallet's bridged SOL: show it as SOL that c
 
 ## Native SOL
 
-Once pools move to native SOL, the SOL sits as lamports on program accounts, not in holdings. The
-decoders say which form each account is in, and `@bordrless/sdk` reads either:
+Since 15 Oct 2026 (new launches since 16 Oct) the SOL of almost every coin sits as lamports on
+program accounts, not in holdings; pool `4PvPnTBy…` stays bridged for good and coin `5DMBPNoY…` for
+now. The decoders say which form each account is in, and `@bordrless/sdk` reads either:
 
 | account | flag | its SOL | reader |
 | --- | --- | --- | --- |

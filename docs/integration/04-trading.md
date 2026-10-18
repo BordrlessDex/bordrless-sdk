@@ -3,14 +3,19 @@
 Quote a trade, build it, let the user's wallet sign and send it. All of it is permissionless; there
 is no Bordrless API in the path.
 
-Launch pools trade against **bridged SOL**, an SPL-free 1:1 wrapper of SOL on the Bordrless bridge.
-A buy with SOL therefore wraps the SOL first, and a sell unwraps it after, in the same transaction.
+Launch pools trade **SOL**. Since 15 Oct 2026 (new launches since 16 Oct) almost every pool holds
+it natively, as lamports on the pool account, and trades with `swap_v2`: the wallet pays a buy in
+SOL and a sell pays SOL to the wallet, with **no wrap, no unwrap and no bridged-SOL holding**. A
+native pool keeps its address and its `quote_mint` (bridged SOL, `A49oVh…`, still in its seeds), so
+nothing is re-keyed. `launch.swap` builds `swap_v2` for a native pool by itself
+([Native SOL pools](#native-sol-pools-swap_v2)).
 
-> **Native SOL (coming; timeline TBD).** Pools are moving to hold SOL as lamports on the pool
-> account (bordrless-programs `docs/native-sol-migration.md`). A native pool keeps its address and
-> its `quote_mint`; trade it with `swap_v2`: no wrap, no unwrap, no bridged-SOL holding. See
-> [Native SOL pools](#native-sol-pools-swap_v2) below. Everything on this page keeps working for
-> bridged pools.
+**Don't wrap SOL for a native pool**: what you wrap is not spent and stays in the wallet's
+bridged-SOL holding. Only the pools still on **bridged SOL** (pool
+`4PvPnTByfrnhA1nNmsaou7GrdQsqJNrkinqLHp2JHFX7` for good, coin
+`5DMBPNoYAmbiNnRyRkWS7BetnfvAzbUqXyXNiw6Hn7hh` for now) trade the classic way: a buy wraps the SOL
+on the Bordrless bridge first and a sell unwraps it after, in the same transaction. Decide from
+`Pool.quoteNative`, never from the address.
 
 ## A buy, end to end
 
@@ -29,6 +34,7 @@ const launch = decodeLaunch((await connection.getAccountInfo(launchAddress(mint)
 const [poolInfo, kitInfo] = await connection.getMultipleAccountsInfo([launch.pool, launch.kitConfig]);
 const pool = decodePool(poolInfo!.data);
 const kit = (launch.modules & KIT_MODULES.HOLDER_REWARDS) !== 0 && kitInfo ? decodeKitConfig(kitInfo.data) : null;
+const native = pool.quoteNative === true; // SOL as lamports on the pool: swap_v2, no wrap
 
 // 1. Quote.
 const lpFeeBps = sniperLpFee(now, launch.createdAt, launch.sniperWindowSecs, launch.sniperStartBps, launch.lpFeeBps);
@@ -43,13 +49,15 @@ const minOut = mulDivFloor(quote.delivered!, BPS - slippageBps, BPS);
 // 2. Build. A token with a custom hook (Half-Life, a game coin, "Build your own") needs its hook's
 //    accounts, resolved from the hook's registry for the mint.
 const customHook = launch.customHook ? await fetchCustomHookAccounts(connection, launch.customHook, mint) : null;
-const keys = launchKeysOf(launch, customHook);
+const keys = launchKeysOf(launch, customHook, { poolNative: native }); // swap_v2 for any native pool
 const ixs = [
   setComputeUnitLimit(400_000), setComputeUnitPrice(priorityMicroLamports), // or the simulated units + 15%
-  token.createHolding(wallet, launch.quoteMint, wallet),     // its bridged-SOL holding (idempotent)
-  bridge.wrapSol(wallet, lamports),                          // SOL -> bridged SOL
+  ...(native ? [] : [
+    token.createHolding(wallet, launch.quoteMint, wallet),   // a bridged pool only: its bridged-SOL holding (idempotent)
+    bridge.wrapSol(wallet, lamports),                        // and SOL -> bridged SOL
+  ]),
   token.createHolding(wallet, mint, wallet),                 // its holding of the token (idempotent)
-  launchIx.swap(keys, wallet, wallet, 1, lamports, minOut),  // direction 1 = buy
+  launchIx.swap(keys, wallet, wallet, 1, lamports, minOut),  // direction 1 = buy; swap_v2 on a native pool: the wallet pays SOL
 ];
 const PROTOCOL_LOOKUP_TABLE_ADDRESS = new PublicKey('4vxVcYLdkqT1rMfGHjAu4kMa9XSEhUdQU5ThVfU5grGQ'); // mainnet
 const table = (await connection.getAddressLookupTable(PROTOCOL_LOOKUP_TABLE_ADDRESS)).value!;
@@ -89,7 +97,17 @@ it as to the creator fee). Show the coin's caps (`launch.quoteCut`) before the t
 
 ## A sell
 
-Same shape, direction 0, the token amount in, and unwrap after:
+Same shape, direction 0, the token amount in. On a native pool that is all: `launch.swap` builds
+`swap_v2` and the SOL lands in the wallet, and `minSolOut` is the lamports delivered.
+
+```ts
+const ixs = [
+  setComputeUnitLimit(400_000), setComputeUnitPrice(priorityMicroLamports),
+  launchIx.swap(keys, wallet, wallet, 0, tokenAmount, minSolOut),  // direction 0 = sell; SOL to the wallet
+];
+```
+
+On a bridged pool, unwrap after:
 
 ```ts
 const bridged = await connection.getAccountInfo(holdingAddress(launch.quoteMint, wallet));
@@ -104,7 +122,7 @@ const ixs = [
 
 `unwrapSolAbove(wallet, keep)` unwraps everything above `keep`, so a user's existing bridged SOL
 stays bridged. Quote a sell with `quoteLaunchSwap(pool, 'sell', tokenAmount, …)`: its `delivered` is
-the bridged SOL the wallet receives.
+the SOL the wallet receives (lamports on a native pool, bridged SOL on a bridged one).
 
 ## Quoting exactly
 
@@ -164,19 +182,21 @@ the pool is still a curve.
 
 **A buy larger than what's left on a launch's curve is filled** (since 14 Oct 2026): the program
 uses the smallest part of the input that sells the curve out, takes every token left and leaves the
-rest of the input in the buyer's bridged-SOL holding; `graduate` can follow in the same transaction.
+rest of the input with the buyer (in the wallet on `swap_v2`, in its bridged-SOL holding on the
+classic `swap`); `graduate` can follow in the same transaction.
 
 - `Swapped.amountIn` is the part used; the instruction's `amount_in` is only what was offered.
-- Append `bridge.unwrapSolAbove(wallet, bridgedBefore)` after such a buy to return the rest as SOL
-  (it refuses to unwrap nothing, so add it only where the buy may pass the end).
+- On a bridged pool, append `bridge.unwrapSolAbove(wallet, bridgedBefore)` after such a buy to
+  return the rest as SOL (it refuses to unwrap nothing, so add it only where the buy may pass the
+  end). `swap_v2` never takes the rest from the wallet.
 - `minAmountOut` is held pro rata (`delivered >= min * used / offered`): give the least you accept
   for the whole input at the quoted rate. A minimum from a quote that pretends the curve goes on
   fails as `Slippage` (6017).
 - The fill is the launchpad's and only for a swap your transaction sends the DEX itself. A program
   that calls the DEX (your router program, a companion) gets none, and a curve another program opens
   never fills (`BadFill`, 6038): there a buy past the end still fails with `InsufficientLiquidity`.
-- Give the transaction about 275,000 compute units: a filled buy with its wrap and holdings is
-  above the 200,000 default.
+- Give the transaction about 275,000 compute units: a filled buy with its holdings (and a wrap on
+  a bridged pool) is above the 200,000 default.
 - `curveFillBuy` in `@bordrless/shared` gives the part used off chain; `swap/quote` answers it as
   `amountUsed`.
 `curveMaxBuyIn(pool, lpFeeBps, protocolShareBps, feeParams)` gives the largest buy the curve can
@@ -193,8 +213,8 @@ still fill.
   260,000–390,000.
 - **Priority fees:** add `setComputeUnitPrice`. The fee is charged on the limit you request, so a
   limit from the simulation costs less than a fixed high one.
-- **Rent:** a wallet's first trade of a token creates its holding (about 0.0023 SOL), and the
-  first buy with SOL creates its bridged-SOL holding too.
+- **Rent:** a wallet's first trade of a token creates its holding (about 0.0023 SOL); on a bridged
+  pool the first buy with SOL creates its bridged-SOL holding too.
 - **The protocol's take** is in the quote (`protocolFee`), never extra.
 
 ## When a trade is refused
@@ -220,6 +240,7 @@ The ones users meet:
 | `EarlyLocked` (kit) | Tokens bought in the first seconds stay until `launch.earlyUnlockAt` | Show the unlock time |
 | `FurnaceNotLit` (Half-Life) | The launch's last step hasn't landed yet; buys work | Retry in a few seconds |
 | `Paused` | The DEX or the launchpad is paused | Trading is paused |
+| `BufferShort`, `LamportsShort` | The classic `swap` on a native pool: a sell the buffer can't cover (sent by a program, a delegate, or on a held coin), or a buy on a fresh native pool | A builder bug: use `swap_v2` (`launch.swap`, [below](#native-sol-pools-swap_v2)) |
 | `QuoteCutAccountsMissing` (6047) | The coin's hook takes a SOL cut and the trade left out its four accounts | A builder bug: add `quoteCutExtras` ([above](#coins-whose-hook-takes-a-sol-cut)) |
 | `QuoteCutWrongAccount` | One of those four is wrong (another wallet's holding, the state read-only) | A builder bug: pass the signer's own holding |
 | An error whose `programId` is the token's custom hook (`launch.customHook`) | The hook refused the transfer | Name the hook. A sell that always fails while buys work is the honeypot pattern ([Hooks](05-hooks-and-risk.md#which-hook-a-token-runs)) |
@@ -262,7 +283,7 @@ native and its launch is not (a held or half-migrated coin). They are the bridge
 wrapper, SOL vault and bridged-SOL mint: passing them on every trade write-locks those accounts and
 serializes your trades with everyone else's. `launch.swapV2` decides this from `keys.native`.
 
-**`launch.swap` changed in 0.14.0 (breaking on native launches).** It builds `swap_v2` for a native
+**`launch.swap` changed in 0.14.0 (breaking for callers that wrap).** It builds `swap_v2` for a native
 launch: the wallet pays a buy in SOL, a sell delivers SOL to the wallet. If you wrap SOL before
 calling it, that bridged SOL is now left unspent in the trader's holding (no loss), and wrapping a
 native launch's swap with `router.swap` throws: use `router.swapV2`. **Escape hatch:**

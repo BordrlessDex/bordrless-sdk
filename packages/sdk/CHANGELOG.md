@@ -437,7 +437,7 @@ build `708a6083â€¦` of bordrless-programs `212f6ba`), and the router (`7M5GTuzhâ
   `hookDeclarationOfFiles`, `canonicalHookJson`, `quoteCutWords`, `quoteCutDetails`,
   `quoteCutPaidBps`, `HookDeclaration`, `HookQuoteCut`.
 
-## 0.9.0 (prepared; npm has 0.8.0 until it is published)
+## 0.9.0 (12 Oct 2026)
 
 Everything since 0.8.0 (10 Oct 2026, phase 3a). The programs it mirrors are live on mainnet; the
 one exception is marked.

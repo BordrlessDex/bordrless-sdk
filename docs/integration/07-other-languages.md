@@ -8,7 +8,8 @@ CPIs. No off-chain service is needed.
 The Anchor IDLs of every program are in [`packages/sdk/idl`](../../packages/sdk/idl) and in
 [bordrless-programs/idl](https://github.com/BordrlessDex/bordrless-programs/tree/main/idl):
 `bordrless_token`, `bordrless_swap`, `bordrless_launch`, `bordrless_kit`, `bordrless_bridge`,
-`tax_hook`, `half_life`, `bordrless_companion`, `lottery_hook`. Any Anchor client (anchorpy, anchor-go, solana-go with an IDL generator,
+`tax_hook`, `half_life`, `bordrless_companion`, `lottery_hook`, `bordrless_router`, `hook_vault`
+(and, in `packages/sdk/idl` only, `hook_timelock`, `loss_cover_hook`, `loss_cover_script`). Any Anchor client (anchorpy, anchor-go, solana-go with an IDL generator,
 the Rust `anchor-client`) can decode the accounts and events and encode the instructions from them.
 
 - **Accounts:** 8-byte discriminator, then Borsh. Discriminators, sizes and filter offsets are in
@@ -51,7 +52,8 @@ router's `swap_v2` has the same discriminator under the router: trader (w, s), i
 (w), DEX treasury (w), DEX, System Program, router event authority, router, then the DEX accounts. Pass the bridge accounts only when a quote-side cut names a holding of bridged SOL (a launch pool whose launch is not native yet); otherwise they write-lock the bridge's global accounts on every trade.
 
 Rust: `bordrless_swap::client::swap_v2`, `bordrless_launch::client::swap_v2` /
-`swap_v2_with_base_slice`, `claim_creator_fees_sol`; `bordrless_kit::client::claim_sol`;
+`swap_v2_with_base_slice`, `claim_creator_fees_sol`; `bordrless_kit::client::claim_sol`,
+`claim_sol_for`;
 `bordrless_router::client::swap_v2`.
 
 ## Rust

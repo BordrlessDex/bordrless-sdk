@@ -12,6 +12,13 @@ on Solana.
 npm install @bordrless/sdk @bordrless/shared
 ```
 
+npm has **0.14.0** (native SOL: `swap_v2`, the SOL claims). 0.15.0 to 0.17.0 (the 5% fee cap in
+`checkLaunchRules`, the creator and companion fee helpers, `kit.claimSolFor`, keeper.json
+`launcherShareBps` / `payoutTerms` / `mintWritable`, agent companions) are
+[GitHub releases](https://github.com/BordrlessDex/bordrless-sdk/releases) only until they reach
+npm: build them from a clone at the tag (`git checkout v0.17.0 && pnpm install && pnpm build`). The
+[CHANGELOG](packages/sdk/CHANGELOG.md) says what each version has.
+
 See [`packages/sdk/README.md`](packages/sdk/README.md) for usage.
 
 ## Integrating Bordrless tokens
@@ -37,6 +44,13 @@ The same on mainnet-beta, devnet and localnet (`PROGRAM_IDS` in `@bordrless/shar
 | Kit | `14RJQXPdJfkehit6ezktjd3xujamf8nVSKw2shKamaEH` |
 | Half-Life hook | `53SpmtkdPWQ63mWoDeXk8P9tuwiT4ed2Wx4fwfy5NSF8` |
 | Example tax hook | `8tjnVSreJGBRQFyDBf1SyyhBgLsdBxa2rHYh9sbxFyX7` |
+| Companion | `6ZUM1gWBH9hBBNoJoaVAGwSftyZ6CUda6vUZTW9MsJuo` |
+| Lottery hook | `HqFWsCBQ416DAfevJ9TspyT5yXGGoYTCpcreiGkCgWcr` |
+| Hook timelock | `BBUzaamchPWZpKENmn7bopiuQWvRGm2Vg8TqLLgzgGGZ` |
+| Hook vault | `5cojoUStG7WFhHJiSncCUEwTqDuhDLKu4a9BqTbF8jzG` |
+| Router | `7M5GTuzhByzBbrJURzLtbBrFjcsC8aHu816qWTXAYD85` |
+| Loss cover hook | `6KMdXC3Fxovp3pnUsdQuUbderPzZtTA4t6R1jacYJWQr` |
+| Loss cover script | `9mRXU9gpWY3B13AyuCCtNjHnKt1pUFBQ6vJDLTwgakhm` |
 
 ## Develop
 

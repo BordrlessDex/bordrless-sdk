@@ -111,14 +111,21 @@ Fixed at launch, in `launch.rules` (`modules` says which are on: 1 holder reward
 
 All of these are taken by the program and included in `quoteLaunchSwap`
 ([Trading](04-trading.md)). Creator fee + holder rewards + burn is at most 10% per side (the
-launchpad's bound since 13 Oct 2026; 3% before, and the site's own choices stay within 3%).
+launchpad's bound since 13 Oct 2026; 3% before, and the site's own choices stay within 5% since
+15 Oct 2026, `RULE_BOUNDS.maxRulesFeeBps`).
 
-**Holder rewards** are paid in bridged SOL. What a holder can claim:
+**Holder rewards** are paid in SOL: on a native kit (`KitConfig.isNative`, every coin launched or
+migrated since 15 Oct 2026) as lamports on the kit config, on an older bridged kit in bridged SOL.
+What a holder can claim:
 `rewardsClaimable(kitRewardsOf(kitConfig), vaultAmount, now, holding.amount, kitHookDataOf(holding), kitExcludes(kitConfig, owner)).payable`
 from `@bordrless/shared` and the SDK (`vaultAmount` is the balance of the reward vault
-`launch.holderVault`; `kitConfig` is `decodeKitConfig` of `launch.kitConfig`). Claim with
-`kit.claim(owner, mint, kitConfig.rewardMint)`, then
-`bridge.unwrapSolAbove(owner, before)` for SOL.
+`launch.holderVault`, or on a native kit the config's lamports above `lamportsBase`,
+`fetchKitRewardVault`; `kitConfig` is `decodeKitConfig` of `launch.kitConfig`). On a native kit,
+claim with `kit.claimSol(owner, mint)` (SOL to the wallet; `kit.claimFor` picks by form); on a
+bridged kit with `kit.claim(owner, mint, kitConfig.rewardMint)`, then
+`bridge.unwrapSolAbove(owner, before)` for SOL. Bordrless's keeper also pushes native holders'
+rewards to their wallets with the kit's permissionless `claim_sol_for` (`kit.claimSolFor`, SDK
+0.16.0 on GitHub; `RewardPosition.autoPaid`), so a holder may find nothing left to claim.
 
 ## Half-Life
 
