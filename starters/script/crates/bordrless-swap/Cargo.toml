@@ -1,0 +1,32 @@
+[package]
+name = "bordrless-swap"
+description = "The Bordrless DEX, vendored from bordrless-programs/programs/bordrless_swap for the Workshop's script template, as a library (no entrypoint): the pools and the swap client the launchpad's builds on."
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+# A library here (the program's own cdylib is never needed). Its test-only dependency (the bridge)
+# is left out.
+[lib]
+name = "bordrless_swap"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "bordrless-hook/idl-build", "bordrless-token/idl-build"]
+anchor-debug = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+solana-security-txt = "=1.1.3"
+anchor-lang = { version = "=1.2.0", features = ["event-cpi"] }
+bordrless-core = { path = "../bordrless-core" }
+bordrless-hook = { path = "../bordrless-hook" }
+bordrless-token = { path = "../bordrless-token", features = ["no-entrypoint"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

@@ -42,6 +42,7 @@
  * no author share, nothing on the Workshop's shelves; the item's page is public once matched.
  */
 import type { Address, Amount, LaunchStatus, PreparedTx } from './api.ts';
+import type { HookQuoteCut } from './hookDeclaration.ts';
 import type { KeeperDeclaration, KeeperLaunchTerms } from './keeper.ts';
 import { MAX_CREATOR_FEE_BPS } from './policy.ts';
 import { AUTHOR_SHARE_BPS, type StudioFile, type StudioSimQuoteCut } from './studio.ts';
@@ -269,6 +270,26 @@ export interface WorkshopFinding {
 /** Where its deploy stands: Studio's deploy states, or null before it is paid for. */
 export type WorkshopDeployState = 'awaiting_payment' | 'paid' | 'writing' | 'deploying' | 'handing_over' | 'deployed' | 'failed' | 'refunded';
 
+/**
+ * A script's agent as its cards and panels show it (docs/agents.md; 18 Oct 2026): the `agent.json`
+ * beside a companion's or a pair's script's `src/` in its normal form (`AgentDeclaration`), with
+ * `sizes` null when every action has its one size and `gates` empty when none, plus its words:
+ * `words`, the card's one sentence (`agentWords`: what it decides among, how often, at what
+ * confidence, what holds it); `details`, the panel's lines (`agentDetails`: the instruction, each
+ * option, the sizes, the gates, what it sees).
+ */
+export interface WorkshopAgentSummary {
+  instruction: string;
+  options: { code: number; name: string; about: string }[];
+  sizes: string[] | null;
+  gates: { name: string; ask: string; max: number }[];
+  state: string[];
+  confidence: number;
+  cadence: { on: 'trade' | 'step'; minSecs: number };
+  words: string;
+  details: string[];
+}
+
 /** A Workshop item as a card shows it. */
 export interface WorkshopItem {
   /** Its id (a uuid): its page is /workshop/<id>. */
@@ -348,6 +369,19 @@ export interface WorkshopItem {
    * can't be read. Absent from older servers.
    */
   configFeeBps?: number | null;
+  /**
+   * The caps of its hook's SOL cut (a hook's, a pair's hook half's; hook.json, docs/workshop.md "A
+   * hook's SOL cut"): the approved declaration's, else the one beside its source. What every card's
+   * Buy and Sell are held to (`hookSideRates`, 18 Oct 2026). Null for a companion or a hook that
+   * takes none; absent from older servers.
+   */
+  quoteCut?: HookQuoteCut | null;
+  /**
+   * Its agent (docs/agents.md): a companion's or a pair's script's `agent.json` in its normal form
+   * with its words, what the Agent badge and panel show. Null without one (a hook never has one);
+   * absent from older servers.
+   */
+  agent?: WorkshopAgentSummary | null;
   /** Its picture (an IPFS URL its builder uploaded); null when none. Absent from older servers. */
   image?: string | null;
   /** Why it is off the Workshop: archived by its builder, or held for native SOL; null when on it. Absent from older servers. */

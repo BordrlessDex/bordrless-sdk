@@ -4,6 +4,12 @@ The public package is `@bordrless/sdk` on npm, published from the public reposit
 BordrlessDex/bordrless-sdk together with `@bordrless/shared` (shared first; the SDK depends on the
 same version of it). The monorepo is where both are written.
 
+## 0.17.0 (18 Oct 2026; on GitHub, not yet on npm)
+
+- **Agent companions (18 Oct 2026, docs/agents.md; monorepo `bdef1a9`…`6bbe37b`).** shared: `agent.ts` (`AGENT_FILE`, `AGENT_LIMITS`, `AGENT_STATE_FIELDS`/`AGENT_STATE_WORDS`, `parseAgentDeclaration`, `agentDeclarationOf`, `agentOfFiles`, `canonicalAgentJson`, `agentWords`, `agentDetails`, `encodeAgentDecision`/`decodeAgentDecision`/`agentDecisionSeqOf`, the `evolve` field), `AGENT_KEY` and `TREASURY` in `programs.ts`, `WorkshopItem.agent`, `ScriptSummary.agent`, `AgentLog`/`AgentDecisionEntry` in `api.ts`. sdk: `agent.ts` (`checkAgentJson`, `agentJson`, `AGENT_EXAMPLE`, `AGENT_SIGNER`, `DECIDE_DISCRIMINATOR`, `encodeDecideArgs`, `decideInstruction`, `scriptStateAddress`, `decisionOfArgs`). The script starter (`tools/studio-builder/template-script/src/lib.rs`) is agent-ready (`decide`, `read_decision`, `clear_decision`, `pay_bill`, `STATE_LEN` 105); the public API has `GET /v1/agent/:mint`.
+- **Hook rates from one answer (monorepo `cfe541a`).** shared `rates.ts`: what a Workshop hook takes of a buy and of a sell, from the reading's rules and the SOL cut's caps (one answer for every page).
+- **Script starter public.** `starters/script/` in this repository is the Workshop's companion script starter (`tools/studio-builder/template-script` in the monorepo), with `decide` for agent companions.
+
 ## 0.16.0 (17 Oct 2026; on GitHub, not yet on npm; includes everything of the unpublished 0.15.0)
 
 Everything since the published 0.14.0 (npm `latest` for both packages, 15 Oct 2026 ~18:00 UTC),

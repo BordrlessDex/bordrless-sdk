@@ -1,0 +1,17 @@
+[package]
+name = "bordrless-core"
+description = "Pure no_std math and policy of the Bordrless programs (swaps with virtual reserves, fees, LP shares, the launch curve and its graduation), vendored from bordrless-programs/crates/bordrless-core for the Workshop's script template."
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

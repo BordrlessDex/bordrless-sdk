@@ -436,6 +436,12 @@ export interface LaunchSummary {
   volume24hUsd: number | null;
   trades24h: number;
   priceChange24h: number | null;
+  /**
+   * The last day's hourly closes in dollars, oldest first (the board's sparkline, 18 Oct 2026): the
+   * candles the hour buckets hold, at most 24; null or empty for a launch with no priced trade in the
+   * day. Absent from older servers.
+   */
+  spark?: number[] | null;
   holders: number;
   lastTradeAt: number | null;
   creatorFeeBps: number;
@@ -1008,6 +1014,45 @@ export interface ScriptSummary {
   lane?: 'workshop' | 'reading';
   /** Its payout terms let it pay any wallet SOL from the pot (`allow_wallet_payouts`, `PayoutTerms.reserved[0]`, 2026-10-13); absent otherwise and from older servers. */
   walletPayouts?: true;
+  /**
+   * Its agent (docs/agents.md), when the Workshop item of its program has an `agent.json`: the item
+   * (its page is /workshop/<item>), its name, its words (`agentWords`), and `signing`, whether this
+   * API signs decisions into the script's state (`AGENTS_OPEN=1` and not shadow) or only logs what it
+   * would do. Null for a script without one; absent from older servers. Its decisions:
+   * `GET /v1/agent/:mint` (`AgentLog`).
+   */
+  agent?: { item: string; name: string; words: string; signing: boolean } | null;
+}
+
+/**
+ * One decision of a coin's agent as its panel shows it (`GET /v1/agent/:mint`, docs/agents.md "The
+ * brain"): when (unix seconds), what made it due, whether it was shadow (logged, never signed), the
+ * option chosen (its code and name) and the size level, whether it acted and why not (`heldBy`: the
+ * confidence under the declaration's, a gate over its `max`, a signing that failed), the model's
+ * confidence and every option's probability, the journal sentence when it acted, the transaction it
+ * was signed into (live, once landed), and the model. Never the state the model saw.
+ */
+export interface AgentDecisionEntry {
+  at: number;
+  cadence: 'trade' | 'step';
+  shadow: boolean;
+  action: number;
+  actionName: string;
+  size: number;
+  acted: boolean;
+  heldBy: string | null;
+  confidence: number;
+  probabilities: Record<string, number>;
+  journal: string | null;
+  signature: string | null;
+  model: string;
+}
+
+/** `GET /v1/agent/:mint?limit=`: a coin's decisions, newest first (30 unless asked, at most 100), and how many there are in all. Only an item's own agent's; never the shadow run's with the example declaration. */
+export interface AgentLog {
+  mint: Address;
+  decisions: AgentDecisionEntry[];
+  total: number;
 }
 
 /**

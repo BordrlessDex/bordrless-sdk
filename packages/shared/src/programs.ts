@@ -60,6 +60,22 @@ export const PROGRAM_IDS = {
 export const STUDIO_ATTESTER = '3uGLsTJNse7vE3pgRkAf6aKKBoKmCyPUcNNu1bw3KvP2';
 
 /**
+ * The agent companions' key (docs/agents.md): the public key of `AGENT_SECRET_KEY` on the API,
+ * which signs a model's choice into a script's state (`decide`) before the step. The only signer a
+ * script's `decide` accepts: the starter names it as `AGENT_KEY`, and the Workshop's static checks
+ * hold a script with a `decide` to this key. It signs nothing else.
+ */
+export const AGENT_KEY = '6rY39aKYu5B17SAbKNzteJdvpGyJPR5WJ2aaUqrTuJ4Q';
+
+/**
+ * The protocol's treasury: where the launch fee, the Studio's deploy fees and the agents' inference
+ * bill go (docs/agents.md "Billing": a step pays it from the coin's pot; the script starter names it
+ * as `TREASURY`, and the keeper passes it last on an agent script's steps). The API's
+ * `TREASURY_ADDRESS`.
+ */
+export const TREASURY = 'GAAvsY7D7pARVu8VSFExRYfvbHNyzH7GS6WKyz5zUHf4';
+
+/**
  * The lottery hook's fixed facts (programs/lottery_hook/README.md): the flags a `LaunchConfig`
  * names for it (`BEFORE_TRANSFER | BEFORE_BURN | WRITES_HOOK_DATA`, exactly what a companion game
  * launch accepts), the token program's signer of its callbacks (`["hook-authority", hook]` under

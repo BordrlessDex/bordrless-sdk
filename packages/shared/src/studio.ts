@@ -740,6 +740,17 @@ export function detectHookFlags(files: readonly { path: string; content: string 
   return flags;
 }
 
+/**
+ * Whether a hook's source has the launchpad's `quote_cut` (a SOL cut, docs/workshop.md "A hook's SOL
+ * cut"), read as the callbacks are (comments and strings blanked). The static checks
+ * (apps/server/src/studio/checks.ts `quoteCutProblem`) want its caps in hook.json beside src/ when it
+ * does and refuse a hook.json when it doesn't; the submit wizard asks for the caps only when this says so.
+ */
+export function hasQuoteCut(files: readonly { path: string; content: string }[]): boolean {
+  const code = files.filter((f) => f.path.endsWith('.rs')).map((f) => codeOnly(f.content)).join('\n');
+  return /\bfn\s+quote_cut\s*(<[^>{]*>)?\s*\(/.test(code);
+}
+
 // ---- a game hook's kind and settings, read from its source --------------------------------------------
 
 /** The index just past the bracket matching the one at `open`, or the end. */

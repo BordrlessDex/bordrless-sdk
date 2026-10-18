@@ -21,6 +21,9 @@ Building a trading terminal, an aggregator, an indexer or a wallet? Start with
 quoting and building swaps, hooks, and the bridge, with runnable examples in [`examples/`](examples)
 checked against mainnet.
 
+Building a companion script for the Workshop (including an agent companion with `decide`)? Copy the
+starter in [`starters/script/`](starters/script).
+
 ## Program addresses
 
 The same on mainnet-beta, devnet and localnet (`PROGRAM_IDS` in `@bordrless/shared`):

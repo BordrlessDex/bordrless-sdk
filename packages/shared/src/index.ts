@@ -1,3 +1,4 @@
+export * from './agent.ts';
 export * from './api.ts';
 export * from './explorer.ts';
 export * from './hookDeclaration.ts';
@@ -8,3 +9,4 @@ export * from './rules.ts';
 export * from './studio.ts';
 export * from './workshop.ts';
 export * from './fees.ts';
+export * from './rates.ts';

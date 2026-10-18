@@ -1,0 +1,21 @@
+[package]
+name = "bordrless-hook"
+description = "The Bordrless hook protocol (v2, with phase 3a's authority module), vendored from bordrless-programs/crates/bordrless-hook for the Workshop's script template: what the token standard, the DEX and the launchpad are built on."
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = "=1.2.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
