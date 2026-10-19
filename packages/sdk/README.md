@@ -25,12 +25,10 @@ Bordrless's launchpad (https://bordrless.app/docs/build).
 npm install @bordrless/sdk @bordrless/shared
 ```
 
-npm has 0.14.0. What this page describes from 0.15.0 on (the fee helpers, `kit.claimSolFor`,
-keeper.json `launcherShareBps` / `payoutTerms` / `mintWritable`, agent companions; see the
-[CHANGELOG](CHANGELOG.md)) is in the GitHub releases v0.16.0 and v0.17.0 until they reach npm: build
-from a clone of BordrlessDex/bordrless-sdk at the tag.
-
 Peer requirements: `@solana/web3.js` 1.x (a dependency), Node 20 or later or a bundler.
+
+Use the same version of both packages. The [CHANGELOG](CHANGELOG.md) says what each release holds;
+releases are also tagged at https://github.com/BordrlessDex/bordrless-sdk/releases.
 
 ## Use
 
@@ -79,7 +77,11 @@ https://bordrless.app/docs/build.
 ### Your own pools and curves
 
 `swap.createPool` is permissionless for an ordinary pool: any two mints of the standard, any LP fee
-from 0 to 9,000 bps, with or without a pool hook. A bonding curve (virtual reserves) is opened only
+from 0 to 9,000 bps, with or without a pool hook. A pool quoted in SOL is made with
+`swap.createNativePool` (the same accounts and arguments, the quote mint left out): its quote is held
+as lamports on the pool account, the payer pays the quote deposit in SOL, and it trades with
+`swap_v2`, as every launch pool does since 15 Oct 2026. Its address is still
+`poolAddress(mint, BRIDGED_SOL_MINT, fee, hook)`. A bonding curve (virtual reserves) is opened only
 by its hook program, signing with `hookAuthority(program)` (its `["hook-authority"]` PDA), and
 graduated by the same signer with `swap.finalizeCurve`. A pool you open pays the DEX's protocol fee
 (`protocolFeeBps` of the quote side, as the config sets it when the pool is created) and keeps every
@@ -102,10 +104,12 @@ import { BRIDGED_SOL_MINT, SWAP_CONFIG, decodeSwapConfig, fetchAccount, holdingA
 
 const MY_CURVE = new PublicKey('…');                        // your deployed pool hook
 
-// 1. An ordinary pool: anyone, any two mints of the standard, any LP fee from 0 to 9,000 bps. Base and quote
-//    come from the authority's holdings; the LP goes to its LP holding. The protocol fee is the config's.
+// 1. An ordinary pool: anyone, any two mints of the standard, any LP fee from 0 to 9,000 bps. Quoted in SOL here:
+//    the base comes from the authority's holding, the SOL from the payer; the LP goes to its LP holding (for any
+//    other quote, swap.createPool(me, me, config.treasury, mint, quoteMint, …) takes both from holdings). The
+//    protocol fee is the config's.
 const config = (await fetchAccount(connection, SWAP_CONFIG, decodeSwapConfig))!;
-const plain = swap.createPool(me, me, config.treasury, mint, BRIDGED_SOL_MINT, {
+const plain = swap.createNativePool(me, me, config.treasury, mint, {
   lpFeeBps: 100,
   hookProgram: null, hookFlags: 0,
   virtualBase: 0n, virtualQuote: 0n,                        // zero: not a curve
@@ -121,7 +125,7 @@ const caller = hookAuthority(MY_CURVE);                     // PDA(["hook-author
 const vault = new PublicKey('…');                           // your program's PDA that owns the base supply
 const pool = poolAddress(mint, BRIDGED_SOL_MINT, 30, MY_CURVE);
 const registry = registryAddress(MY_CURVE, pool);           // ["bordrless-hook-accounts", pool]: write it first if your callbacks need extras
-const curve = swap.createPool(me, vault, config.treasury, mint, BRIDGED_SOL_MINT, {
+const curve = swap.createNativePool(me, vault, config.treasury, mint, {
   lpFeeBps: 30,
   hookProgram: MY_CURVE,
   hookFlags: POOL_HOOK_FLAGS.BEFORE_SWAP | POOL_HOOK_FLAGS.BEFORE_SWAP_RETURNS_DELTA,
@@ -223,31 +227,32 @@ you collect whenever you like. The launchpad allows a creator fee of up to 10%. 
 can't launch from a partner config (`PartnerOnCompanion`): share a companion's part with payees.
 
 ```ts
-import { BRIDGED_SOL_MINT, NO_LAUNCH_RULES, buildCreatePartnerConfig, decodeLaunch, launch, launchAddress, partnerOf, token } from '@bordrless/sdk';
+import { BRIDGED_SOL_MINT, NO_LAUNCH_RULES, buildCreatePartnerConfig, decodeLaunch, launch, launchAddress, partnerOf } from '@bordrless/sdk';
 
 // Once: a 1% creator fee, all of it (after Bordrless's share) to your wallet.
 const made = buildCreatePartnerConfig(me, { rules: NO_LAUNCH_RULES, creatorFeeBps: 100, customHook: null, customHookFlags: 0, label: 'mine' }, partnerWallet, 10_000);
-// send made.instruction (signed by me and made.keypair); a coin still on bridged SOL also needs token.createHolding(me, BRIDGED_SOL_MINT, partnerWallet);
-// every launch then passes made.address as its launch config (createLaunch's options.launchConfig).
+// send made.instruction (signed by me and made.keypair); every launch then passes made.address as its launch
+// config (createLaunch's options.launchConfig).
 
 // Collect, whenever: anyone may send it; each party is paid to its own fixed holding.
 const l = decodeLaunch((await connection.getAccountInfo(launchAddress(mint)))!.data);
 const p = await partnerOf(connection, l);
 const ix = l.isNative
-  ? launch.distributeFeesSol(mint, p!.config, l.creator, p!.partner) // native coins (every launch since 16 Oct 2026): SOL to each wallet
-  : launch.distributeFees(mint, BRIDGED_SOL_MINT, p!.config, l.creator, p!.partner);
+  ? launch.distributeFeesSol(mint, p!.config, l.creator, p!.partner)                    // SOL to each wallet (every launch since 15 Oct 2026)
+  : launch.distributeFees(mint, BRIDGED_SOL_MINT, p!.config, l.creator, p!.partner);    // older coins: bridged SOL to each holding
 ```
 
-A coin that pays a partner passes the partner's accounts on every claim: `launch.claimCreatorFees(…,
-author, partner)` and `launch.claimAuthorFees(…, partner)` (`partnerOf` reads them; without them the
-claim fails with `PartnerAccountsMissing`). `feeSplit(amount, authorShareBps, partnerShareBps)` is the
+A coin that pays a partner passes the partner's accounts on every claim: `launch.claimCreatorFeesSol(…,
+author, partner)` and `launch.claimAuthorFeesSol(…, partner)` (`launch.claimCreatorFees` and
+`launch.claimAuthorFees` on a coin from before 15 Oct 2026; `launch.claimCreatorFeesFor` picks by the
+launch; `partnerOf` reads the accounts; without them the claim fails with `PartnerAccountsMissing`). `feeSplit(amount, authorShareBps, partnerShareBps)` is the
 program's split.
 
 **The router** (`docs/router.md`; 0.10.0). An app that routes swaps (a terminal, a wallet, a bot)
 adds its own fee of 1 to 100 bps to any swap on any Bordrless pool: build the swap as usual, then
 `router.swap(trader, integratorQuote, treasuryQuote, dexSwap, feeBps, minQuoteAfterFee)`. A fifth of
-the fee goes to Bordrless, the rest to your holding of the pool's quote. On a native pool (every
-launch pool but two since 15 and 16 Oct 2026; 0.14.0) `launch.swap` builds `swap_v2`: wrap it with
+the fee goes to Bordrless, the rest to your holding of the pool's quote. On a native pool (0.14.0)
+`launch.swap` builds `swap_v2` for a native launch: wrap it with
 `router.swapV2(trader, integratorWallet, treasuryWallet, dexSwapV2, feeBps, minSolAfterFee)`, fees in
 SOL to the wallets (`router.swap` throws on a `swap_v2`). `launch.swapClassic` keeps the classic swap.
 
@@ -379,9 +384,10 @@ trades on the token's own pool by thresholds: it buys when the price drops a ste
 reference, sells when it rises a step above, a fixed share of the wallet each time, and moves the
 reference to each fill so it keeps buying on further drops and selling on further rises. Bordrless
 hosts nothing and holds nothing: the bot reads the chain over the RPC you name, builds each swap
-exactly as the site's API does (the holdings created idempotently, `swap_v2` paid from the wallet
-in SOL on a native pool, plain SOL wrapped into bridged SOL on the way in on a bridged one, the token's hook and the pool hook's accounts resolved, a graduated launch pool
-swapped through the launch program) and signs with your key. It refuses to run without `--keypair`.
+exactly as the site's API does (the holdings created idempotently, `swap_v2` paid from and to the
+wallet in plain SOL on a native pool, every launch's since 15 Oct 2026, plain SOL wrapped into
+bridged SOL on a pool still quoted in it, the token's hook and the pool hook's accounts resolved, a
+graduated launch pool swapped through the launch program) and signs with your key. It refuses to run without `--keypair`.
 
 ```sh
 bordrless mm --mint <mint> --keypair ~/fee-wallet.json --dry-run --once   # read the pool, print the plan, simulate, send nothing
@@ -393,10 +399,10 @@ bordrless mm --mint <mint> --keypair ~/fee-wallet.json --step 1 --buy 1 --sell 1
   `--sell` and `--slippage` are percentages; `--max-sol` and `--max-tokens` cap one trade;
   `--ref <SOL per token>` sets the starting reference (the last run prints the one to carry on
   with); `--rpc <url>` (or `SOLANA_RPC_URL`), `--lookup-table <address|none>`, `--priority-fee`.
-- Every evaluation reads the reserves and the wallet. On a native pool a buy is paid in plain SOL
-  and a sell's SOL lands in the wallet; on a bridged pool a buy spends bridged SOL first and wraps
-  plain SOL for the rest, and a sell's proceeds stay in bridged SOL for the next buy. Either way
-  0.02 SOL is kept back for fees. Nothing under 0.0001 SOL is traded. Each trade is dry-run first (the compute limit and,
+- Every evaluation reads the reserves and the wallet. On a native pool a buy spends plain SOL and a
+  sell's proceeds land in the wallet as SOL; on a pool quoted in bridged SOL a buy spends bridged SOL
+  first and wraps plain SOL for the rest, and a sell's proceeds stay in bridged SOL for the next buy.
+  Either way 0.02 SOL is kept back for fees. Nothing under 0.0001 SOL is traded. Each trade is dry-run first (the compute limit and,
   for a token with a hook of its own, the minimum out follow what the dry run delivers); one that
   fails on chain (slippage, a hook's refusal) is logged and the loop goes on. `--dry-run` simulates
   and prints every would-be trade without sending; `--once` evaluates once and exits.
@@ -466,13 +472,12 @@ for (const b of postTokenBalances) console.log(b.account, b.owner, b.uiTokenAmou
 sell or a graduated pool: the same instruction, accounts, fees, output and `Swapped` event. A buy of
 more than the curve has left, which failed with `InsufficientLiquidity` before, now lands: the
 program uses the smallest part of the input that sells the curve out, takes every token left and
-leaves the rest of the input with the trader (in the wallet on a native pool's `swap_v2`, in the
-holding of bridged SOL on the classic `swap`), and `graduate` can follow in the same transaction. For a terminal that sends such a buy:
+leaves the rest of the input with the trader (in its wallet with `swap_v2`, in its holding of
+bridged SOL with the classic swap), and `graduate` can follow in the same transaction. For a terminal that sends such a buy:
 
 - `Swapped.amount_in` is the part used, so a trade read from the event or from the balances is
   right; the instruction's `amount_in` is only what was offered.
-- `swap_v2` never takes the rest from the wallet. On the classic `swap` it stays as bridged SOL
-  unless the transaction unwraps it: append
+- With the classic swap the rest stays as bridged SOL unless the transaction unwraps it: append
   `bridge.unwrapSolAbove(user, bridgedBefore)` after the swap, as the site does (it refuses to
   unwrap nothing, so add it only where the buy may pass the end), or unwrap later.
 - `min_amount_out` is held pro rata (`delivered >= min * used / offered`): give the least you accept
@@ -484,7 +489,7 @@ holding of bridged SOL on the classic `swap`), and `graduate` can follow in the 
 - Only a swap your transaction sends the DEX itself is filled. A program that calls the DEX (your
   own router program, Bordrless's router, a companion) gets no fill: its buy past the end fails
   with `InsufficientLiquidity` as before, so such a program never pays for SOL it didn't use.
-- Give a filled buy room: its transaction (holdings and the swap, and the wrap on a bridged pool) takes about 255,000 to
+- Give a filled buy room: its transaction (wrap, holdings and the swap) takes about 255,000 to
   275,000 compute units, above the 200,000 default. An ordinary buy costs about 900 more than
   before the upgrade.
 
@@ -574,8 +579,9 @@ const made = buildCreateConfig(me, { rules: { ...NO_LAUNCH_RULES, burnBuyBps: 25
 const config = await inspectConfig(connection, made.address, mint); // problems: [], hookAccepted: true, registryReady: true
 ```
 
-**2. A companion script** on the script template (`tools/studio-builder/template-script`; the
-companion brief has its Cargo.toml): `companion_init` runs once at the setup with
+**2. A companion script** on the script template (`tools/studio-builder/template-script`, public as
+[`starters/script`](https://github.com/BordrlessDex/bordrless-sdk/tree/main/starters/script) in this
+repository; the companion brief has its Cargo.toml): `companion_init` runs once at the setup with
 `[creator (signer), mint, state, system program]` and your init data (at most 512 bytes);
 `companion_step` runs from a minute after the launch, once an interval (10 s to a day), with
 `[creator (signer), mint, launch, companion, pool, state]` then the extra accounts the sender
@@ -856,6 +862,8 @@ audit.
 - Build with your own agent (the briefs, the templates, the test plan, the Workshop): https://bordrless.app/sdk/build
 - Build on Bordrless: what is open, what it costs, what stays Bordrless's: https://bordrless.app/docs/build
 - Companions with the SDK (the API path, the builders, the rules, cranking, scripts): https://bordrless.app/sdk/companions
+- Agent companions (agent.json, the `decide` instruction, the script starter with it in
+  https://github.com/BordrlessDex/bordrless-sdk/tree/main/starters/script): https://bordrless.app/sdk/agents
 - The standard in full: https://bordrless.app/docs
 
 Status: the programs are live on mainnet, one set of ids on every cluster (in `@bordrless/shared`);

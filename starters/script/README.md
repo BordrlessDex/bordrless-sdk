@@ -3,8 +3,7 @@
 The program every Workshop companion script starts from (the monorepo's
 `tools/studio-builder/template-script`), published here so builders can copy it without the site.
 It is an Anchor program with the keeper's step interface and, since 0.17.0, `decide` for agent
-companions (see the SDK's `checkAgentJson` / `decideInstruction`, in the v0.17.0 GitHub release, not yet on
-npm, and https://bordrless.app/sdk/agents).
+companions (see the SDK's `checkAgentJson` / `decideInstruction`, in `@bordrless/sdk` 0.17.0 and later, and https://bordrless.app/sdk/agents).
 The vendored `crates/` are the public bordrless-programs crates the Workshop builds against.
 
 Built unchanged with the Workshop's image (solanafoundation/solana-verifiable-build:4.3.0), `src/lib.rs`

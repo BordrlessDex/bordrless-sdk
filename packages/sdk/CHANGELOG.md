@@ -4,13 +4,87 @@ The public package is `@bordrless/sdk` on npm, published from the public reposit
 BordrlessDex/bordrless-sdk together with `@bordrless/shared` (shared first; the SDK depends on the
 same version of it). The monorepo is where both are written.
 
-## 0.17.0 (18 Oct 2026; on GitHub, not yet on npm)
+## 0.18.0: keeper.json brings another coin's launch pool (19 Oct 2026)
 
-- **Agent companions (18 Oct 2026, docs/agents.md; monorepo `bdef1a9`…`6bbe37b`).** shared: `agent.ts` (`AGENT_FILE`, `AGENT_LIMITS`, `AGENT_STATE_FIELDS`/`AGENT_STATE_WORDS`, `parseAgentDeclaration`, `agentDeclarationOf`, `agentOfFiles`, `canonicalAgentJson`, `agentWords`, `agentDetails`, `encodeAgentDecision`/`decodeAgentDecision`/`agentDecisionSeqOf`, the `evolve` field), `AGENT_KEY` and `TREASURY` in `programs.ts`, `WorkshopItem.agent`, `ScriptSummary.agent`, `AgentLog`/`AgentDecisionEntry` in `api.ts`. sdk: `agent.ts` (`checkAgentJson`, `agentJson`, `AGENT_EXAMPLE`, `AGENT_SIGNER`, `DECIDE_DISCRIMINATOR`, `encodeDecideArgs`, `decideInstruction`, `scriptStateAddress`, `decisionOfArgs`). The script starter (`tools/studio-builder/template-script/src/lib.rs`) is agent-ready (`decide`, `read_decision`, `clear_decision`, `pay_bill`, `STATE_LEN` 105); the public API has `GET /v1/agent/:mint`.
-- **Hook rates from one answer (monorepo `cfe541a`).** shared `rates.ts`: what a Workshop hook takes of a buy and of a sell, from the reading's rules and the SOL cut's caps (one answer for every page).
-- **Script starter public.** `starters/script/` in this repository is the Workshop's companion script starter (`tools/studio-builder/template-script` in the monorepo), with `decide` for agent companions.
+**What's new.** A keeper.json `pools` entry may now name another launched coin's pool instead of a
+plain DEX pool: `{ "launch": "<mint>" }`, optionally with `"to": "launcher"`. A coin that has
+graduated has the launch program as its pool hook, so it was never a plain pool; a companion script
+that buys another coin on its main pool now gets that coin's launch-pool swap accounts on every
+step, with the companion address as the trader and that coin's hook accounts included. With
+`"to": "launcher"` the step also brings the launcher's holding of that coin, writable, as the buy's
+recipient: a coin with holder rewards lets only wallets hold it, so what the script buys goes to a
+wallet. That holding must already exist; a swap creates none.
 
-## 0.16.0 (17 Oct 2026; on GitHub, not yet on npm; includes everything of the unpublished 0.15.0)
+- `@bordrless/shared` (re-exported by `@bordrless/sdk`): `KeeperLaunchPool`, `KeeperPoolEntry`
+  (`KeeperPool | KeeperLaunchPool`) and `isLaunchPool`. `KeeperJson.pools` is now
+  `KeeperPoolEntry[]`: code that reads `pools[i].mint` or `.feeBps` narrows with `isLaunchPool`
+  first, which is why this is 0.18.0 rather than 0.17.1.
+- `checkKeeperJson` accepts the new entry and refuses the coin's own pool, SOL, a program address, a
+  repeat, and any `to` other than `"launcher"`.
+- Everything in 0.17.0 and 0.16.0 below is included. 0.15.0 to 0.17.0 were GitHub releases only;
+  0.18.0 is the first on npm since 0.14.0.
+
+## 0.17.0: agent companions (public repo `29616b8`, 18 Oct 2026)
+
+**Update to 0.17.0 of both packages.** A script written on the 0.14.0 starter has no `decide`,
+so the Workshop refuses it the moment an `agent.json` sits beside it (`agent-interface`); 0.14.0's
+`checkKeeperJson` refuses the keeper.json fields the Workshop has taken since 15 Oct (`view`,
+`pools`, `mintWritable`, `payoutTerms`, `launcherShareBps`); its `checkLaunchRules` caps a fee at
+2% where the launchpad takes 5%; and it has no `checkAgentJson`, no `decideInstruction`, no
+`kit.claimSolFor`, no hook rates. Everything below is in the public repo at `29616b8`; npm carries
+it once the collaborator publishes (npm `latest` was still 0.14.0 at 15:00 UTC, 18 Oct).
+
+**What an agent companion is.** A coin whose companion script lets a model choose, after every
+trade or every step, which of the script's own options to take and at what size, within caps
+compiled into the script. The model runs off chain; its choice is signed into the script's state by
+Bordrless's agent key before the step; the step does that and nothing else; no decision, a void
+one or an unknown code means the default rule. Builders write the options and the caps; Bordrless
+runs the brain, holds the agent key, logs every decision with the facts it saw, and bills the
+coin's pot for the inference. The contract is docs/agents.md; the SDK page is
+https://bordrless.app/sdk/agents.
+
+**How the programs carry it, with nothing new deployed on chain.**
+
+- *The companion program* already calls a builder's script as the launch's creator (the companion
+  address signs `companion_step`), makes the script a state account the script program owns, and
+  bounds every step on chain: a step may spend the pot's share and never the dev bag, custody or
+  the companion address's rent. The decision lives in the last 64 bytes of that state (magic
+  `0xA6`, the option's code, the size, `bill_lamports`, `until`, `seq`, the model's confidence, a
+  hash of the facts), written by the script's own `decide` instruction, which accepts one signer:
+  `AGENT_KEY`, `6rY39aKYu5B17SAbKNzteJdvpGyJPR5WJ2aaUqrTuJ4Q`. The companion's checks are the
+  envelope; the brain only picks inside it.
+- *Token hooks* already record 64 bytes per holding on every transfer and read their registry's
+  accounts: what a hook records is what the brain can be fed, and a pair's hook half will read a
+  policy account the agent sets between trades (the next step; not in this release).
+- *The launchpad* only accepts a custom hook whose upgrade authority is Bordrless's key or nobody,
+  Workshop scripts deploy under that key, and the companion program approves a script by its code
+  hash. So a rewrite the agent proposes can be checked, read, built and upgraded in place under
+  the same key and re-approved, without a program change.
+- *Billing*: the step pays the decision's `bill_lamports` from the companion address to the
+  treasury (`TREASURY`, `GAAvsY7D7pARVu8VSFExRYfvbHNyzH7GS6WKyz5zUHf4`), at most 1% of the pot a
+  step; the keeper meters each coin's inference and converts it at the SOL price.
+
+**What a builder does.** Start from the 0.17.0 script starter (`starters/script`: it has `decide`,
+`read_decision`, `clear_decision` and `pay_bill`; `STATE_LEN` is 105), write the options as arms of
+`companion_step`'s match on the decision's action with the caps in the code, put an `agent.json`
+beside `src/` (the standing orders, the options with their codes and words, optional sizes and
+gates, the facts to see, the confidence, the cadence, optionally `evolve`), check it with
+`checkAgentJson`, and submit through the Workshop as any companion or pair. The Workshop's checks
+hold the script to the key (`agent-key`) and to the file (`agent-interface`), the reading says what
+the agent may do, launchers pick it like any companion, and `GET /v1/agent/:mint` is the coin's
+decision log.
+
+**In the packages.** shared `agent.ts`: `AGENT_FILE`, `AGENT_LIMITS`, `AGENT_STATE_FIELDS` and
+`AGENT_STATE_WORDS`, `parseAgentDeclaration`, `agentDeclarationOf`, `agentOfFiles`,
+`canonicalAgentJson`, `agentWords`, `agentDetails`, `encodeAgentDecision`, `decodeAgentDecision`,
+`agentDecisionSeqOf`, the `evolve` field; `programs.ts`: `AGENT_KEY`, `TREASURY`; `api.ts`:
+`WorkshopItem.agent`, `ScriptSummary.agent`, `AgentLog`, `AgentDecisionEntry`; `rates.ts`:
+`hookSideRates`. SDK `agent.ts`: `checkAgentJson`, `agentJson`, `AGENT_EXAMPLE`, `AGENT_SIGNER`,
+`DECIDE_DISCRIMINATOR` (`sha256("global:decide")[..8]`), `encodeDecideArgs` (52 bytes, the order
+`action, size, until, seq, confidence_bps, state_hash, bill_lamports`), `decideInstruction`
+(`[agent, mint, state]`), `scriptStateAddress`, `decisionOfArgs`.
+
+## 0.16.0 (public repo `a04da96`, 17 Oct 2026): everything else since 0.14.0
 
 Everything since the published 0.14.0 (npm `latest` for both packages, 15 Oct 2026 ~18:00 UTC),
 the 0.14.1 items below included. A changed constant and new exports, so a minor version. What an
@@ -437,7 +511,7 @@ build `708a6083…` of bordrless-programs `212f6ba`), and the router (`7M5GTuzh�
   `hookDeclarationOfFiles`, `canonicalHookJson`, `quoteCutWords`, `quoteCutDetails`,
   `quoteCutPaidBps`, `HookDeclaration`, `HookQuoteCut`.
 
-## 0.9.0 (12 Oct 2026)
+## 0.9.0 (prepared; npm has 0.8.0 until it is published)
 
 Everything since 0.8.0 (10 Oct 2026, phase 3a). The programs it mirrors are live on mainnet; the
 one exception is marked.

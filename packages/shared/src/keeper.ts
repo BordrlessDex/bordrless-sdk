@@ -176,6 +176,26 @@ export interface KeeperPool {
   liquidity: boolean;
 }
 
+/**
+ * Another coin's launch pool each step brings (18 Oct 2026; a builder's pair that buys another
+ * launched coin on every launch asked for it: a graduated coin's pool has the launch program as
+ * its pool hook, so it is never a plain pool): `launch` is that coin's mint, and the step carries
+ * the launchpad's swap accounts for the companion address trading it (as `swapAccounts` carries
+ * the coin's own), that coin's hook accounts included. With `to: "launcher"` the step also brings
+ * the launcher's (the companion's beneficiary's) holding of that coin, writable, for the swap's
+ * recipient: a coin with holder rewards lets only wallets hold it, so a script delivers what it
+ * buys to a wallet, never to the companion address. That holding must exist already (a swap
+ * creates none).
+ */
+export interface KeeperLaunchPool {
+  launch: string;
+  to?: 'launcher';
+}
+
+/** What `pools[]` lists: a plain DEX pool, or another coin's launch pool. */
+export type KeeperPoolEntry = KeeperPool | KeeperLaunchPool;
+export const isLaunchPool = (p: KeeperPoolEntry): p is KeeperLaunchPool => 'launch' in p;
+
 /** The most a pool's LP fee can be on the DEX (`bordrless_swap::constants::MAX_LP_FEE_BPS`, 90%): what `pools[].feeBps` is held to. The site's create-pool form offers 25, 100 and 200; a pool made another way may have any fee. */
 export const KEEPER_MAX_POOL_FEE_BPS = 9_000;
 
@@ -222,8 +242,8 @@ export interface KeeperDeclaration {
   initData?: string;
   /** Figures a coin's page shows live from the script's accounts (`KeeperViewField`, 16 Oct 2026); absent: none. Left out of the normal form when empty. */
   view?: KeeperViewField[];
-  /** DEX pools each step brings beside the launch pool (`KeeperPool`, 17 Oct 2026), at most `KEEPER_LIMITS.pools`; absent: none. Left out of the normal form when empty. */
-  pools?: KeeperPool[];
+  /** DEX pools each step brings beside the launch pool (`KeeperPool`, 17 Oct 2026), or other coins' launch pools (`KeeperLaunchPool`, 18 Oct), at most `KEEPER_LIMITS.pools` in all; absent: none. Left out of the normal form when empty. */
+  pools?: KeeperPoolEntry[];
   /**
    * The launcher's share of each trade's fee on every launch with it, basis points of the whole (0
    * to `KEEPER_MAX_LAUNCHER_SHARE_BPS`; the pot gets the rest, at least a twentieth), fixed by the
@@ -391,13 +411,25 @@ function walletsOf(v: unknown, at: string): KeeperWallet[] {
 
 const BRIDGED_SOL = FIXED_ADDRESSES.bridgedSolMint;
 
-/** `pools`: at most `KEEPER_LIMITS.pools` plain DEX pools, each by its two mints and its fee tier, none the launch pool, none named twice. */
-function poolsOf(v: unknown): KeeperPool[] {
-  if (!Array.isArray(v) || v.length > KEEPER_LIMITS.pools) return fail(`pools is a list of at most ${KEEPER_LIMITS.pools} DEX pools a step brings beside the launch pool, each { "base", "quote", "feeBps", "liquidity" }.`);
+/** `pools`: at most `KEEPER_LIMITS.pools` entries, each a plain DEX pool by its two mints and its fee tier, or another coin's launch pool by its mint; none the coin's own launch pool, none named twice. */
+function poolsOf(v: unknown): KeeperPoolEntry[] {
+  if (!Array.isArray(v) || v.length > KEEPER_LIMITS.pools) return fail(`pools is a list of at most ${KEEPER_LIMITS.pools} pools a step brings beside the launch pool, each { "base", "quote", "feeBps", "liquidity" } (a DEX pool) or { "launch", "to" } (another coin's launch pool).`);
   const seen = new Set<string>();
-  return v.map((item: unknown, i) => {
+  return v.map((item: unknown, i): KeeperPoolEntry => {
     const at = `pools[${i}]`;
-    const p = fieldsOf(item, at, ['base', 'quote', 'feeBps', 'liquidity'], '{ "base", "quote", "feeBps", "liquidity" }: a DEX pool by its two mints and its LP fee tier');
+    if (isObject(item) && 'launch' in item) {
+      const q = fieldsOf(item, at, ['launch', 'to'], '{ "launch": <mint>, "to"?: "launcher" }: another coin’s launch pool by its mint');
+      const launch = q.launch;
+      if (launch === 'coin') fail(`${at}.launch is another coin’s mint, never the coin’s own launch pool (that is swapAccounts).`);
+      if (typeof launch !== 'string' || !isBase58Key(launch)) return fail(`${at}.launch is the other coin’s mint, in base58.`);
+      if (launch === BRIDGED_SOL || launch === DEFAULT_KEY || PROTOCOL_KEYS.includes(launch)) fail(`${at}.launch is a launched coin’s mint, not SOL, the default key or a Bordrless program.`);
+      if (q.to !== undefined && q.to !== null && q.to !== 'launcher') fail(`${at}.to is "launcher" (the step also brings the launcher’s holding of that coin, for the swap’s recipient) or left out.`);
+      const key = `launch/${launch}`;
+      if (seen.has(key)) fail(`${at} is named twice.`);
+      seen.add(key);
+      return { launch, ...(q.to === 'launcher' ? { to: 'launcher' as const } : {}) };
+    }
+    const p = fieldsOf(item, at, ['base', 'quote', 'feeBps', 'liquidity'], '{ "base", "quote", "feeBps", "liquidity" }: a DEX pool by its two mints and its LP fee tier, or { "launch" }: another coin’s launch pool');
     const mintOf = (x: unknown, side: 'base' | 'quote'): KeeperPoolMint => {
       if (x === 'coin' || x === 'sol') return x;
       if (typeof x !== 'string' || !isBase58Key(x)) return fail(`${at}.${side} is "coin" (the coin’s mint), "sol" (SOL), or a mint’s address in base58.`);
@@ -718,7 +750,13 @@ export function keeperDetails(d: KeeperDeclaration): string[] {
   const carries = [d.payouts ? 'the companion’s payout accounts' : null, d.swapAccounts ? 'the launch pool’s swap accounts' : d.hookAccounts ? 'the token’s hook accounts' : null].filter((x): x is string => x !== null);
   if (carries.length > 0) out.push(`Each step also carries ${carries.join(' and ')}.`);
   if (d.mintWritable) out.push('The coin’s mint is passed writable in every step (the script may burn the coin).');
-  for (const p of d.pools ?? []) out.push(`Each step also brings the DEX pool of ${poolMintWord(p.base)} and ${poolMintWord(p.quote)} at a ${pctWord(p.feeBps)} LP fee${p.liquidity ? ', with its LP mint and LP holdings (the script may add liquidity to it)' : ''}.`);
+  for (const p of d.pools ?? []) {
+    if (isLaunchPool(p)) {
+      out.push(`Each step also brings the launch pool of the coin ${p.launch.slice(0, 4)}…${p.launch.slice(-4)} (its launchpad swap accounts for the companion address)${p.to === 'launcher' ? ', with the launcher’s holding of that coin for the swap’s recipient' : ''}.`);
+      continue;
+    }
+    out.push(`Each step also brings the DEX pool of ${poolMintWord(p.base)} and ${poolMintWord(p.quote)} at a ${pctWord(p.feeBps)} LP fee${p.liquidity ? ', with its LP mint and LP holdings (the script may add liquidity to it)' : ''}.`);
+  }
   const other = d.holdings ? (d.swapAccounts ? d.holdings.perStep.withoutSwapAccounts : d.holdings.perStep.withSwapAccounts) : null;
   if (other !== null) out.push(`${d.swapAccounts ? 'Without' : 'With'} the swap accounts a step would bring up to ${other}.`);
   if (d.wallets) out.push(`The wallets (with the companion’s payout terms): ${d.wallets.map((w) => (typeof w === 'string' ? w : `the public key at byte ${w.state.offset} of the script’s state`)).join(', ')}.`);

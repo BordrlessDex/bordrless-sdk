@@ -16,10 +16,6 @@ holding) instead of only approving. `@bordrless/sdk` builds on this package.
 npm install @bordrless/shared
 ```
 
-npm has 0.14.0. 0.15.0 to 0.17.0 (the 5% fee cap, `fees.ts`, the keeper.json fields, `agent.ts`,
-`rates.ts`) are GitHub releases of BordrlessDex/bordrless-sdk until they reach npm: build from a
-clone at the tag.
-
 ## Use
 
 ```ts

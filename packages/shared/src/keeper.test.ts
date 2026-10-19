@@ -330,3 +330,33 @@ describe('pools (DEX pools a step brings beside the launch pool, 17 Oct 2026)', 
     expect(problem([1, 2, 3, 4])).toContain('at most 3');
   });
 });
+
+describe('pools: another coin’s launch pool (18 Oct 2026)', () => {
+  const BCAT = '5xpzVZYLvY7Fg29vUTgM5hJvECBZfYWVz2m8E7rJspwi';
+  const WBORDR = 'APpT4aqDoXAVz6S9wVWCJdqayFcs4tvfj5jToffVncwv';
+  const pools = (list: unknown) => keeperDeclarationOf({ ...whale(), pools: list });
+
+  it('reads { launch, to } beside plain pools, says it in the details, and keeps only what was said in the normal form', () => {
+    const r = pools([{ launch: BCAT, to: 'launcher' }, { base: 'coin', quote: WBORDR, liquidity: true }, { launch: WBORDR }]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.declaration.pools).toEqual([{ launch: BCAT, to: 'launcher' }, { base: 'coin', quote: WBORDR, feeBps: 25, liquidity: true }, { launch: WBORDR }]);
+    const details = keeperDetails(r.declaration).join(' ');
+    expect(details).toContain('the launch pool of the coin 5xpz…spwi (its launchpad swap accounts for the companion address), with the launcher’s holding of that coin for the swap’s recipient.');
+    expect(details).toContain('the launch pool of the coin APpT…ncwv (its launchpad swap accounts for the companion address).');
+    expect(canonicalKeeperJson(r.declaration)).toContain('"pools":[{"launch":"5xpz');
+  });
+
+  it('refuses the coin’s own launch pool, a bad mint, SOL or a program, a repeat, a wrong "to" and an unknown field, each in one sentence', () => {
+    const problem = (list: unknown): string => {
+      const r = pools(list);
+      return r.ok ? '' : r.problem;
+    };
+    expect(problem([{ launch: 'coin' }])).toContain('never the coin’s own launch pool');
+    expect(problem([{ launch: 'nope' }])).toContain('in base58');
+    expect(problem([{ launch: 'A49oVhX22ExMwTEtFC6Y8nhBdZ4LJDGhdXLDn4c2f59i' }])).toContain('not SOL');
+    expect(problem([{ launch: BCAT }, { launch: BCAT, to: 'launcher' }])).toContain('named twice');
+    expect(problem([{ launch: BCAT, to: 'holders' }])).toContain('"launcher"');
+    expect(problem([{ launch: BCAT, liquidity: true }])).toContain('no field "liquidity"');
+  });
+});

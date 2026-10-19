@@ -12,12 +12,9 @@ on Solana.
 npm install @bordrless/sdk @bordrless/shared
 ```
 
-npm has **0.14.0** (native SOL: `swap_v2`, the SOL claims). 0.15.0 to 0.17.0 (the 5% fee cap in
-`checkLaunchRules`, the creator and companion fee helpers, `kit.claimSolFor`, keeper.json
-`launcherShareBps` / `payoutTerms` / `mintWritable`, agent companions) are
-[GitHub releases](https://github.com/BordrlessDex/bordrless-sdk/releases) only until they reach
-npm: build them from a clone at the tag (`git checkout v0.17.0 && pnpm install && pnpm build`). The
-[CHANGELOG](packages/sdk/CHANGELOG.md) says what each version has.
+Use the same version of both packages. The [CHANGELOG](packages/sdk/CHANGELOG.md) says what each
+version has; every release is also tagged under
+[GitHub releases](https://github.com/BordrlessDex/bordrless-sdk/releases).
 
 See [`packages/sdk/README.md`](packages/sdk/README.md) for usage.
 

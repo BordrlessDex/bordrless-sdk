@@ -38,6 +38,10 @@ export {
   type KeeperStateField,
   type KeeperWallet,
   type KeeperWidth,
+  isLaunchPool,
+  type KeeperPool,
+  type KeeperLaunchPool,
+  type KeeperPoolEntry,
 } from '@bordrless/shared';
 
 /** What `checkKeeperJson` says of a file: its normal form and the words the Workshop's page will show, or the one sentence the Workshop would refuse it with. */
