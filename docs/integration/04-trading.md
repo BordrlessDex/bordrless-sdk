@@ -307,6 +307,27 @@ Move to `swap_v2`.
 Quoting is unchanged: the reserves are the pool's books (`quoteReserve`, virtual reserves), never
 the vault's balance. What a wallet can spend on a buy is its lamports (`spendableQuote`).
 
+## Token-quoted pools (`swap_spl`)
+
+Since 20 Oct 2026 (SDK 0.19.0) a coin may launch against one to six SPL Token or Token-2022 mints
+instead of SOL (bordrless-programs `docs/token-quotes.md`). Each mint is a leg: a DEX pool of quote
+kind 2 (`Pool.quoteKind`, `isSplPool`, `Pool.splQuote` for the mint's program and decimals) holding
+an equal share of the coin's supply, opening at the same market cap in every token, never
+graduating. Such a launch has `Launch.tokenQuoted` set and `decodeLegs(legsAddress(mint))` lists its
+legs; trading opens only once every leg is open.
+
+- Trade a leg with `swap_spl`: `tokenLaunch.legSwap(keys, trader, recipient, direction, amountIn,
+  minAmountOut)` (or `legSwapWith` to name the token accounts), where `keys` is a `LegKeys` (`mint`,
+  `quoteMint`, `quoteProgram`, `lpFeeBps`). A buy pays from the trader's associated token account of
+  the quote; a sell delivers to the recipient's. The classic `swap` and `swap_v2` refuse a kind-2
+  pool.
+- Amounts on the quote side are in the leg's token, in its own decimals, not lamports. The creator
+  fee is taken in that token too (`legSwapCutsOf` reads it from `Swapped`).
+- A buy from a token account with CPI Guard on, or a sell into one that requires memos, fails in the
+  DEX: `spl.ts`'s `cpiGuardLocked` and `memoTransferRequired` tell you first.
+- Kit rules, companions and custom hooks don't apply to a token-quoted coin, and its mint has no
+  hook. The router (`router.swap`, `router.swapV2`) doesn't wrap `swap_spl`.
+
 ## Sending
 
 Let the user's wallet **sign and send** (`signAndSendTransaction`) wherever you can. Some wallets'

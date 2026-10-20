@@ -655,7 +655,8 @@ accounts alone, so a companion that pays holders pays nobody. The schema (versio
 docs/scripts.md "What a script may ask the keeper for"): which holdings (`minBalance`,
 `maxBalance` in base units or a field of your state; a filter on a field of their 64 bytes of hook
 data against a constant, `"poolPrice"` or the current epoch), where each is paid (`owner`, the
-owner's wallet; `ownerQuoteHolding`, the owner's bridged-SOL holding; `none`), how many a step
+owner's wallet; `ownerQuoteHolding`, the owner's bridged-SOL holding; `ownerTokenAccount`, the
+owner's token account of `payMint`, an SPL mint; `none`), how many a step
 brings with the launch pool's swap accounts and without them, and whether it carries them
 (`swapAccounts`), the token's hook accounts (`hookAccounts`) or the companion's payout accounts
 (`payouts`, the payout path below); `stepSecs`, how often a step runs (10 s to a day; the launch
@@ -702,6 +703,21 @@ by key. A step with other pools would not fit one transaction (a native step is 
 bytes already), so a coin whose script declares pools gets an address lookup table of its own, made
 and extended by Bordrless's keeper as its steps need (the first such step, and any step that brings new
 fixed accounts, waits one pass). The reading says every pool a script brings.
+
+**Buying on Raydium and paying holders in that token** (19 Oct 2026). A `pools` entry may be a
+Raydium concentrated-liquidity pool, `{ "raydiumClmm": "<pool>", "buy": "<mint>" }` (`buy` one of
+its two mints; wrapped SOL is `So11111111111111111111111111111111111111112`). Each step the keeper
+reads the pool and brings 19 accounts in this order, which your script maps to Raydium's
+`swap_v2`: 0 the CLMM program, 1 the amm config, 2 the pool, 3 and 4 the companion address's
+associated token accounts of the input and the output mint, 5 and 6 the input and the output vault,
+7 the observation account, 8 SPL Token, 9 Token-2022, 10 SPL Memo, 11 the input mint, 12 the output
+mint, 13 the pool's tick array bitmap extension, 14 to 16 the three tick arrays the swap reads from
+the price now, 17 the Associated Token Account program, 18 the System program. `swap_v2` stops
+reading its remaining accounts at the first that holds no data, so pass 13 to 16 without the empty
+ones, and hold a minimum out from the pool's own price: the reading flags a swap anyone can
+sandwich. To pay holders in what you bought, `holdings.payTo` `"ownerTokenAccount"` with
+`holdings.payMint` brings each holding with its owner's associated token account of that mint
+(holders without one are passed over).
 
 **Figures on the coin's card: `view`** (16 Oct 2026; default none). Up to 6 figures a coin's page
 shows live from your script's accounts, each `{ "label", "account", "offset", "width", "as" }`: a

@@ -7,7 +7,7 @@
 import BN from 'bn.js';
 import { PublicKey, type AccountInfo, type Connection } from '@solana/web3.js';
 import { KIT_MODULES, decodeKitHookData, kitMintFlags, type KitHookData, type KitRewards, type LaunchRules, type LaunchRulesInput, type RuleBounds } from '@bordrless/shared';
-import { KIT_PROGRAM, launchAddress, partnerFeeAddress } from './addresses.ts';
+import { KIT_PROGRAM, SPL_TOKEN_2022_PROGRAM, SPL_TOKEN_PROGRAM, launchAddress, partnerFeeAddress } from './addresses.ts';
 import { CODERS, type ProgramName } from './coders.ts';
 
 const big = (v: unknown): bigint => (v instanceof BN ? BigInt(v.toString(10)) : typeof v === 'bigint' ? v : BigInt(v as number));
@@ -118,7 +118,21 @@ export interface Pool {
   bufferQuote?: bigint;
   /** The buffer `rebalance_pool` moves a native pool toward (`reserved[9..17]`). */
   bufferTarget?: bigint;
+  /**
+   * The quote's kind (`Pool.reserved[0]`, docs/token-quotes.md §2.4): `POOL_QUOTE_KIND.bordrless` (a token of the standard),
+   * `.native` (SOL as lamports) or `.spl` (a real SPL Token or Token-2022 mint: a token-quoted coin's leg). Absent from pools
+   * decoded by older code.
+   */
+  quoteKind?: number;
+  /** A kind-2 pool's quote: its program (`reserved[17]`: 0 SPL Token, 1 Token-2022) and its decimals (`reserved[18]`); null for any other pool. */
+  splQuote?: { programId: PublicKey; program: 'spl-token' | 'token-2022'; decimals: number } | null;
 }
+
+/** `Pool.reserved[0]`: what the pool's quote is. */
+export const POOL_QUOTE_KIND = { bordrless: 0, native: 1, spl: 2 } as const;
+
+/** Whether a pool is quoted in a real SPL Token or Token-2022 mint (a token-quoted coin's leg; `swap_spl` trades it). */
+export const isSplPool = (pool: Pick<Pool, 'quoteKind'>): boolean => pool.quoteKind === POOL_QUOTE_KIND.spl;
 
 /** `Pool.reserved` starts at byte 351 of a pool account with a hook (411 bytes; 319 for a hook-less pool, whose `Option` takes one byte): the native flag is there, the buffer 1 byte on, the target 9. */
 export const POOL_ACCOUNT_SIZE = 411;
@@ -270,6 +284,11 @@ export interface Launch {
    * launches decoded by older code.
    */
   isNative?: boolean;
+  /**
+   * Quoted in tokens (`Launch.reserved[18] == 2`, docs/token-quotes.md): its `pool` and `quoteMint` are leg 0's, its legs in
+   * `Legs`; it never graduates. Absent from launches decoded by older code.
+   */
+  tokenQuoted?: boolean;
 }
 
 /** A custom hook's SOL cut caps, in basis points of a buy's SOL in and a sell's SOL out (each at most `QUOTE_CUT_MAX_BPS`). */
@@ -525,7 +544,66 @@ export const decodePool = (data: Buffer): Pool => {
     quoteNative: Number((r.reserved as number[])[0]) === 1,
     bufferQuote: u64At(r.reserved as number[], 1),
     bufferTarget: u64At(r.reserved as number[], 9),
+    quoteKind: Number((r.reserved as number[])[0]),
+    splQuote: splQuoteOf(r.reserved as number[]),
   };
+};
+
+/** A kind-2 pool's quote program and decimals (`reserved[17]`, `reserved[18]`); null for any other kind. */
+function splQuoteOf(reserved: number[]): Pool['splQuote'] {
+  if (Number(reserved[0]) !== POOL_QUOTE_KIND.spl) return null;
+  const t22 = Number(reserved[17]) === 1;
+  return { programId: t22 ? SPL_TOKEN_2022_PROGRAM : SPL_TOKEN_PROGRAM, program: t22 ? 'token-2022' : 'spl-token', decimals: Number(reserved[18]) };
+}
+
+// ---- legs (docs/token-quotes.md §2.4) -------------------------------------------------------------
+
+/** One leg of a token-quoted coin as its `Legs` account keeps it. */
+export interface LegState {
+  quoteMint: PublicKey;
+  /** The quote's program: SPL Token or Token-2022 (`quote_program` 0 or 1). */
+  quoteProgram: PublicKey;
+  decimals: number;
+  feeBump: number;
+  virtualQuote: bigint;
+  share: bigint;
+  pool: PublicKey;
+  feeAccount: PublicKey;
+  creatorFeesAccrued: bigint;
+  creatorFeesClaimed: bigint;
+  /** Unix seconds; 0 until the leg is open. */
+  openedAt: number;
+}
+
+/** The launchpad's `Legs` account at `["legs", mint]` (974 bytes): the legs in order (`count` of them), how many are open. */
+export interface LegsAccount {
+  version: number;
+  bump: number;
+  mint: PublicKey;
+  launch: PublicKey;
+  count: number;
+  opened: number;
+  legs: LegState[];
+}
+
+/** Decodes a `Legs` account; only its first `count` legs (the rest are zero). */
+export const decodeLegs = (data: Buffer): LegsAccount => {
+  const r = decode('launch', 'legs', data);
+  const count = Number(r.count);
+  const legs = (r.legs as Raw[]).slice(0, count).map((l) => ({
+    quoteMint: key(l.quoteMint),
+    quoteProgram: Number(l.quoteProgram) === 1 ? SPL_TOKEN_2022_PROGRAM : SPL_TOKEN_PROGRAM,
+    decimals: Number(l.decimals),
+    feeBump: Number(l.feeBump),
+    virtualQuote: big(l.virtualQuote),
+    share: big(l.share),
+    pool: key(l.pool),
+    feeAccount: key(l.feeAccount),
+    creatorFeesAccrued: big(l.creatorFeesAccrued),
+    creatorFeesClaimed: big(l.creatorFeesClaimed),
+    openedAt: int(l.openedAt),
+  }));
+  return { version: Number(r.version), bump: Number(r.bump), mint: key(r.mint), launch: key(r.launch), count, opened: Number(r.opened), legs };
 };
 
 export const decodeBridgeConfig = (data: Buffer): BridgeConfig => {
@@ -638,6 +716,7 @@ export const decodeLaunch = (data: Buffer): Launch => {
     quoteCutAccrued: Buffer.from((r.reserved as number[]).slice(4, 12)).readBigUInt64LE(0),
     partnerShareBps: u16At(r.reserved as number[], 14),
     isNative: Number((r.reserved as number[])[17]) === 1,
+    tokenQuoted: Number((r.reserved as number[])[18]) === 2,
   };
 };
 

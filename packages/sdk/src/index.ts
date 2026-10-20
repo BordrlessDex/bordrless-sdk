@@ -30,3 +30,5 @@ export * from './strategy.ts';
 export * from './risk.ts';
 export * from './native.ts';
 export * from './fees.ts';
+export * from './spl.ts';
+export * from './legs.ts';

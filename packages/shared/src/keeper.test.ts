@@ -4,7 +4,7 @@
  * sentence; the canonical text the approval hashes; the declaration in plain words.
  */
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_STEP_SECS, KEEPER_FILE, KEEPER_LIMITS, canonicalKeeperJson, isBase58Key, keeperDeclarationOf, keeperDetails, keeperLaunchTerms, keeperPerStep, keeperStepSecs, keeperWords, parseKeeperDeclaration, type KeeperDeclaration } from './keeper.ts';
+import { DEFAULT_STEP_SECS, KEEPER_FILE, KEEPER_LIMITS, canonicalKeeperJson, isBase58Key, isRaydiumPool, keeperDeclarationOf, keeperDetails, keeperLaunchTerms, keeperPerStep, keeperStepSecs, keeperWords, parseKeeperDeclaration, type KeeperDeclaration } from './keeper.ts';
 
 /**
  * Whale Bait (F:\whale-bait, REPORT.md): every holder at 1 base unit and under 20,000,000 tokens
@@ -142,7 +142,7 @@ describe('keeper.json', () => {
     expect(problemOf(holdings({ minBalance: { state: { offset: 10_237, width: 4 } } }))).toBe('keeper.json: holdings.minBalance.state.offset is a whole number from 0 to 10,236: where the field starts in the script’s state.');
     expect(problemOf(holdings({ minBalance: { state: { offset: 8, width: 3 } } }))).toBe('keeper.json: holdings.minBalance.state.width is 1, 2, 4 or 8: the field’s bytes, unsigned little-endian.');
     expect(problemOf(holdings({ minBalance: { field: 8 } }))).toBe('keeper.json: holdings.minBalance has no field "field" (it takes state).');
-    expect(problemOf(holdings({ payTo: 'treasury' }))).toBe('keeper.json: holdings.payTo is one of none, owner, ownerQuoteHolding: where each holding is paid.');
+    expect(problemOf(holdings({ payTo: 'treasury' }))).toBe('keeper.json: holdings.payTo is one of none, owner, ownerQuoteHolding, ownerTokenAccount: where each holding is paid.');
     expect(problemOf(holdings({ perStep: { withSwapAccounts: 17 } }))).toBe('keeper.json: holdings.perStep.withSwapAccounts is a whole number from 1 to 16.');
     expect(problemOf(holdings({ perStep: { withoutSwapAccounts: 6 } }))).toBe('keeper.json: holdings.perStep.withSwapAccounts is required while swapAccounts is true.');
     expect(problemOf({ ...whale(), swapAccounts: false, holdings: { ...(whale().holdings as object), perStep: { withSwapAccounts: 3 } } })).toBe('keeper.json: holdings.perStep.withoutSwapAccounts is required while swapAccounts is false.');
@@ -328,6 +328,77 @@ describe('pools (DEX pools a step brings beside the launch pool, 17 Oct 2026)', 
     expect(problem([{ base: 'coin', quote: WBORDR }, { base: 'coin', quote: WBORDR, liquidity: true }])).toContain('named twice');
     expect(problem([{ base: 'coin', quote: WBORDR, swap: true }])).toContain('no field "swap"');
     expect(problem([1, 2, 3, 4])).toContain('at most 3');
+  });
+});
+
+/** Raydium's ZEC/WSOL concentrated-liquidity pool and wrapped Zcash (8 decimals, SPL Token), the owner's pair of 19 Oct 2026. */
+const ZEC_POOL = 'GPxw5YstKrcJDe9GtD3u9myrsKAyLNy8tedsoyVDyN2b';
+const ZEC = 'A7bdiYdS5GjqGFtxf17ppRHtDKPkkRqbKtR27dxvQXaS';
+const WSOL = 'So11111111111111111111111111111111111111112';
+
+describe('pools: a Raydium pool (19 Oct 2026)', () => {
+  const pools = (list: unknown) => keeperDeclarationOf({ ...whale(), pools: list });
+  const problem = (list: unknown): string => {
+    const r = pools(list);
+    return r.ok ? '' : r.problem;
+  };
+
+  it('reads { raydiumClmm, buy } beside the other kinds, says it in the details, and keeps it as written in the normal form', () => {
+    const r = pools([{ raydiumClmm: ZEC_POOL, buy: ZEC }, { launch: '5xpzVZYLvY7Fg29vUTgM5hJvECBZfYWVz2m8E7rJspwi' }, { raydiumClmm: 'H5L9tQ9FvBsANeotkWJWBt9SSQggfcjZG6vqFg5vzC3Q', buy: WSOL }]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.declaration.pools).toEqual([{ raydiumClmm: ZEC_POOL, buy: ZEC }, { launch: '5xpzVZYLvY7Fg29vUTgM5hJvECBZfYWVz2m8E7rJspwi' }, { raydiumClmm: 'H5L9tQ9FvBsANeotkWJWBt9SSQggfcjZG6vqFg5vzC3Q', buy: WSOL }]);
+    expect(isRaydiumPool(r.declaration.pools![0]!)).toBe(true);
+    expect(isRaydiumPool(r.declaration.pools![1]!)).toBe(false);
+    const details = keeperDetails(r.declaration);
+    expect(details).toContain('Each step also brings the Raydium pool GPxw…yN2b (a swap buying A7bd…QXaS for the companion address, with its price-range accounts).');
+    expect(details).toContain('Each step also brings the Raydium pool H5L9…zC3Q (a swap buying wrapped SOL for the companion address, with its price-range accounts).');
+    expect(canonicalKeeperJson(r.declaration)).toContain(`"pools":[{"buy":"${ZEC}","raydiumClmm":"${ZEC_POOL}"}`);
+    // The normal form reads back as itself.
+    expect(keeperDeclarationOf(JSON.parse(JSON.stringify(r.declaration)))).toEqual(r);
+  });
+
+  it('refuses a pool or a mint that is not a key, the coin, a program, bridged SOL, a missing buy, a repeat, an unknown field and a fourth pool, each in one sentence', () => {
+    expect(problem([{ raydiumClmm: 'nope', buy: ZEC }])).toBe('keeper.json: pools[0].raydiumClmm is the Raydium pool’s address, in base58.');
+    expect(problem([{ raydiumClmm: '6ZUM1gWBH9hBBNoJoaVAGwSftyZ6CUda6vUZTW9MsJuo', buy: ZEC }])).toContain('not the default key, a Bordrless program or a mint');
+    expect(problem([{ raydiumClmm: ZEC_POOL }])).toBe('keeper.json: pools[0].buy is required: the mint the script buys on that pool, one of its two.');
+    expect(problem([{ raydiumClmm: ZEC_POOL, buy: 'coin' }])).toContain('pools[0].buy is never the coin');
+    expect(problem([{ raydiumClmm: ZEC_POOL, buy: 'zec' }])).toContain('pools[0].buy is an SPL mint’s address in base58');
+    expect(problem([{ raydiumClmm: ZEC_POOL, buy: 'A49oVhX22ExMwTEtFC6Y8nhBdZ4LJDGhdXLDn4c2f59i' }])).toContain('not the default key, a Bordrless program or Bordrless’s bridged SOL');
+    expect(problem([{ raydiumClmm: ZEC_POOL, buy: '11111111111111111111111111111111' }])).toContain('not the default key');
+    expect(problem([{ raydiumClmm: ZEC_POOL, buy: ZEC_POOL }])).toContain('not the pool itself');
+    expect(problem([{ raydiumClmm: ZEC_POOL, buy: ZEC }, { raydiumClmm: ZEC_POOL, buy: WSOL }])).toBe('keeper.json: pools[1] is named twice.');
+    expect(problem([{ raydiumClmm: ZEC_POOL, buy: ZEC, minOut: 1 }])).toContain('pools[0] has no field "minOut"');
+    expect(problem([{ raydiumClmm: ZEC_POOL, buy: ZEC, launch: ZEC }])).toContain('pools[0] has no field "launch"');
+    expect(problem([{ raydiumClmm: ZEC_POOL, buy: ZEC }, { launch: ZEC }, { base: 'coin', quote: ZEC }, { raydiumClmm: 'H5L9tQ9FvBsANeotkWJWBt9SSQggfcjZG6vqFg5vzC3Q', buy: WSOL }])).toContain('at most 3');
+  });
+});
+
+describe('holdings paid in an SPL token (payTo ownerTokenAccount, 19 Oct 2026)', () => {
+  const zec = (over: Record<string, unknown> = {}): Record<string, unknown> => holdings({ hookData: null, maxBalance: null, payTo: 'ownerTokenAccount', payMint: ZEC, ...over });
+
+  it('reads payMint with ownerTokenAccount, says it, and leaves it out of every other declaration’s normal form', () => {
+    const d = declarationOf(JSON.stringify(zec()));
+    expect(d.holdings).toEqual({ minBalance: '1', maxBalance: null, hookData: null, payTo: 'ownerTokenAccount', payMint: ZEC, perStep: { withSwapAccounts: 3, withoutSwapAccounts: 6 } });
+    expect(keeperWords(d)).toBe('Each step brings up to 3 holders, paid to their A7bd…QXaS token account.');
+    expect(keeperWords(declarationOf(JSON.stringify(zec({ payMint: WSOL }))))).toBe('Each step brings up to 3 holders, paid to their wrapped SOL token account.');
+    expect(canonicalKeeperJson(d)).toContain(`"payMint":"${ZEC}"`);
+    expect(declarationOf(JSON.stringify(d))).toEqual(d);
+    // Whale Bait's normal form and hash as before: no payMint field.
+    const whaleD = declarationOf(WHALE_BAIT_KEEPER_JSON);
+    expect('payMint' in whaleD.holdings!).toBe(false);
+    expect(canonicalKeeperJson(whaleD)).not.toContain('payMint');
+    expect(canonicalKeeperJson(declarationOf(JSON.stringify(holdings({ payMint: null }))))).toBe(canonicalKeeperJson(whaleD));
+  });
+
+  it('refuses ownerTokenAccount without payMint, payMint with any other payTo, a bad mint, and payouts beside it', () => {
+    expect(problemOf(zec({ payMint: undefined }))).toBe('keeper.json: holdings.payMint is required with payTo ownerTokenAccount: the SPL mint each holder is paid in.');
+    expect(problemOf(holdings({ payMint: ZEC }))).toBe('keeper.json: holdings.payMint goes only with payTo ownerTokenAccount: it names the mint of the token account each holder is paid in.');
+    expect(problemOf(zec({ payMint: 'zec' }))).toContain('holdings.payMint is an SPL mint’s address in base58');
+    expect(problemOf(zec({ payMint: 'coin' }))).toContain('holdings.payMint is never the coin');
+    expect(problemOf(zec({ payMint: 'A49oVhX22ExMwTEtFC6Y8nhBdZ4LJDGhdXLDn4c2f59i' }))).toContain('Bordrless’s bridged SOL');
+    expect(problemOf({ ...zec(), swapAccounts: false, payouts: true })).toBe('keeper.json: with payouts the companion pays each holding’s owner itself: holdings.payTo is owner (or none for a step that only measures).');
+    expect(problemOf(zec({ payTo: 'ownerTokenAccount', payMint: ZEC, extra: 1 }))).toBe('keeper.json: holdings has no field "extra" (it takes minBalance, maxBalance, hookData, payTo, payMint, perStep).');
   });
 });
 

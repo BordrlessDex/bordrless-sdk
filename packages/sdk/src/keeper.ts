@@ -39,8 +39,11 @@ export {
   type KeeperWallet,
   type KeeperWidth,
   isLaunchPool,
+  isRaydiumPool,
+  RAYDIUM_CLMM_STEP_ACCOUNTS,
   type KeeperPool,
   type KeeperLaunchPool,
+  type KeeperRaydiumPool,
   type KeeperPoolEntry,
 } from '@bordrless/shared';
 

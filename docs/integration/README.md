@@ -3,6 +3,15 @@
 For trading terminals, aggregators, indexers, wallets and portfolio trackers that want to show and
 trade Bordrless tokens.
 
+**Changed 2026-10-20 (SDK 0.19.0): quote tokens.** A coin may now launch against one to six SPL
+Token or Token-2022 mints instead of SOL. Each mint is its own DEX pool (a "leg", quote kind 2)
+holding an equal share of the supply; a coin is quoted in SOL or in its tokens, never both, and SOL
+launches are unchanged. Read `Pool.quoteKind` / `isSplPool(pool)` and `Launch.tokenQuoted` rather
+than assuming SOL: a kind-2 pool trades only with `swap_spl` (the classic `swap` and `swap_v2`
+refuse it), its quote side is in that token, and it still emits `Swapped`
+([Trading](04-trading.md#token-quoted-pools-swap_spl); the spec is bordrless-programs
+`docs/token-quotes.md`).
+
 **Changed 2026-10-15 and 16 (SDK 0.14.0): native SOL.** Pools, launches, kits, companions and hook
 vaults hold SOL as lamports (pools keep bridged SOL `A49oVh…` as their `quote_mint` and in their
 seeds, so no address changed). Trade them with `swap_v2`: the wallet pays a buy in SOL and a sell
@@ -10,8 +19,7 @@ pays SOL to the wallet, **no wrap and no unwrap**; `launch.swap` builds it for n
 launches are native since 16 Oct 2026. Two exceptions stay on bridged SOL: pool
 `4PvPnTByfrnhA1nNmsaou7GrdQsqJNrkinqLHp2JHFX7` (forever) and, for now, the coin
 `5DMBPNoYAmbiNnRyRkWS7BetnfvAzbUqXyXNiw6Hn7hh`. Read `quoteNative` / `isNative` rather than
-assuming either ([Trading](04-trading.md#native-sol-pools-swap_v2)). Later SDK versions (0.15.0 to
-0.17.0) are GitHub releases, not yet on npm ([CHANGELOG](../../packages/sdk/CHANGELOG.md)).
+assuming either ([Trading](04-trading.md#native-sol-pools-swap_v2)).
 
 **Changed 2026-10-13 (SDK 0.10.0):** apps can charge their own fee on swaps they route (the
 router: at most 1%, `router.swap`); a custom hook may take a SOL cut on every trade of its coin, so

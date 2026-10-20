@@ -487,6 +487,15 @@ export interface LaunchSummary {
    * launch still on bridged SOL; absent from older backends (read as false).
    */
   quoteNative?: boolean;
+  /** A coin quoted in tokens (docs/token-quotes.md): its legs, one per quote token; absent for a SOL coin. Its `quote` is then the first leg's token and its USD figures sum every leg. */
+  legs?: import('./quotes.ts').LaunchLeg[];
+  /**
+   * A coin quoted in tokens with two or more legs, one of whose tokens isn't on Jupiter's verified
+   * list (`'unverifiedQuote'`, words in `LEGS_RISK_WORDS`): kept off the board unless `hidden=1` asks
+   * for it (as the DEX's risky pools are), its page served with this label. Null for any other token
+   * coin; absent for a SOL coin.
+   */
+  legsRisk?: import('./quotes.ts').LegsRisk | null;
 }
 
 export interface LaunchDetail extends LaunchSummary {
@@ -552,6 +561,12 @@ export interface Trade {
   holderFee: Amount;
   /** Token base units burned. */
   burn: Amount;
+  /**
+   * A coin quoted in tokens (docs/token-quotes.md): the token this trade paid or received, whose raw
+   * units `quoteAmount` and `creatorFee` are in and per whole unit of which `priceQuote` is (each leg
+   * trades in its own token). Absent on every SOL coin's trade.
+   */
+  quoteMint?: Address;
 }
 
 /** `GET /v1/launches/:mint/candles?unit=usd|quote`: oldest first. In dollars, a candle no SOL price can tell (none when it traded, none now) is left out, never sent as 0. */
@@ -579,6 +594,8 @@ export interface WalletBalances {
   bridgedSol: Amount;
   token: Amount | null;
   lp: Amount | null;
+  /** The owner's balance of each quote token asked for (`?quotes=<mint>,<mint>`, a coin quoted in tokens), raw units by mint; absent when none was asked. */
+  quoteTokens?: Record<Address, Amount>;
 }
 
 export interface PortfolioEntry {
@@ -635,6 +652,8 @@ export interface SwapQuoteRequest {
   /** Input amount in base units: quote (lamports of SOL, or of bridged SOL on a pool not yet native) for a buy, the token for a sell. */
   amount: Amount;
   slippageBps: number;
+  /** The pool to trade on: for a coin quoted in tokens, the leg of the token paid or received (docs/token-quotes.md); absent: the coin's own pool (SOL). */
+  pool?: Address;
 }
 
 export interface SwapQuote {
@@ -769,6 +788,16 @@ export interface LaunchPrepareRequest {
    * without holder rewards, or a split that doesn't add up.
    */
   companion?: CompanionRequest;
+  /**
+   * Quote tokens (docs/token-quotes.md): 1 to `MAX_QUOTE_TOKENS` SPL Token or Token-2022 mints the coin
+   * launches against instead of SOL, one leg each with an equal share of the supply, never graduating.
+   * Absent or empty: a SOL launch. Refused (`quote_tokens_closed`) until the API opens them, with a
+   * companion, a launch config, kit rules or a custom hook (`quote_tokens_rules`), or a mint that
+   * can't be a quote (`quote_token_refused`, with the mint and `QuoteTokenRefusal`).
+   */
+  quotes?: Address[];
+  /** With `quotes`: raw units of the first quote token the creator buys with once every leg is open; 0 or absent for none (`devBuyLamports` is refused beside it). */
+  devBuyQuote?: Amount;
 }
 
 /**
@@ -1487,6 +1516,8 @@ export interface LaunchPrepareResponse {
   buyFeeBps: number;
   /** Total fee of a sell under these rules by the §7.3 formula, outside the sniper window. */
   sellFeeBps: number;
+  /** A coin quoted in tokens: each leg as it will open (its pool, the token, its share of the supply and the virtual quote that prices it); absent for a SOL launch. */
+  legs?: { index: number; pool: Address; quoteMint: Address; share: Amount; virtualQuote: Amount }[];
 }
 
 // ---- holder rewards (docs/hooks-v2.md §4, §8.1) ------------------------------------------------------
@@ -1562,6 +1593,27 @@ export interface TransferPrepareResponse {
 export interface CreatorPrepareRequest {
   owner: Address;
   mints: Address[];
+}
+
+// POST /v1/creator/legs/prepare     -> CreatorLegsPrepareResponse
+/**
+ * A coin quoted in tokens (docs/token-quotes.md): its creator's fees, each leg's in its own token,
+ * claimed with `claim_creator_fees_token` into the creator's associated token account of that token
+ * (made if missing). The creator signs and pays; every open leg with fees waiting (or the `legs`
+ * named) is claimed, as many to a transaction as fit.
+ */
+export interface CreatorLegsPrepareRequest {
+  /** The coin's creator (`launch.creator`): signs and pays. */
+  creator: Address;
+  mint: Address;
+  /** Leg indices to claim; absent: every leg with fees waiting. */
+  legs?: number[];
+}
+
+export interface CreatorLegsPrepareResponse {
+  transactions: PreparedTx[];
+  /** What each claim pays, raw units of the leg's token (its fee account's whole balance now). */
+  legs: { index: number; quoteMint: Address; amount: Amount }[];
 }
 
 /** Share with holders: send SOL that every holder of the token receives pro rata. */

@@ -244,7 +244,9 @@ describe('errors are explained by the program that failed (codes overlap)', () =
     expect(explainProgramError('launch', 2006)).toMatchObject({ name: 'ConstraintSeeds' });
     expect(explainProgramError('kit', 6999).name).toBeNull();
     expect(explainProgramError('swap', 6037)).toMatchObject({ name: 'NotBridgedSol', message: "the pool's quote is not bridged SOL" });
-    expect([PROGRAM_ERRORS.kit.size, PROGRAM_ERRORS.launch.size, PROGRAM_ERRORS.swap.size, PROGRAM_ERRORS.token.size, PROGRAM_ERRORS.bridge.size, PROGRAM_ERRORS.taxHook.size]).toEqual([33, 62, 52, 27, 14, 6]);
+    expect([PROGRAM_ERRORS.kit.size, PROGRAM_ERRORS.launch.size, PROGRAM_ERRORS.swap.size, PROGRAM_ERRORS.token.size, PROGRAM_ERRORS.bridge.size, PROGRAM_ERRORS.taxHook.size]).toEqual([33, 82, 68, 27, 14, 6]);
+    // Quote tokens (docs/token-quotes.md §2.4): the launchpad's 6062 to 6081 and the DEX's 6052 to 6067, appended.
+    expect([explainProgramError('launch', 6073).name, explainProgramError('launch', 6081).name, explainProgramError('swap', 6052).name, explainProgramError('swap', 6066).name]).toEqual(['SolQuoteToken', 'LegsAccountInvalid', 'SplPool', 'SplInvariant']);
   });
 
   it('explains the companion\'s game errors and the lottery hook\'s, read from the logs of a failed step', () => {

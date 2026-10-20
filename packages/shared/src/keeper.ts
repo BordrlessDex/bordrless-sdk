@@ -17,7 +17,8 @@
  *   script's state), a filter on each holding's 64 bytes of hook data (an unsigned little-endian
  *   field compared with a constant, the pool's price now, or the current epoch, floor(now / N), N a
  *   constant or a field of the script's state), and where each one is paid (its owner's wallet, its
- *   owner's bridged-SOL holding, or nowhere: the holding alone);
+ *   owner's bridged-SOL holding, its owner's associated token account of an SPL mint, or nowhere:
+ *   the holding alone);
  * - how many a step brings, with the launch pool's swap accounts and without them, and whether it
  *   carries them (a script that trades its pot), the token's hook accounts (a script that moves the
  *   token without trading: a receipt), or the companion's payout accounts (a script made with
@@ -35,7 +36,7 @@
  */
 import type { PayoutTermsRequest } from './api.ts';
 import { PAYOUT_TERMS_BOUNDS, POOL_FEE_TIER_DEFAULT_BPS, SCRIPT_BOUNDS, TOKEN_DECIMALS, payoutTermsWithin } from './policy.ts';
-import { FIXED_ADDRESSES, HOOK_DATA_LEN, PROGRAM_IDS } from './programs.ts';
+import { FIXED_ADDRESSES, HOOK_DATA_LEN, NATIVE_MINT, PROGRAM_IDS } from './programs.ts';
 import { decimalWords } from './rules.ts';
 
 /** The file, at the root of the submitted source (beside `src/`): a companion script's, or a pair's companion half's. */
@@ -62,7 +63,7 @@ export const KEEPER_LIMITS = {
   /** Seeds a hook account's address is made of (`view[].account.hook`), and the most bytes one literal seed has. */
   viewSeeds: 4,
   viewSeedBytes: 32,
-  /** DEX pools a step brings beside the launch pool (`pools`). Each costs a step about nine accounts of its own. */
+  /** Pools a step brings beside the launch pool (`pools`), of every kind together. Each costs a step about nine accounts of its own, a Raydium pool nineteen. */
   pools: 3,
 } as const;
 
@@ -131,10 +132,13 @@ export interface KeeperHookDataFilter {
  * Where each holding a step brings is paid: `owner` (its owner's wallet, writable, after the
  * holding), `ownerQuoteHolding` (its owner's bridged-SOL holding under the Bordrless token program,
  * `holdingAddress(BRIDGED_SOL_MINT, owner)`, writable, after the holding; a holder without one is
- * passed over), or `none` (the holding alone).
+ * passed over), `ownerTokenAccount` (its owner's associated token account of `payMint`, under the
+ * SPL Token or the Token-2022 program as the mint's owner says, writable, after the holding; a
+ * holder without one is passed over; 19 Oct 2026: a pair that pays holders in wrapped Zcash it buys
+ * on Raydium), or `none` (the holding alone).
  */
-export type KeeperPayTo = 'none' | 'owner' | 'ownerQuoteHolding';
-export const KEEPER_PAY_TO: readonly KeeperPayTo[] = ['none', 'owner', 'ownerQuoteHolding'];
+export type KeeperPayTo = 'none' | 'owner' | 'ownerQuoteHolding' | 'ownerTokenAccount';
+export const KEEPER_PAY_TO: readonly KeeperPayTo[] = ['none', 'owner', 'ownerQuoteHolding', 'ownerTokenAccount'];
 
 export interface KeeperHoldings {
   /** The least balance that counts, base units (at least 1). */
@@ -143,6 +147,12 @@ export interface KeeperHoldings {
   maxBalance: KeeperAmount | null;
   hookData: KeeperHookDataFilter | null;
   payTo: KeeperPayTo;
+  /**
+   * The SPL mint (base58) each holder is paid in: required with `payTo` `ownerTokenAccount`, refused
+   * with any other. Absent otherwise: left out of the normal form, so a declaration approved before it
+   * hashes as it did.
+   */
+  payMint?: string;
   /** Holdings a step brings when it carries the swap accounts, and when it does not (the one `swapAccounts` names is required; null: not said). */
   perStep: { withSwapAccounts: number | null; withoutSwapAccounts: number | null };
 }
@@ -192,9 +202,33 @@ export interface KeeperLaunchPool {
   to?: 'launcher';
 }
 
-/** What `pools[]` lists: a plain DEX pool, or another coin's launch pool. */
-export type KeeperPoolEntry = KeeperPool | KeeperLaunchPool;
+/**
+ * A Raydium concentrated-liquidity (CLMM) pool each step brings (19 Oct 2026; the owner: a pair
+ * whose holders are paid pro rata in wrapped Zcash the pot buys on Raydium's ZEC/WSOL pool), so a
+ * script can buy an outside SPL token: `raydiumClmm` is the pool's address, `buy` the mint the
+ * script buys there (one of the pool's two mints; it pays with the other). At each step the keeper
+ * reads the pool fresh and appends, in this order (`RAYDIUM_CLMM_STEP_ACCOUNTS`; the script maps
+ * them to Raydium's `swap_v2`): 0 the CLMM program, 1 the pool's amm config, 2 the pool (writable),
+ * 3 and 4 the companion address's associated token accounts of the input and the output mint
+ * (writable), 5 and 6 the input and the output vault (writable), 7 the observation account
+ * (writable), 8 the SPL Token program, 9 the Token-2022 program, 10 the SPL Memo program, 11 the
+ * input mint, 12 the output mint, 13 the pool's tick array bitmap extension (writable), 14 to 16
+ * the three tick arrays the swap reads in order from the price now (writable; one that does not
+ * exist is named all the same), 17 the Associated Token Account program, 18 the System program.
+ * A pool that can't be read is left out of the step, said in the log.
+ */
+export interface KeeperRaydiumPool {
+  raydiumClmm: string;
+  buy: string;
+}
+
+/** The accounts a Raydium pool adds to a step, in the order `KeeperRaydiumPool` says. */
+export const RAYDIUM_CLMM_STEP_ACCOUNTS = 19;
+
+/** What `pools[]` lists: a plain DEX pool, another coin's launch pool, or a Raydium pool. */
+export type KeeperPoolEntry = KeeperPool | KeeperLaunchPool | KeeperRaydiumPool;
 export const isLaunchPool = (p: KeeperPoolEntry): p is KeeperLaunchPool => 'launch' in p;
+export const isRaydiumPool = (p: KeeperPoolEntry): p is KeeperRaydiumPool => 'raydiumClmm' in p;
 
 /** The most a pool's LP fee can be on the DEX (`bordrless_swap::constants::MAX_LP_FEE_BPS`, 90%): what `pools[].feeBps` is held to. The site's create-pool form offers 25, 100 and 200; a pool made another way may have any fee. */
 export const KEEPER_MAX_POOL_FEE_BPS = 9_000;
@@ -242,7 +276,7 @@ export interface KeeperDeclaration {
   initData?: string;
   /** Figures a coin's page shows live from the script's accounts (`KeeperViewField`, 16 Oct 2026); absent: none. Left out of the normal form when empty. */
   view?: KeeperViewField[];
-  /** DEX pools each step brings beside the launch pool (`KeeperPool`, 17 Oct 2026), or other coins' launch pools (`KeeperLaunchPool`, 18 Oct), at most `KEEPER_LIMITS.pools` in all; absent: none. Left out of the normal form when empty. */
+  /** DEX pools each step brings beside the launch pool (`KeeperPool`, 17 Oct 2026), other coins' launch pools (`KeeperLaunchPool`, 18 Oct), or Raydium pools (`KeeperRaydiumPool`, 19 Oct), at most `KEEPER_LIMITS.pools` in all; absent: none. Left out of the normal form when empty. */
   pools?: KeeperPoolEntry[];
   /**
    * The launcher's share of each trade's fee on every launch with it, basis points of the whole (0
@@ -411,12 +445,39 @@ function walletsOf(v: unknown, at: string): KeeperWallet[] {
 
 const BRIDGED_SOL = FIXED_ADDRESSES.bridgedSolMint;
 
-/** `pools`: at most `KEEPER_LIMITS.pools` entries, each a plain DEX pool by its two mints and its fee tier, or another coin's launch pool by its mint; none the coin's own launch pool, none named twice. */
+/**
+ * An SPL mint a declaration names outside the Bordrless token program (a Raydium pool's `buy`, the
+ * `payMint` holders are paid in): a key in base58, never the coin (which trades on its own launch
+ * pool), the default key, a Bordrless program or Bordrless's bridged SOL (an SPL account holds
+ * wrapped SOL, `NATIVE_MINT`).
+ */
+function splMintOf(v: unknown, at: string, what: string): string {
+  if (v === 'coin') return fail(`${at} is never the coin: the coin is a Bordrless token, not an SPL mint (${what}).`);
+  if (typeof v !== 'string' || !isBase58Key(v)) return fail(`${at} is an SPL mint’s address in base58 (${what}; wrapped SOL is ${NATIVE_MINT}).`);
+  if (v === DEFAULT_KEY || PROTOCOL_KEYS.includes(v) || v === BRIDGED_SOL) return fail(`${at} is an SPL mint, not the default key, a Bordrless program or Bordrless’s bridged SOL (wrapped SOL is ${NATIVE_MINT}).`);
+  return v;
+}
+
+/** `pools`: at most `KEEPER_LIMITS.pools` entries, each a plain DEX pool by its two mints and its fee tier, another coin's launch pool by its mint, or a Raydium pool by its address and the mint bought there; none the coin's own launch pool, none named twice. */
 function poolsOf(v: unknown): KeeperPoolEntry[] {
-  if (!Array.isArray(v) || v.length > KEEPER_LIMITS.pools) return fail(`pools is a list of at most ${KEEPER_LIMITS.pools} pools a step brings beside the launch pool, each { "base", "quote", "feeBps", "liquidity" } (a DEX pool) or { "launch", "to" } (another coin's launch pool).`);
+  if (!Array.isArray(v) || v.length > KEEPER_LIMITS.pools) return fail(`pools is a list of at most ${KEEPER_LIMITS.pools} pools a step brings beside the launch pool, each { "base", "quote", "feeBps", "liquidity" } (a DEX pool), { "launch", "to" } (another coin's launch pool) or { "raydiumClmm", "buy" } (a Raydium pool).`);
   const seen = new Set<string>();
   return v.map((item: unknown, i): KeeperPoolEntry => {
     const at = `pools[${i}]`;
+    if (isObject(item) && 'raydiumClmm' in item) {
+      // A Raydium concentrated-liquidity pool (19 Oct 2026): the keeper reads it fresh each step, so only its address and the side bought are declared.
+      const r = fieldsOf(item, at, ['raydiumClmm', 'buy'], '{ "raydiumClmm": <pool>, "buy": <mint> }: a Raydium pool by its address and the mint the script buys there');
+      const pool = r.raydiumClmm;
+      if (typeof pool !== 'string' || !isBase58Key(pool)) return fail(`${at}.raydiumClmm is the Raydium pool’s address, in base58.`);
+      if (pool === DEFAULT_KEY || PROTOCOL_KEYS.includes(pool) || pool === BRIDGED_SOL) fail(`${at}.raydiumClmm is a Raydium pool’s address, not the default key, a Bordrless program or a mint.`);
+      if (r.buy === undefined || r.buy === null) fail(`${at}.buy is required: the mint the script buys on that pool, one of its two.`);
+      const buy = splMintOf(r.buy, `${at}.buy`, 'the mint the script buys on that pool, one of its two');
+      if (buy === pool) fail(`${at}.buy is one of the pool’s two mints, not the pool itself.`);
+      const key = `raydium/${pool}`;
+      if (seen.has(key)) fail(`${at} is named twice.`);
+      seen.add(key);
+      return { raydiumClmm: pool, buy };
+    }
     if (isObject(item) && 'launch' in item) {
       const q = fieldsOf(item, at, ['launch', 'to'], '{ "launch": <mint>, "to"?: "launcher" }: another coin’s launch pool by its mint');
       const launch = q.launch;
@@ -429,7 +490,7 @@ function poolsOf(v: unknown): KeeperPoolEntry[] {
       seen.add(key);
       return { launch, ...(q.to === 'launcher' ? { to: 'launcher' as const } : {}) };
     }
-    const p = fieldsOf(item, at, ['base', 'quote', 'feeBps', 'liquidity'], '{ "base", "quote", "feeBps", "liquidity" }: a DEX pool by its two mints and its LP fee tier, or { "launch" }: another coin’s launch pool');
+    const p = fieldsOf(item, at, ['base', 'quote', 'feeBps', 'liquidity'], '{ "base", "quote", "feeBps", "liquidity" }: a DEX pool by its two mints and its LP fee tier, { "launch" }: another coin’s launch pool, or { "raydiumClmm", "buy" }: a Raydium pool');
     const mintOf = (x: unknown, side: 'base' | 'quote'): KeeperPoolMint => {
       if (x === 'coin' || x === 'sol') return x;
       if (typeof x !== 'string' || !isBase58Key(x)) return fail(`${at}.${side} is "coin" (the coin’s mint), "sol" (SOL), or a mint’s address in base58.`);
@@ -454,7 +515,7 @@ function poolsOf(v: unknown): KeeperPoolEntry[] {
 
 /** `holdings`, held to the schema beside the flags it depends on. */
 function holdingsOf(v: unknown, swapAccounts: boolean, payouts: boolean): KeeperHoldings {
-  const h = fieldsOf(v, 'holdings', ['minBalance', 'maxBalance', 'hookData', 'payTo', 'perStep'], '{ "minBalance", "maxBalance", "hookData", "payTo", "perStep" }');
+  const h = fieldsOf(v, 'holdings', ['minBalance', 'maxBalance', 'hookData', 'payTo', 'payMint', 'perStep'], '{ "minBalance", "maxBalance", "hookData", "payTo", "payMint", "perStep" }');
   if (h.minBalance === undefined) fail('holdings.minBalance is required: the least balance that counts, base units.');
   const minBalance = amountOf(h.minBalance, 'holdings.minBalance', 1n);
   const maxBalance = h.maxBalance === undefined || h.maxBalance === null ? null : amountOf(h.maxBalance, 'holdings.maxBalance', 1n);
@@ -463,12 +524,17 @@ function holdingsOf(v: unknown, swapAccounts: boolean, payouts: boolean): Keeper
   if (typeof h.payTo !== 'string' || !(KEEPER_PAY_TO as readonly string[]).includes(h.payTo)) fail(`holdings.payTo is one of ${KEEPER_PAY_TO.join(', ')}: where each holding is paid.`);
   const payTo = h.payTo as KeeperPayTo;
   // The companion pays a payout answer's holding to its owner itself (`payoutAccounts`): the step brings the owner, or the holding alone to be measured.
-  if (payouts && payTo === 'ownerQuoteHolding') fail('with payouts the companion pays each holding’s owner itself: holdings.payTo is owner (or none for a step that only measures).');
+  if (payouts && (payTo === 'ownerQuoteHolding' || payTo === 'ownerTokenAccount')) fail('with payouts the companion pays each holding’s owner itself: holdings.payTo is owner (or none for a step that only measures).');
+  // A token account is of one mint: the declaration names it, and nothing else takes one.
+  const hasPayMint = h.payMint !== undefined && h.payMint !== null;
+  if (payTo === 'ownerTokenAccount' && !hasPayMint) fail('holdings.payMint is required with payTo ownerTokenAccount: the SPL mint each holder is paid in.');
+  if (payTo !== 'ownerTokenAccount' && hasPayMint) fail('holdings.payMint goes only with payTo ownerTokenAccount: it names the mint of the token account each holder is paid in.');
+  const payMint = hasPayMint ? splMintOf(h.payMint, 'holdings.payMint', 'the mint of the token account each holder is paid in') : null;
   const p = fieldsOf(h.perStep, 'holdings.perStep', ['withSwapAccounts', 'withoutSwapAccounts'], '{ "withSwapAccounts", "withoutSwapAccounts" }: holdings a step brings');
   const perStep = { withSwapAccounts: perStepCount(p.withSwapAccounts, 'holdings.perStep.withSwapAccounts'), withoutSwapAccounts: perStepCount(p.withoutSwapAccounts, 'holdings.perStep.withoutSwapAccounts') };
   if (swapAccounts && perStep.withSwapAccounts === null) fail('holdings.perStep.withSwapAccounts is required while swapAccounts is true.');
   if (!swapAccounts && perStep.withoutSwapAccounts === null) fail('holdings.perStep.withoutSwapAccounts is required while swapAccounts is false.');
-  return { minBalance, maxBalance, hookData, payTo, perStep };
+  return { minBalance, maxBalance, hookData, payTo, ...(payMint !== null ? { payMint } : {}), perStep };
 }
 
 /** The declaration in a parsed JSON value, held to the schema and its bounds: its normal form, or why not, in one sentence. */
@@ -711,7 +777,24 @@ function filterWords(f: KeeperHookDataFilter | null, paid: boolean): string {
   }
 }
 
-const PAY_WORDS: Record<KeeperPayTo, string> = { owner: ', paid to their wallet', ownerQuoteHolding: ', paid to their SOL holding', none: '' };
+/** An address cut short for words: "A7bd…QXaS". */
+const shortKey = (key: string): string => `${key.slice(0, 4)}…${key.slice(-4)}`;
+/** An SPL mint in words: "wrapped SOL" for `NATIVE_MINT`, else its address cut short. */
+const splMintWord = (mint: string): string => (mint === NATIVE_MINT ? 'wrapped SOL' : shortKey(mint));
+
+/** Where a holder is paid, in words after the holders: ", paid to their wallet". */
+function payWords(h: KeeperHoldings): string {
+  switch (h.payTo) {
+    case 'owner':
+      return ', paid to their wallet';
+    case 'ownerQuoteHolding':
+      return ', paid to their SOL holding';
+    case 'ownerTokenAccount':
+      return `, paid to their ${splMintWord(h.payMint ?? '')} token account`;
+    case 'none':
+      return '';
+  }
+}
 
 /** How many holdings a step brings as declared: with the swap accounts when it carries them, else without; 0 without holdings (a script that pays wallets alone). */
 export const keeperPerStep = (d: KeeperDeclaration): number => (d.holdings ? ((d.swapAccounts ? d.holdings.perStep.withSwapAccounts : d.holdings.perStep.withoutSwapAccounts) ?? 1) : 0);
@@ -734,7 +817,7 @@ export function keeperWords(d: KeeperDeclaration, decimals: number = TOKEN_DECIM
   if (!h) return walletWords(d);
   const noun = h.payTo === 'none' ? (n === 1 ? 'holding' : 'holdings') : n === 1 ? 'holder' : 'holders';
   const parts = [`Each step brings up to ${n} ${noun}`, balanceWords(h, decimals), filterWords(h.hookData, h.payTo !== 'none')].filter((p) => p !== '');
-  return [`${parts.join(' ')}${PAY_WORDS[h.payTo]}.`, walletWords(d)].filter((p) => p !== '').join(' ');
+  return [`${parts.join(' ')}${payWords(h)}.`, walletWords(d)].filter((p) => p !== '').join(' ');
 }
 
 /**
@@ -753,6 +836,10 @@ export function keeperDetails(d: KeeperDeclaration): string[] {
   for (const p of d.pools ?? []) {
     if (isLaunchPool(p)) {
       out.push(`Each step also brings the launch pool of the coin ${p.launch.slice(0, 4)}…${p.launch.slice(-4)} (its launchpad swap accounts for the companion address)${p.to === 'launcher' ? ', with the launcher’s holding of that coin for the swap’s recipient' : ''}.`);
+      continue;
+    }
+    if (isRaydiumPool(p)) {
+      out.push(`Each step also brings the Raydium pool ${shortKey(p.raydiumClmm)} (a swap buying ${splMintWord(p.buy)} for the companion address, with its price-range accounts).`);
       continue;
     }
     out.push(`Each step also brings the DEX pool of ${poolMintWord(p.base)} and ${poolMintWord(p.quote)} at a ${pctWord(p.feeBps)} LP fee${p.liquidity ? ', with its LP mint and LP holdings (the script may add liquidity to it)' : ''}.`);

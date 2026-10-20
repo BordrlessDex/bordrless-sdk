@@ -5,6 +5,7 @@ export * from './hookDeclaration.ts';
 export * from './keeper.ts';
 export * from './policy.ts';
 export * from './programs.ts';
+export * from './quotes.ts';
 export * from './rules.ts';
 export * from './studio.ts';
 export * from './workshop.ts';

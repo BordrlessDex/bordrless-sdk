@@ -4,6 +4,78 @@ The public package is `@bordrless/sdk` on npm, published from the public reposit
 BordrlessDex/bordrless-sdk together with `@bordrless/shared` (shared first; the SDK depends on the
 same version of it). The monorepo is where both are written.
 
+## 0.19.0: quote tokens, and keeper.json buys on Raydium (20 Oct 2026)
+
+### Quote tokens
+
+**What's new.** Coins launched against SPL tokens instead of SOL (bordrless-programs `docs/token-quotes.md`: one to six
+legs, each a DEX pool of kind 2 quoted in a real SPL Token or Token-2022 mint). A coin may now trade
+on up to six pools quoted in tokens: an integrator reads a pool's `quoteKind`/`splQuote` and trades a
+kind-2 pool with `swap_spl` (the classic `swap` and `swap_v2` refuse it). Nothing existing changes.
+
+- `@bordrless/sdk` (`legs.ts`), mirroring `bordrless_swap::client` and `bordrless_launch::client`
+  account for account: `splPool.createSplPool`, `splPool.swapSpl`, `splPool.collectProtocolFeesSpl`;
+  `tokenLaunch.createTokenLaunch`, `tokenLaunch.openLeg`, `tokenLaunch.claimCreatorFeesToken`,
+  `tokenLaunch.legSwap`, `tokenLaunch.legSwapWith`; `LegKeys`, `legsAddress`, `legFeesAddress`,
+  `splVaultAddress`, `legPoolAddress`, `legQuoteVault`, `legQuoteAccount`, `legFeeAccount`,
+  `legHookExtras`, `LEG_HOOK_FLAGS`, `LEG_SWAP_ACCOUNTS`; the events' typed views (`typedLegEvent`:
+  `SplPoolCreated`, `TokenLaunchCreated`, `LegOpened`, `LegCreatorFeesClaimed`) and `legSwapCutsOf` (a
+  leg swap's creator fee). `accounts.ts`: `Pool.quoteKind` and `Pool.splQuote` (program and decimals
+  of a kind-2 pool), `isSplPool`, `POOL_QUOTE_KIND`; `Launch.tokenQuoted`; `decodeLegs`, `LegsAccount`,
+  `LegState`. The DEX and launchpad IDLs gain the new instructions, the `Legs` account, the events,
+  types and errors (the launchpad's errors 6062 to 6081, the DEX's 6052 to 6067); every existing entry
+  is unchanged.
+- `spl.ts` also: a token account's `extensions`, `cpiGuardLocked` and `memoTransferRequired` (a buy
+  from an account with CPI Guard on, or a sell into one that requires memos, fails in the DEX);
+  `scaledUiMultiplierOf` (a `ScaledUiAmount` mint's multiplier at a time); the `mintAuthority` label in
+  `quoteMintPolicy`; `TOKEN_2022_ACCOUNT_EXTENSION`; `TOKEN_2022_EXTENSION.permissionedBurn` (refused as
+  unknown).
+- `@bordrless/shared`: `NATIVE_MINT_2022` (Token-2022's wrapped SOL, which `isSolMint` now refuses too);
+  `legVirtualQuote` and `legPriceWhole` take an optional UI multiplier; `QuoteTokenInfo.uiMultiplier`
+  and `LaunchLeg.quote.uiMultiplier` (optional); the `QuoteTokenRisk` `'mintAuthority'` and the
+  `QuoteTokenRefusal` `'unverified_multi'` (a coin with two quote tokens or more takes only verified
+  ones); `LegsRisk`, `LEGS_RISK_WORDS` and the optional `LaunchSummary.legsRisk`;
+  `CreatorLegsPrepareRequest`/`Response` (`POST /v1/creator/legs/prepare`). Code that maps every
+  `QuoteTokenRisk` (a `Record<QuoteTokenRisk, …>`) needs the new key.
+
+### Part 1 (the same day): SPL helpers and the shared leg math
+
+- `@bordrless/sdk` (`spl.ts`): `splProgramOf(owner)` (SPL Token, Token-2022 or null) and
+  `splProgramName`; `readTokenAccount(info)` (either program's token account, extensions after the
+  165 bytes allowed; null for anything else); `readSplMintAccount(info)` (a mint's authorities,
+  supply, decimals and Token-2022 extensions) and `readMintExtensions(data)` (the TLV after the
+  account type byte at 165); `defaultAccountStateOf`, `transferHookOf`, `pausableOf`,
+  `extensionKeyOf`; `quoteMintPolicy(mint)` (why the DEX would refuse a mint as a leg's quote, and the
+  issuer's powers to label it with); `transferChecked(source, mint, destination, authority, amount,
+  decimals, program)`; `TOKEN_2022_EXTENSION`, `SPL_MINT_LENGTH`, `SPL_TOKEN_ACCOUNT_LENGTH`.
+  `createAssociatedTokenAccountIdempotent` and `associatedTokenAddress` already take either program.
+- `@bordrless/shared` (re-exported): `quotes.ts` (`MAX_QUOTE_TOKENS`, `MIN_LEG_VIRTUAL_QUOTE`,
+  `legShares`, `legVirtualQuote`, `legPrice`, `legPriceWhole`, `TOKEN_2022_MINT_EXTENSIONS`,
+  `QuoteTokenInfo`, `QuoteTokenCheck`, `QuoteTokenList`, `QuoteTokenRisk`, `QuoteTokenRefusal` and its
+  words, `LaunchLeg`); optional fields `LaunchPrepareRequest.quotes` and `devBuyQuote`,
+  `LaunchPrepareResponse.legs`, `LaunchSummary.legs`, `SwapQuoteRequest.pool`,
+  `WalletBalances.quoteTokens` and `Trade.quoteMint` (a token coin's trade names its token). All are
+  optional: SOL coins' answers carry none of them.
+
+### keeper.json buys on a Raydium pool and pays holders in an SPL token (19 Oct)
+
+**What's new.** A keeper.json `pools` entry may name a Raydium concentrated-liquidity pool:
+`{ "raydiumClmm": "<pool>", "buy": "<mint>" }`. Each step the keeper reads the pool and brings the
+19 accounts Raydium's `swap_v2` needs for the companion address buying that mint, in a fixed order
+(docs/scripts.md, the `pools` row; `KeeperRaydiumPool` says it too). And `holdings.payTo` takes
+`"ownerTokenAccount"` with `holdings.payMint`: each holding comes with its owner's associated token
+account of that SPL mint (SPL Token or Token-2022), and a holder without one is passed over.
+
+- `@bordrless/shared` (re-exported by `@bordrless/sdk`): `KeeperRaydiumPool`, `isRaydiumPool`,
+  `RAYDIUM_CLMM_STEP_ACCOUNTS` (19); `KeeperPoolEntry` is now
+  `KeeperPool | KeeperLaunchPool | KeeperRaydiumPool`, so code that reads `.base` or `.feeBps`
+  after ruling out `isLaunchPool` rules out `isRaydiumPool` too. `KeeperPayTo` gains
+  `'ownerTokenAccount'`, `KeeperHoldings` an optional `payMint`.
+- `checkKeeperJson` accepts both and refuses a pool or mint that is not a key, the coin, a program
+  address, bridged SOL, a missing `buy`, a repeated pool, `payMint` without `ownerTokenAccount` (or
+  the reverse), and `ownerTokenAccount` beside `payouts`. Every older declaration reads and hashes
+  as before.
+
 ## 0.18.0: keeper.json brings another coin's launch pool (19 Oct 2026)
 
 **What's new.** A keeper.json `pools` entry may now name another launched coin's pool instead of a
