@@ -7,11 +7,12 @@
 import { describe, expect, it } from 'vitest';
 import { Keypair, PublicKey, type TransactionInstruction } from '@solana/web3.js';
 import BN from 'bn.js';
-import { decodeLegs, decodePool, isSplPool, POOL_QUOTE_KIND } from './accounts.ts';
+import { decodeKitConfig, decodeLegs, decodePool, isSplPool, kitModulesOf, POOL_QUOTE_KIND, type LaunchRulesData } from './accounts.ts';
 import * as a from './addresses.ts';
 import { CODERS, IDL } from './coders.ts';
 import { decodeEventPayload } from './events.ts';
-import { LEG_HOOK_FLAGS, LEG_SWAP_ACCOUNTS, legFeeAccount, legFeesAddress, legHookExtras, legPoolAddress, legQuoteVault, legsAddress, legSwapCutsOf, splPool, splVaultAddress, tokenLaunch, typedLegEvent, type LegKeys } from './legs.ts';
+import { decodeHookAccountList, encodeHookAccountList, tokenHookOf } from './hooks.ts';
+import { kitLegs, kitLegsRegistryList, kitLegsTokenHook, LEG_HOOK_FLAGS, LEG_SWAP_ACCOUNTS, LEG_SWAP_ACCOUNTS_WITH_KIT, legBaseSlice, legFeeAccount, legFeesAddress, legHookExtras, legLogEventsOf, legPoolAddress, legQuoteVault, legsAddress, legsHookExtras, legsHookSlice, legsLockDelay, legsMaxWalletHolds, legsSold, legsTradingOpenedAt, legSwapCutsOf, lockTimesInForce, NO_TOKEN_LAUNCH_RULES, splPool, splVaultAddress, TOKEN_LAUNCH_RULES_BYTES, tokenLaunch, tokenLaunchKitAccounts, typedLegEvent, type LegKeys } from './legs.ts';
 
 const k = (): PublicKey => Keypair.generate().publicKey;
 
@@ -29,16 +30,21 @@ interface IdlInstruction {
   args: { name: string }[];
 }
 
-const instructionOf = (program: 'swap' | 'launch', name: string): IdlInstruction => (IDL[program] as unknown as { instructions: IdlInstruction[] }).instructions.find((i) => i.name === name)!;
+type IdlProgram = 'swap' | 'launch' | 'kit';
+const PROGRAM_OF: Record<IdlProgram, PublicKey> = { swap: a.SWAP_PROGRAM, launch: a.LAUNCH_PROGRAM, kit: a.KIT_PROGRAM };
+const instructionOf = (program: IdlProgram, name: string): IdlInstruction => (IDL[program] as unknown as { instructions: IdlInstruction[] }).instructions.find((i) => i.name === name)!;
 
-/** The builder's fixed accounts against the IDL's: as many, in order, the same marks, the fixed addresses; returns what follows them. */
-function heldToIdl(ix: TransactionInstruction, program: 'swap' | 'launch', name: string): TransactionInstruction['keys'] {
+/**
+ * The builder's fixed accounts against the IDL's: as many, in order, the same marks, the fixed addresses; returns what follows them.
+ * `writable` names accounts the client may pass writable beyond the IDL's mark (a leg's mint when its rules burn).
+ */
+function heldToIdl(ix: TransactionInstruction, program: IdlProgram, name: string, writable: string[] = []): TransactionInstruction['keys'] {
   const idl = instructionOf(program, name);
-  expect(ix.programId.equals(program === 'swap' ? a.SWAP_PROGRAM : a.LAUNCH_PROGRAM)).toBe(true);
+  expect(ix.programId.equals(PROGRAM_OF[program])).toBe(true);
   expect(ix.keys.length).toBeGreaterThanOrEqual(idl.accounts.length);
   idl.accounts.forEach((acc, i) => {
     const meta = ix.keys[i]!;
-    expect([acc.name, meta.isWritable, meta.isSigner], `${name} #${i}`).toEqual([acc.name, acc.writable === true, acc.signer === true]);
+    expect([acc.name, meta.isWritable, meta.isSigner], `${name} #${i}`).toEqual([acc.name, acc.writable === true || writable.includes(acc.name), acc.signer === true]);
     if (acc.address) expect(meta.pubkey.toBase58(), `${name} ${acc.name}`).toBe(acc.address);
   });
   // The event authority and the program, as #[event_cpi] appends them.
@@ -205,5 +211,222 @@ describe('the events', () => {
     const fee = legFeesAddress(mint, quoteMint).toBase58();
     expect(legSwapCutsOf({ deltasIn: [{ holding: fee, amount: 1_000_000n }], deltasOut: [] }, mint, quoteMint)).toEqual({ creatorFee: 1_000_000n });
     expect(legSwapCutsOf({ deltasIn: [], deltasOut: [{ holding: fee, amount: 5n }, { holding: k().toBase58(), amount: 9n }] }, mint, quoteMint)).toEqual({ creatorFee: 5n });
+  });
+});
+
+// ---- phase 1: rules on a coin quoted in tokens (docs/token-quotes.md §6.1.1) ------------------------------
+
+const RULES: LaunchRulesData = { ...NO_TOKEN_LAUNCH_RULES, burnBuyBps: 100, burnSellBps: 50, maxWalletBps: 200, creatorLockSecs: 7 * 86_400, earlyWindowSecs: 60, earlyLockSecs: 3_600 };
+const ro = (pubkey: PublicKey): [string, boolean, boolean] => [pubkey.toBase58(), false, false];
+const rw = (pubkey: PublicKey): [string, boolean, boolean] => [pubkey.toBase58(), true, false];
+const marks = (metas: TransactionInstruction['keys']): [string, boolean, boolean][] => metas.map((m) => [m.pubkey.toBase58(), m.isWritable, m.isSigner]);
+
+describe('phase 1: the kit’s accounts and registry on a coin quoted in tokens', () => {
+  it('the kit’s six accounts of create_token_launch, its three extras and its five-account slice (client.rs)', () => {
+    const mint = k();
+    // The token program's signer of the kit's callbacks, as `bordrless_kit::constants::TOKEN_HOOK_AUTHORITY` names it.
+    expect(a.tokenHookSigner(a.KIT_PROGRAM).toBase58()).toBe('C2Y3B3hZTesJQqLYrZ7qoaZUoRmwYWh5Qh3MuFxruouE');
+    expect(marks(tokenLaunchKitAccounts(mint))).toEqual([ro(a.KIT_PROGRAM), ro(a.tokenHookSigner(a.KIT_PROGRAM)), rw(a.kitConfigAddress(mint)), rw(a.kitRegistryAddress(mint)), ro(a.kitCallerPda(mint).address), ro(a.KIT_EVENT_AUTHORITY)]);
+    expect(marks(legsHookExtras(mint))).toEqual([rw(a.kitConfigAddress(mint)), ro(a.KIT_PROGRAM), ro(legsAddress(mint))]);
+    expect(marks(legsHookSlice(mint))).toEqual([ro(a.KIT_PROGRAM), ro(a.tokenHookSigner(a.KIT_PROGRAM)), ...marks(legsHookExtras(mint))]);
+    expect(legBaseSlice(mint, 0)).toEqual([]);
+    expect(legBaseSlice(mint, kitModulesOf(RULES))).toEqual(legsHookSlice(mint));
+  });
+
+  it('the kit’s registry for such a coin: its PDA entry resolves to the coin’s Legs, through the bytes as a transfer reads them', () => {
+    const mint = k();
+    const list = decodeHookAccountList(encodeHookAccountList(kitLegsRegistryList(mint)))!;
+    expect(list.accounts).toHaveLength(3);
+    // Any transfer of the coin (whatever its holdings) resolves the same three extras the DEX slice carries.
+    const op = { mint, source: k(), destination: k(), authority: k() };
+    const hook = tokenHookOf(a.KIT_PROGRAM, list, op);
+    expect(hook.signer.equals(a.tokenHookSigner(a.KIT_PROGRAM))).toBe(true);
+    expect(marks(hook.extras)).toEqual(marks(legsHookExtras(mint)));
+    expect(marks(kitLegsTokenHook(mint, op.source, op.destination, op.authority).extras)).toEqual(marks(legsHookExtras(mint)));
+  });
+
+  it('init_legs: 9 accounts, signed by the kit-caller PDA; KitInitArgs in Borsh', () => {
+    const [payer, mint, launch, pool, creator] = [k(), k(), k(), k(), k()];
+    const caller = a.kitCallerPda(mint);
+    const args = { launch, pool, creator, rewardMint: PublicKey.default, modules: 14, maxWalletBps: 200, creatorUnlockAt: new BN(1_800_604_800), earlyWindowEnd: new BN(1_800_000_060), earlyUnlockAt: new BN(1_800_003_600), kitCallerBump: caller.bump };
+    const ix = kitLegs.initLegs(caller.address, payer, mint, args);
+    expect(heldToIdl(ix, 'kit', 'init_legs')).toEqual([]);
+    expect([ix.keys[0]!.pubkey, ix.keys[2]!.pubkey, ix.keys[3]!.pubkey, ix.keys[4]!.pubkey, ix.keys[5]!.pubkey].map(String)).toEqual([caller.address, mint, a.holdingAddress(mint, launch), a.kitConfigAddress(mint), a.kitRegistryAddress(mint)].map(String));
+    const decoded = CODERS.kit.instruction.decode(ix.data) as { name: string; data: { args: Record<string, unknown> } };
+    expect(decoded.name).toBe('initLegs');
+    expect([decoded.data.args.modules, decoded.data.args.maxWalletBps, String(decoded.data.args.earlyUnlockAt)]).toEqual([14, 200, '1800003600']);
+  });
+});
+
+describe('phase 1: the launchpad’s builders with rules against the IDL', () => {
+  const baseArgs = { name: 'Legs', symbol: 'LEG', uri: 'ipfs://x', creatorFeeBps: 100, virtualQuotes: [2_500_000_000n, 679_820_024n, 1n] };
+
+  it('create_token_launch with rules that install the kit: 12 accounts, the quote mints, then the kit’s six; the rules last in the data', () => {
+    const [creator, mint, treasury, q0, q1, q2] = [k(), k(), k(), k(), k(), k()];
+    const ix = tokenLaunch.createTokenLaunch(creator, mint, treasury, { ...baseArgs, rules: RULES }, [q0, q1, q2]);
+    const rest = heldToIdl(ix, 'launch', 'create_token_launch');
+    expect(marks(rest)).toEqual([ro(q0), ro(q1), ro(q2), ...marks(tokenLaunchKitAccounts(mint))]);
+    // The data is today's, then `LaunchRules` in Borsh: five u16 and three u32.
+    const without = tokenLaunch.createTokenLaunch(creator, mint, treasury, baseArgs, [q0, q1, q2]);
+    const tail = Buffer.alloc(TOKEN_LAUNCH_RULES_BYTES);
+    [0, 0, 100, 50, 200].forEach((v, i) => tail.writeUInt16LE(v, 2 * i));
+    [7 * 86_400, 60, 3_600].forEach((v, i) => tail.writeUInt32LE(v, 10 + 4 * i));
+    expect(ix.data.equals(Buffer.concat([without.data, tail]))).toBe(true);
+    const decoded = CODERS.launch.instruction.decode(ix.data) as { name: string; data: { args: { rules: Record<string, unknown> } } };
+    expect(decoded.data.args.rules).toMatchObject({ burnBuyBps: 100, burnSellBps: 50, maxWalletBps: 200, creatorLockSecs: 604_800, earlyWindowSecs: 60, earlyLockSecs: 3_600 });
+  });
+
+  it('create_token_launch with a burn alone: the rules in the data, no kit accounts (modules 0)', () => {
+    const [creator, mint, treasury, q0] = [k(), k(), k(), k()];
+    const burn = { ...NO_TOKEN_LAUNCH_RULES, burnBuyBps: 100 };
+    const ix = tokenLaunch.createTokenLaunch(creator, mint, treasury, { ...baseArgs, virtualQuotes: [1n], rules: burn }, [q0]);
+    expect(marks(heldToIdl(ix, 'launch', 'create_token_launch'))).toEqual([ro(q0)]);
+    const without = tokenLaunch.createTokenLaunch(creator, mint, treasury, { ...baseArgs, virtualQuotes: [1n] }, [q0]);
+    expect(ix.data.length).toBe(without.data.length + TOKEN_LAUNCH_RULES_BYTES);
+    expect(ix.data.subarray(0, without.data.length).equals(without.data)).toBe(true);
+  });
+
+  it('create_token_launch with no rules, null or all zero: exactly today’s data and accounts', () => {
+    const [creator, mint, treasury, q0] = [k(), k(), k(), k()];
+    const args = { ...baseArgs, virtualQuotes: [1n] };
+    const none = tokenLaunch.createTokenLaunch(creator, mint, treasury, args, [q0]);
+    for (const rules of [null, NO_TOKEN_LAUNCH_RULES]) {
+      const ix = tokenLaunch.createTokenLaunch(creator, mint, treasury, { ...args, rules }, [q0]);
+      expect(ix.data.equals(none.data)).toBe(true);
+      expect(marks(ix.keys)).toEqual(marks(none.keys));
+    }
+  });
+
+  it('open_leg on a coin with a kit: 23 accounts, then the kit, its token signer and the kit config (w)', () => {
+    const [payer, dexTreasury] = [k(), k()];
+    const keys = leg();
+    const ix = tokenLaunch.openLeg(payer, dexTreasury, keys, 2, kitModulesOf(RULES));
+    expect(marks(heldToIdl(ix, 'launch', 'open_leg'))).toEqual([ro(a.KIT_PROGRAM), ro(a.tokenHookSigner(a.KIT_PROGRAM)), rw(a.kitConfigAddress(keys.mint))]);
+    expect(tokenLaunch.openLeg(payer, dexTreasury, keys, 2, 0).keys).toEqual(tokenLaunch.openLegWithoutKit(payer, dexTreasury, keys, 2).keys);
+  });
+
+  it('a leg swap with the kit: the coin’s slice on its side (out on a buy, in on a sell) before the leg’s four extras, 25 accounts; the mint writable when it burns', () => {
+    const keys = leg({ quoteProgram: a.SPL_TOKEN_PROGRAM });
+    const [trader, recipient] = [k(), k()];
+    const buy = tokenLaunch.legSwap(keys, trader, recipient, 1, 100_000_000n, 9n, RULES);
+    expect(buy.keys.length).toBe(LEG_SWAP_ACCOUNTS_WITH_KIT);
+    expect(marks(heldToIdl(buy, 'swap', 'swap_spl', ['base_mint']))).toEqual([...marks(legsHookSlice(keys.mint)), ...marks(legHookExtras(keys.mint, keys.quoteMint))]);
+    // direction, amount_in, min_amount_out, then in_hook_accounts and out_hook_accounts.
+    expect([buy.data[25], buy.data[26]]).toEqual([0, 5]);
+    const sell = tokenLaunch.legSwap(keys, trader, recipient, 0, 5n, 1n, RULES);
+    expect(heldToIdl(sell, 'swap', 'swap_spl', ['base_mint'])).toHaveLength(9);
+    expect([sell.data[25], sell.data[26]]).toEqual([5, 0]);
+    // Max wallet and the locks without a burn: the slice, the mint read-only.
+    const noBurn = tokenLaunch.legSwap(keys, trader, recipient, 1, 1n, 0n, { ...RULES, burnBuyBps: 0, burnSellBps: 0 });
+    expect(heldToIdl(noBurn, 'swap', 'swap_spl')).toHaveLength(9);
+    // A burn alone: no kit, so no slice, but the mint writable for the hook's burn.
+    const burnOnly = tokenLaunch.legSwap(keys, trader, recipient, 1, 1n, 0n, { ...NO_TOKEN_LAUNCH_RULES, burnSellBps: 10 });
+    expect(burnOnly.keys.length).toBe(LEG_SWAP_ACCOUNTS);
+    expect(heldToIdl(burnOnly, 'swap', 'swap_spl', ['base_mint'])).toEqual(legHookExtras(keys.mint, keys.quoteMint));
+    expect([burnOnly.data[25], burnOnly.data[26]]).toEqual([0, 0]);
+    // No rules: as before phase 1.
+    expect(tokenLaunch.legSwap(keys, trader, recipient, 1, 1n, 0n, null).keys).toEqual(tokenLaunch.legSwap(keys, trader, recipient, 1, 1n, 0n).keys);
+  });
+});
+
+describe('phase 1: the accounts and events', () => {
+  it('Legs bytes 910..974: lift_at u64 at 910, lifted at 918, each leg’s coins sold i64 at 926 + 8·i', async () => {
+    const [mint, launch] = [k(), k()];
+    const zero = { quoteMint: PublicKey.default, quoteProgram: 0, decimals: 0, feeBump: 0, virtualQuote: new BN(0), share: new BN(0), pool: PublicKey.default, feeAccount: PublicKey.default, creatorFeesAccrued: new BN(0), creatorFeesClaimed: new BN(0), openedAt: new BN(0) };
+    const reserved = Buffer.alloc(64);
+    reserved.writeBigUInt64LE(800_000_000_000_000n, 0);
+    reserved[8] = 1;
+    reserved.writeBigInt64LE(500_000_000_000_000n, 16);
+    reserved.writeBigInt64LE(-20_000_000n, 24);
+    reserved.writeBigInt64LE(300_000_000_000_000n, 32);
+    const data = await CODERS.launch.accounts.encode('legs', { version: 1, bump: 255, mint, launch, count: 3, opened: 3, legs: Array(6).fill(zero), reserved: [...reserved] });
+    expect([data.readBigUInt64LE(910), data[918], data.readBigInt64LE(926), data.readBigInt64LE(934)]).toEqual([800_000_000_000_000n, 1, 500_000_000_000_000n, -20_000_000n]);
+    const legs = decodeLegs(data);
+    expect([legs.liftAt, legs.lifted, legs.legs.map((l) => l.sold)]).toEqual([800_000_000_000_000n, true, [500_000_000_000_000n, -20_000_000n, 300_000_000_000_000n]]);
+    const before = decodeLegs(await CODERS.launch.accounts.encode('legs', { version: 1, bump: 255, mint, launch, count: 1, opened: 1, legs: Array(6).fill(zero), reserved: Array(64).fill(0) }));
+    expect([before.liftAt, before.lifted, before.legs[0]!.sold]).toEqual([0n, false, 0n]);
+    // Max wallet holds a buy until the byte says it lifted, or until the legs' recorded sales reach lift_at (that trade lifts it).
+    expect(legsSold(legs)).toBe(799_999_980_000_000n);
+    expect([legsMaxWalletHolds(legs), legsMaxWalletHolds({ ...legs, lifted: false }), legsMaxWalletHolds({ ...legs, lifted: false, liftAt: 799_999_980_000_000n })]).toEqual([false, true, false]);
+  });
+
+  it('the locks run from when trading opens (F1): the latest leg’s opened_at once every leg is open, the clock before', async () => {
+    const [mint, launch] = [k(), k()];
+    const zero = { quoteMint: PublicKey.default, quoteProgram: 0, decimals: 0, feeBump: 0, virtualQuote: new BN(0), share: new BN(0), pool: PublicKey.default, feeAccount: PublicKey.default, creatorFeesAccrued: new BN(0), creatorFeesClaimed: new BN(0), openedAt: new BN(0) };
+    const at = (opened: number, times: number[]) => CODERS.launch.accounts.encode('legs', { version: 1, bump: 255, mint, launch, count: 3, opened, legs: [...times.map((t) => ({ ...zero, openedAt: new BN(t) })), ...Array(6 - times.length).fill(zero)], reserved: Array(64).fill(0) });
+    const CREATED = 1_800_000_000;
+    // Two of three open: trading has not opened; the delay is the clock's.
+    const partial = decodeLegs(await at(2, [CREATED + 1, CREATED + 61, 0]));
+    expect([legsTradingOpenedAt(partial), legsLockDelay(partial, CREATED, CREATED + 500)]).toEqual([null, 500]);
+    // All open, the last 5,000 s after the launch: the delay is fixed there, whatever the clock.
+    const open = decodeLegs(await at(3, [CREATED + 1, CREATED + 5_000, CREATED + 61]));
+    expect([legsTradingOpenedAt(open), legsLockDelay(open, CREATED, CREATED + 99_999)]).toEqual([CREATED + 5_000, 5_000]);
+    // Opened in the launch's own second (or before it, never): no delay.
+    expect(legsLockDelay(decodeLegs(await at(3, [CREATED, CREATED, CREATED - 3])), CREATED, CREATED + 10)).toBe(0);
+    // Each kept time moved by the delay, 0 staying 0.
+    expect(lockTimesInForce({ creatorUnlockAt: CREATED + 7 * 86_400, earlyWindowEnd: 0, earlyUnlockAt: 0 }, 5_000)).toEqual({ creatorUnlockAt: CREATED + 7 * 86_400 + 5_000, earlyWindowEnd: 0, earlyUnlockAt: 0 });
+  });
+
+  it('a kit config marked quoted in tokens (reserved[9] = 2)', async () => {
+    const coder = CODERS.kit.accounts;
+    const disc = (IDL.kit as unknown as { accounts: { name: string; discriminator: number[] }[] }).accounts.find((x) => x.name === 'KitConfig')!.discriminator;
+    const zero = Buffer.alloc(coder.size('kitConfig'));
+    Buffer.from(disc).copy(zero);
+    const raw = coder.decode('kitConfig', zero) as Record<string, unknown>;
+    const reserved = [...(raw.reserved as number[])];
+    expect(decodeKitConfig(Buffer.from(await coder.encode('kitConfig', { ...raw, reserved }))).tokenQuoted).toBe(false);
+    reserved[9] = 2;
+    expect(decodeKitConfig(Buffer.from(await coder.encode('kitConfig', { ...raw, reserved }))).tokenQuoted).toBe(true);
+  });
+
+  const encodeEvent = (name: string, data: Record<string, unknown>): Buffer => {
+    const idl = IDL.launch as unknown as { events: { name: string; discriminator: number[] }[] };
+    const disc = Buffer.from(idl.events.find((e) => e.name === name)!.discriminator);
+    return Buffer.concat([disc, CODERS.launch.types.encode(name.charAt(0).toLowerCase() + name.slice(1), data)]);
+  };
+
+  it('TokenLaunchRules reads typed, with and without a kit config', () => {
+    const [launch, mint, kitConfig] = [k(), k(), k()];
+    const rules = { ...RULES };
+    const body = { launch, mint, rules, modules: 14, kitConfig, creatorUnlockAt: new BN(1_800_604_800), earlyWindowEnd: new BN(1_800_000_060), earlyUnlockAt: new BN(1_800_003_600), liftAt: new BN('800000000000000'), ts: new BN(1_800_000_000) };
+    const ev = decodeEventPayload('launch', encodeEvent('TokenLaunchRules', body))!;
+    expect(ev.name).toBe('tokenLaunchRules');
+    expect(typedLegEvent({ program: 'launch', ...ev })).toEqual({ kind: 'launch.TokenLaunchRules', launch: launch.toBase58(), mint: mint.toBase58(), rules, modules: 14, kitConfig: kitConfig.toBase58(), creatorUnlockAt: 1_800_604_800, earlyWindowEnd: 1_800_000_060, earlyUnlockAt: 1_800_003_600, liftAt: 800_000_000_000_000n, ts: 1_800_000_000 });
+    const burn = decodeEventPayload('launch', encodeEvent('TokenLaunchRules', { ...body, rules: { ...NO_TOKEN_LAUNCH_RULES, burnBuyBps: 100 }, modules: 0, kitConfig: null, creatorUnlockAt: new BN(0), earlyWindowEnd: new BN(0), earlyUnlockAt: new BN(0), liftAt: new BN(0) }))!;
+    expect(typedLegEvent({ program: 'launch', ...burn })).toMatchObject({ modules: 0, kitConfig: null, liftAt: 0n, rules: { burnBuyBps: 100, maxWalletBps: 0 } });
+  });
+
+  it('TokenLaunchLocks (F1) reads typed: when trading opened, the delay and the times in force', () => {
+    const [launch, mint] = [k(), k()];
+    const ev = decodeEventPayload('launch', encodeEvent('TokenLaunchLocks', { launch, mint, tradingOpenedAt: new BN(1_800_005_000), delay: new BN(5_000), creatorUnlockAt: new BN(1_800_609_800), earlyWindowEnd: new BN(1_800_005_060), earlyUnlockAt: new BN(1_800_008_600), ts: new BN(1_800_005_000) }))!;
+    expect(ev.name).toBe('tokenLaunchLocks');
+    expect(typedLegEvent({ program: 'launch', ...ev })).toEqual({ kind: 'launch.TokenLaunchLocks', launch: launch.toBase58(), mint: mint.toBase58(), tradingOpenedAt: 1_800_005_000, delay: 5_000, creatorUnlockAt: 1_800_609_800, earlyWindowEnd: 1_800_005_060, earlyUnlockAt: 1_800_008_600, ts: 1_800_005_000 });
+    expect([...(IDL.launch as unknown as { events: { name: string; discriminator: number[] }[] }).events.find((e) => e.name === 'TokenLaunchLocks')!.discriminator]).toEqual([0xcf, 0xc4, 0x41, 0x47, 0x1c, 0x56, 0x4b, 0x61]);
+  });
+
+  it('LegsMaxWalletLifted from the launchpad’s `Program data:` log, only while the launchpad runs', () => {
+    const [launch, mint, pool] = [k(), k(), k()];
+    const payload = encodeEvent('LegsMaxWalletLifted', { launch, mint, pool, sold: new BN('800000000000123'), liftAt: new BN('800000000000000'), ts: new BN(1_800_000_000) }).toString('base64');
+    const [swap, launchpad, token] = [a.SWAP_PROGRAM.toBase58(), a.LAUNCH_PROGRAM.toBase58(), a.TOKEN_PROGRAM.toBase58()];
+    const logs = [
+      `Program ${swap} invoke [1]`,
+      'Program log: Instruction: SwapSpl',
+      `Program ${launchpad} invoke [2]`,
+      `Program ${token} invoke [3]`,
+      `Program data: ${payload}`,
+      `Program ${token} success`,
+      `Program data: ${payload}`,
+      `Program ${launchpad} consumed 21000 of 180000 compute units`,
+      `Program ${launchpad} success`,
+      `Program data: ${payload}`,
+      `Program ${swap} success`,
+    ];
+    const events = legLogEventsOf(logs, 7);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ ordinal: 7, program: 'launch', programId: launchpad, name: 'legsMaxWalletLifted' });
+    expect(typedLegEvent(events[0]!)).toEqual({ kind: 'launch.LegsMaxWalletLifted', launch: launch.toBase58(), mint: mint.toBase58(), pool: pool.toBase58(), sold: 800_000_000_000_123n, liftAt: 800_000_000_000_000n, ts: 1_800_000_000 });
+    // Another launchpad event logged the same way is not read.
+    const other = encodeEvent('LegOpened', { launch, mint, index: 1, quoteMint: k(), pool, feeAccount: k(), virtualQuote: new BN(5), share: new BN(6), opened: 2, count: 2, payer: k(), slot: new BN(9), ts: new BN(1) }).toString('base64');
+    expect(legLogEventsOf([`Program ${launchpad} invoke [1]`, `Program data: ${other}`, `Program ${launchpad} success`])).toEqual([]);
   });
 });

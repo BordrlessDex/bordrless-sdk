@@ -496,6 +496,12 @@ export interface LaunchSummary {
    * coin; absent for a SOL coin.
    */
   legsRisk?: import('./quotes.ts').LegsRisk | null;
+  /**
+   * A coin quoted in tokens with max wallet (docs/token-quotes.md §6.1): whether its cap has lifted, once its legs together sold
+   * the curve's part of the supply (`Legs` byte 918; such a coin never graduates). Absent for a SOL coin and for a token coin
+   * without max wallet; the detail says it as `ruleStats.maxWalletLifted` too.
+   */
+  maxWalletLifted?: boolean;
 }
 
 export interface LaunchDetail extends LaunchSummary {
@@ -792,8 +798,10 @@ export interface LaunchPrepareRequest {
    * Quote tokens (docs/token-quotes.md): 1 to `MAX_QUOTE_TOKENS` SPL Token or Token-2022 mints the coin
    * launches against instead of SOL, one leg each with an equal share of the supply, never graduating.
    * Absent or empty: a SOL launch. Refused (`quote_tokens_closed`) until the API opens them, with a
-   * companion, a launch config, kit rules or a custom hook (`quote_tokens_rules`), or a mint that
-   * can't be a quote (`quote_token_refused`, with the mint and `QuoteTokenRefusal`).
+   * companion, a launch config, a holder fee or a custom hook (`quote_tokens_rules`), or a mint that
+   * can't be a quote (`quote_token_refused`, with the mint and `QuoteTokenRefusal`). `rules` may carry
+   * the burn, max wallet and the two locks within a SOL launch's bounds (docs/token-quotes.md §6.1)
+   * once the API takes them (`quote_rules_closed` before that).
    */
   quotes?: Address[];
   /** With `quotes`: raw units of the first quote token the creator buys with once every leg is open; 0 or absent for none (`devBuyLamports` is refused beside it). */
@@ -1512,6 +1520,8 @@ export interface LaunchPrepareResponse {
   graduationMcapUsd: number;
   /** The largest first buy, lamports, whose tokens stay within max wallet at the opening reserves with the creator's first-buy fees; null without max wallet. */
   devBuyMaxLamports: Amount | null;
+  /** A coin quoted in tokens with max wallet: the largest first buy, raw units of the first token, whose coins on leg 0 stay within the cap at its opening reserves; null or absent otherwise. */
+  devBuyMaxQuote?: Amount | null;
   /** Total fee of a buy under these rules by the §7.3 formula, outside the sniper window. */
   buyFeeBps: number;
   /** Total fee of a sell under these rules by the §7.3 formula, outside the sniper window. */

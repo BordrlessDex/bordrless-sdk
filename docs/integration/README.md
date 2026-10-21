@@ -8,7 +8,9 @@ Token or Token-2022 mints instead of SOL. Each mint is its own DEX pool (a "leg"
 holding an equal share of the supply; a coin is quoted in SOL or in its tokens, never both, and SOL
 launches are unchanged. Read `Pool.quoteKind` / `isSplPool(pool)` and `Launch.tokenQuoted` rather
 than assuming SOL: a kind-2 pool trades only with `swap_spl` (the classic `swap` and `swap_v2`
-refuse it), its quote side is in that token, and it still emits `Swapped`
+refuse it), its quote side is in that token, and it still emits `Swapped`. Since 21 Oct 2026 (SDK
+0.19.1) such a coin may carry the burn, max wallet and the locks, and then its swaps pass the kit's
+hook slice
 ([Trading](04-trading.md#token-quoted-pools-swap_spl); the spec is bordrless-programs
 `docs/token-quotes.md`).
 

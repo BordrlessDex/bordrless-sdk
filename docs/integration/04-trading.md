@@ -317,7 +317,7 @@ graduating. Such a launch has `Launch.tokenQuoted` set and `decodeLegs(legsAddre
 legs; trading opens only once every leg is open.
 
 - Trade a leg with `swap_spl`: `tokenLaunch.legSwap(keys, trader, recipient, direction, amountIn,
-  minAmountOut)` (or `legSwapWith` to name the token accounts), where `keys` is a `LegKeys` (`mint`,
+  minAmountOut, rules)` (or `legSwapWith` to name the token accounts), where `keys` is a `LegKeys` (`mint`,
   `quoteMint`, `quoteProgram`, `lpFeeBps`). A buy pays from the trader's associated token account of
   the quote; a sell delivers to the recipient's. The classic `swap` and `swap_v2` refuse a kind-2
   pool.
@@ -325,8 +325,14 @@ legs; trading opens only once every leg is open.
   fee is taken in that token too (`legSwapCutsOf` reads it from `Swapped`).
 - A buy from a token account with CPI Guard on, or a sell into one that requires memos, fails in the
   DEX: `spl.ts`'s `cpiGuardLocked` and `memoTransferRequired` tell you first.
-- Kit rules, companions and custom hooks don't apply to a token-quoted coin, and its mint has no
-  hook. The router (`router.swap`, `router.swapV2`) doesn't wrap `swap_spl`.
+- Rules (since 21 Oct 2026, SDK 0.19.1): a token-quoted coin may carry the burn, max wallet, the
+  creator lock and the early-buyer lock. Such a coin's mint has the kit as its hook: pass the launch's
+  `rules` to `legSwap` / `legSwapWith` and they add the coin's hook slice (`legsHookSlice`; 25
+  accounts, `LEG_SWAP_ACCOUNTS_WITH_KIT`) and pass the mint writable when a rule burns. A coin
+  without rules has no hook and trades with the 20 accounts above. Its locks run from when trading
+  opened (`lockTimesInForce`; the `TokenLaunchLocks` event names them).
+- Companions and custom hooks don't apply to a token-quoted coin yet. The router (`router.swap`,
+  `router.swapV2`) doesn't wrap `swap_spl`.
 
 ## Sending
 

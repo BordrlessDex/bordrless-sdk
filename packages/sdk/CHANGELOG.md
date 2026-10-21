@@ -4,6 +4,32 @@ The public package is `@bordrless/sdk` on npm, published from the public reposit
 BordrlessDex/bordrless-sdk together with `@bordrless/shared` (shared first; the SDK depends on the
 same version of it). The monorepo is where both are written.
 
+## 0.19.1: rules on coins quoted in tokens (phase 1, live 21 Oct 2026)
+
+**What's new.** A coin quoted in tokens may carry the burn, max wallet, the creator lock and the
+early-buyer lock (bordrless-programs `docs/token-quotes.md` §6.1; live on mainnet since 21 Oct 2026: the kit in slot
+459491916, the launchpad in slot 459492381). Without rules every builder sends exactly what it sent before.
+
+- `legs.ts`: `CreateTokenLaunchArgs.rules` (optional; absent, null or all zero sends today's data) and
+  the kit's six accounts after the quote mints when the rules install the kit (`tokenLaunchKitAccounts`);
+  `tokenLaunch.openLeg(…, modules)` appends the kit's three accounts (`openLegWithoutKit` the old
+  builder); `tokenLaunch.legSwap`/`legSwapWith(…, rules)` add the coin's slice (`legsHookSlice`: the
+  kit, its token signer, the kit config, the kit's id, the coin's `Legs`) on the coin's side and pass the
+  mint writable with a burn (`LEG_SWAP_ACCOUNTS_WITH_KIT` = 25); `legBaseSlice`, `legsHookExtras`,
+  `kitLegs.initLegs`, `kitLegsRegistryList` (the kit's registry for such a coin, with its PDA entry for
+  the `Legs`, which `tokenHookOf`/`fetchTokenHook` resolve for any transfer), `kitLegsTokenHook`;
+  `TOKEN_LAUNCH_RULES_BYTES`, `NO_TOKEN_LAUNCH_RULES`, `hasTokenLaunchRules`; `legsSold`,
+  `legsMaxWalletHolds`; the events `TokenLaunchRules`, `TokenLaunchLocks` and `LegsMaxWalletLifted` in
+  `typedLegEvent`, the last a log read with `legLogEventsOf(logs)`. The creator lock and the early-buyer
+  window and unlock run from when trading opens (the last `open_leg`): `legsTradingOpenedAt`,
+  `legsLockDelay` and `lockTimesInForce` turn the times kept (counted from the launch) into the ones in
+  force, which `TokenLaunchLocks` also names.
+- `accounts.ts`: `LegsAccount.liftAt` and `.lifted` (byte 918), `LegState.sold`, `KitConfig.tokenQuoted`.
+- IDLs: the kit's `init_legs` and errors 6033 to 6035; the launchpad's events, `LaunchRules` in
+  `CreateTokenLaunchArgs` and error 6082 `HolderFeeOnTokenLaunch`.
+- `@bordrless/shared`: `LaunchSummary.maxWalletLifted` (optional, token coins with max wallet) and
+  `LaunchPrepareResponse.devBuyMaxQuote` (optional).
+
 ## 0.19.0: quote tokens, and keeper.json buys on Raydium (20 Oct 2026)
 
 ### Quote tokens

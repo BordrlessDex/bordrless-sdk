@@ -434,6 +434,12 @@ export interface KitConfig {
    * from configs decoded by older code.
    */
   creatorIsCompanion?: boolean;
+  /**
+   * A coin quoted in tokens (`KitConfig.reserved[9] == 2`, byte 385; docs/token-quotes.md §6.1.1): installed by the launchpad's
+   * `init_legs`; its callbacks take the coin's `Legs` after the two extras and treat every leg's pool as the pool. Absent from
+   * configs decoded by older code.
+   */
+  tokenQuoted?: boolean;
 }
 
 export interface TaxConfig {
@@ -573,6 +579,8 @@ export interface LegState {
   creatorFeesClaimed: bigint;
   /** Unix seconds; 0 until the leg is open. */
   openedAt: number;
+  /** Coins this leg has sold (`Legs` bytes 926 + 8·i, i64; negative while it holds coins bought on another leg), counted only while max wallet waits to lift (docs/token-quotes.md §6.1.1). */
+  sold: bigint;
 }
 
 /** The launchpad's `Legs` account at `["legs", mint]` (974 bytes): the legs in order (`count` of them), how many are open. */
@@ -584,13 +592,18 @@ export interface LegsAccount {
   count: number;
   opened: number;
   legs: LegState[];
+  /** With max wallet, the legs' sales that lift it (`Legs` bytes 910..918: ⌊supply × curve_bps / 10,000⌋); 0 without (nothing counted). */
+  liftAt: bigint;
+  /** Max wallet has lifted (`Legs` byte 918, which the kit reads): the kit's `graduated` only follows at the next transfer. */
+  lifted: boolean;
 }
 
 /** Decodes a `Legs` account; only its first `count` legs (the rest are zero). */
 export const decodeLegs = (data: Buffer): LegsAccount => {
   const r = decode('launch', 'legs', data);
   const count = Number(r.count);
-  const legs = (r.legs as Raw[]).slice(0, count).map((l) => ({
+  const reserved = Buffer.from(Array.from(r.reserved as ArrayLike<number>).map(Number));
+  const legs = (r.legs as Raw[]).slice(0, count).map((l, i) => ({
     quoteMint: key(l.quoteMint),
     quoteProgram: Number(l.quoteProgram) === 1 ? SPL_TOKEN_2022_PROGRAM : SPL_TOKEN_PROGRAM,
     decimals: Number(l.decimals),
@@ -602,8 +615,10 @@ export const decodeLegs = (data: Buffer): LegsAccount => {
     creatorFeesAccrued: big(l.creatorFeesAccrued),
     creatorFeesClaimed: big(l.creatorFeesClaimed),
     openedAt: int(l.openedAt),
+    // reserved[16 + 8·i] (byte 926 + 8·i).
+    sold: reserved.length >= 24 + 8 * i ? reserved.readBigInt64LE(16 + 8 * i) : 0n,
   }));
-  return { version: Number(r.version), bump: Number(r.bump), mint: key(r.mint), launch: key(r.launch), count, opened: Number(r.opened), legs };
+  return { version: Number(r.version), bump: Number(r.bump), mint: key(r.mint), launch: key(r.launch), count, opened: Number(r.opened), legs, liftAt: reserved.readBigUInt64LE(0), lifted: reserved[8] === 1 };
 };
 
 export const decodeBridgeConfig = (data: Buffer): BridgeConfig => {
@@ -789,6 +804,7 @@ export const decodeKitConfig = (data: Buffer): KitConfig => {
     isNative: Number((r.reserved as number[])[0]) === 1,
     lamportsBase: u64At(r.reserved as number[], 1),
     creatorIsCompanion: Boolean(r.creatorIsCompanion),
+    tokenQuoted: Number((r.reserved as number[])[9]) === 2,
   };
 };
 
