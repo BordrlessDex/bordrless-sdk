@@ -132,7 +132,9 @@ function expectDiscriminator(data: Buffer, disc: Buffer, what: string): void {
 // ---- the holding's record (the hook data) --------------------------------------------------------------
 
 /** Where each field sits in a holding's 64 bytes of hook data (`record_offsets`). Integers are little-endian. */
-export const LOSS_COVER_RECORD_OFFSETS = { version: 0, flags: 1, entry: 2, amount: 10, paid: 18, updatedSlot: 26, paidAt: 34, basisAt: 42, round: 50, reserved: 54 } as const;
+export const LOSS_COVER_RECORD_OFFSETS = { version: 0, flags: 1, entry: 2, amount: 10, paid: 18, updatedSlot: 26, paidAt: 34, basisAt: 42, round: 50, reserved: 55 } as const;
+/** `Record.leg` (§7.6.9): the leg of a holding’s first buy on a coin quoted in tokens, byte 54 (the programs’ vectors name the reserved bytes from 55). */
+export const LOSS_COVER_RECORD_LEG_OFFSET = 54;
 
 /** A holding's record as the hook keeps it. All zeros (never written, or cleared) is no record (`version` 0). */
 export interface LossCoverRecord {
@@ -154,17 +156,22 @@ export interface LossCoverRecord {
   basisAt: number;
   /** The tag of the last `record_payout`: the round the script last measured or paid it in (0: none). */
   round: number;
+  /**
+   * On a coin quoted in tokens (docs/token-quotes.md §7.6.9): the leg of the holding's first buy, whose token its basis (`entry`, `paid`)
+   * is kept in (byte 54, reserved before; 0 on every SOL coin's record). Absent reads as 0.
+   */
+  leg?: number;
 }
 
 /** No record. */
-export const NO_LOSS_COVER_RECORD: Readonly<LossCoverRecord> = { version: 0, flags: 0, entry: 0n, amount: 0n, paid: 0n, updatedSlot: 0n, paidAt: 0, basisAt: 0, round: 0 };
+export const NO_LOSS_COVER_RECORD: Readonly<LossCoverRecord> = { version: 0, flags: 0, entry: 0n, amount: 0n, paid: 0n, updatedSlot: 0n, paidAt: 0, basisAt: 0, round: 0, leg: 0 };
 
 /** A holding's hook data as a record (`Record::decode`). */
 export function decodeLossCoverRecord(hookData: Uint8Array | readonly number[]): LossCoverRecord {
   const b = Buffer.from(hookData as ArrayLike<number>);
   if (b.length < LOSS_COVER_RECORD_LEN) throw new Error(`hook data is ${LOSS_COVER_RECORD_LEN} bytes`);
   const o = LOSS_COVER_RECORD_OFFSETS;
-  return { version: b[o.version]!, flags: b[o.flags]!, entry: u64(b, o.entry), amount: u64(b, o.amount), paid: u64(b, o.paid), updatedSlot: u64(b, o.updatedSlot), paidAt: i64(b, o.paidAt), basisAt: i64(b, o.basisAt), round: u32(b, o.round) };
+  return { version: b[o.version]!, flags: b[o.flags]!, entry: u64(b, o.entry), amount: u64(b, o.amount), paid: u64(b, o.paid), updatedSlot: u64(b, o.updatedSlot), paidAt: i64(b, o.paidAt), basisAt: i64(b, o.basisAt), round: u32(b, o.round), leg: b[LOSS_COVER_RECORD_LEG_OFFSET]! };
 }
 
 /** A record as hook data (`Record::encode`; the reserved bytes zero). */
@@ -180,6 +187,7 @@ export function encodeLossCoverRecord(r: LossCoverRecord): Buffer {
   wi64(b, o.paidAt, r.paidAt);
   wi64(b, o.basisAt, r.basisAt);
   wu32(b, o.round, r.round);
+  b[LOSS_COVER_RECORD_LEG_OFFSET] = r.leg ?? 0;
   return b;
 }
 
@@ -207,6 +215,8 @@ export interface LossCoverState {
   records: bigint;
   preparedBy: PublicKey;
   preparedAt: number;
+  /** On a coin quoted in tokens prepared with `prepare_legs` (§7.6.9): its legs, `reserved[0]` (byte 210); 0 on a SOL coin. `pool` is then leg 0's. */
+  legCount?: number;
 }
 
 const S = { version: 8, bump: 9, mint: 10, launch: 42, pool: 74, creator: 106, reference: 138, referenceAt: 146, paidTotal: 154, records: 162, preparedBy: 170, preparedAt: 202, reserved: 210 } as const;
@@ -215,7 +225,7 @@ const S = { version: 8, bump: 9, mint: 10, launch: 42, pool: 74, creator: 106, r
 export function decodeLossCoverState(data: Buffer): LossCoverState {
   expectDiscriminator(data, LOSS_COVER_DISCRIMINATORS.lossCoverState, 'LossCoverState');
   const r = CODERS.lossCoverHook.accounts.decode('lossCoverState', data) as Record<string, unknown>;
-  return { version: num(r.version), bump: num(r.bump), mint: r.mint as PublicKey, launch: r.launch as PublicKey, pool: r.pool as PublicKey, creator: r.creator as PublicKey, reference: big(r.reference), referenceAt: num(r.referenceAt), paidTotal: big(r.paidTotal), records: big(r.records), preparedBy: r.preparedBy as PublicKey, preparedAt: num(r.preparedAt) };
+  return { version: num(r.version), bump: num(r.bump), mint: r.mint as PublicKey, launch: r.launch as PublicKey, pool: r.pool as PublicKey, creator: r.creator as PublicKey, reference: big(r.reference), referenceAt: num(r.referenceAt), paidTotal: big(r.paidTotal), records: big(r.records), preparedBy: r.preparedBy as PublicKey, preparedAt: num(r.preparedAt), legCount: data[S.reserved] ?? 0 };
 }
 
 /** A `LossCoverState` as the program serializes it (tests and fixtures). */
@@ -234,6 +244,7 @@ export function encodeLossCoverState(s: LossCoverState): Buffer {
   wu64(b, S.records, s.records);
   wkey(b, S.preparedBy, s.preparedBy);
   wi64(b, S.preparedAt, s.preparedAt);
+  b[S.reserved] = s.legCount ?? 0;
   return b;
 }
 
@@ -514,10 +525,128 @@ export function decodeWalletPayoutAnswer(data: Uint8Array): WalletPayoutAnswer {
   return { version: WALLET_PAYOUT_ANSWER_VERSION, entries };
 }
 
-/** A script's answer by its first byte, as the companion reads it (`decode_script_answer`): a wallet answer (2), else a holdings answer (1); throws otherwise (`BadPayoutAnswer`). */
-export function decodeScriptAnswer(data: Uint8Array): PayoutAnswer | WalletPayoutAnswer {
+/** A script's answer by its first byte, as the companion reads it (`decode_script_answer`): a wallet answer (2), an answer in the legs' tokens (3, §7.6.9), else a holdings answer (1); throws otherwise (`BadPayoutAnswer`). */
+export function decodeScriptAnswer(data: Uint8Array): PayoutAnswer | WalletPayoutAnswer | PayoutAnswerLegs {
+  if (data[0] === PAYOUT_ANSWER_LEGS_VERSION) return decodePayoutAnswerLegs(data);
   return data[0] === WALLET_PAYOUT_ANSWER_VERSION ? decodeWalletPayoutAnswer(data) : decodePayoutAnswer(data);
 }
+
+// ---- coins quoted in tokens (docs/token-quotes.md §7.6.9) ----------------------------------------------------
+
+/** `PayoutAnswer.version` of a script's payouts in the legs' tokens (`PAYOUT_ANSWER_LEGS_VERSION`): each entry names its leg. */
+export const PAYOUT_ANSWER_LEGS_VERSION = 3;
+
+/** One entry of an answer in the legs' tokens (`PayoutEntryLegs`, 14 bytes): `amount` raw units of leg `leg`'s token, paid to the holding's owner's associated token account of it. */
+export interface PayoutEntryLegs {
+  account: number;
+  amount: bigint;
+  tag: number;
+  leg: number;
+}
+
+/** A script's payouts on a coin quoted in tokens (`PayoutAnswerLegs`, `1 + 4 + 14 * n` bytes of Borsh). */
+export interface PayoutAnswerLegs {
+  version: typeof PAYOUT_ANSWER_LEGS_VERSION;
+  entries: PayoutEntryLegs[];
+}
+
+/** The Borsh of an answer in the legs' tokens, as `loss_cover_script` returns it (`CoverAnswer::Legs`). Throws over 16 entries. */
+export function encodePayoutAnswerLegs(entries: readonly PayoutEntryLegs[]): Buffer {
+  if (entries.length > PAYOUT_LIMITS.maxPayoutsPerStep) throw new Error(`an answer carries at most ${PAYOUT_LIMITS.maxPayoutsPerStep} entries`);
+  const b = Buffer.alloc(1 + 4 + 14 * entries.length);
+  b[0] = PAYOUT_ANSWER_LEGS_VERSION;
+  wu32(b, 1, entries.length);
+  entries.forEach((e, i) => {
+    const at = 5 + 14 * i;
+    b[at] = e.account;
+    wu64(b, at + 1, e.amount);
+    wu32(b, at + 9, e.tag);
+    b[at + 13] = e.leg;
+  });
+  return b;
+}
+
+/** An answer in the legs' tokens from its Borsh: version 3, at most 16 entries, not a byte short or over; throws otherwise (`BadPayoutAnswer`). */
+export function decodePayoutAnswerLegs(data: Uint8Array): PayoutAnswerLegs {
+  const b = Buffer.from(data);
+  if (b.length < 5) throw new Error('BadPayoutAnswer');
+  const n = u32(b, 1);
+  if (b.length !== 5 + 14 * n || b[0] !== PAYOUT_ANSWER_LEGS_VERSION || n > PAYOUT_LIMITS.maxPayoutsPerStep) throw new Error('BadPayoutAnswer');
+  const entries: PayoutEntryLegs[] = [];
+  for (let i = 0; i < n; i += 1) {
+    const at = 5 + 14 * i;
+    entries.push({ account: b[at]!, amount: u64(b, at + 1), tag: u32(b, at + 9), leg: b[at + 13]! });
+  }
+  return { version: PAYOUT_ANSWER_LEGS_VERSION, entries };
+}
+
+/** The script's state on a coin quoted in tokens (`STATE_LEN_LEGS`): the SOL state's 128 bytes, then a `LegRound` per leg at 128 + 36·i. */
+export const COVER_STATE_LEN_LEGS = 384;
+const LEG_ROUNDS_AT = 128;
+const LEG_ROUND_LEN = 36;
+
+/** One leg's round on a coin quoted in tokens (`LegRound`), raw units of the leg's token. */
+export interface CoverLegRound {
+  /** The leg's budget: its pot at the round's first step. */
+  b: bigint;
+  /** The uncovered loss measured on the leg over the round before. */
+  lPrev: bigint;
+  lCur: bigint;
+  roundPaid: bigint;
+  measured: number;
+}
+
+/** The first `count` legs' rounds from the script's state data (zeros past its end, as `LegRound::read`). */
+export function decodeCoverLegRounds(data: Uint8Array, count: number): CoverLegRound[] {
+  const b = Buffer.from(data);
+  const at = (i: number, o: number, w: number): bigint | number => {
+    const p = LEG_ROUNDS_AT + LEG_ROUND_LEN * i + o;
+    if (p + w > b.length) return w === 8 ? 0n : 0;
+    return w === 8 ? b.readBigUInt64LE(p) : b.readUInt32LE(p);
+  };
+  return Array.from({ length: Math.max(0, Math.min(count, 6)) }, (_, i) => ({ b: at(i, 0, 8) as bigint, lPrev: at(i, 8, 8) as bigint, lCur: at(i, 16, 8) as bigint, roundPaid: at(i, 24, 8) as bigint, measured: at(i, 32, 4) as number }));
+}
+
+/**
+ * The legs' rounds as a step at `now` reads them (`step_legs`' roll): in a later round than the state's, each leg's `lPrev` is its
+ * `lCur` (0 when a round was skipped), its budget `b` the leg's pot now (`pots`, the companion's `CompanionLegs` in leg order), the
+ * rest 0; in the state's round, as stored.
+ */
+export function lossCoverLegRoundsAt(s: Pick<CoverState, 'round' | 'roundSecs'>, rounds: readonly CoverLegRound[], pots: readonly bigint[], now: number): CoverLegRound[] {
+  const r = s.roundSecs > 0 ? Math.floor(now / s.roundSecs) : 0;
+  if (r <= s.round) return rounds.map((lr) => ({ ...lr }));
+  const consecutive = r === s.round + 1;
+  return rounds.map((lr, i) => ({ b: pots[i] ?? 0n, lPrev: consecutive ? lr.lCur : 0n, lCur: 0n, roundPaid: 0n, measured: 0 }));
+}
+
+/** Whether a Lossback step on a coin quoted in tokens may pay now: a leg with a loss measured the round before and budget left. */
+export const lossCoverLegsPaying = (rounds: readonly CoverLegRound[]): boolean => rounds.some((lr) => lr.lPrev > 0n && lr.b > lr.roundPaid);
+
+/** The least uncovered loss that counts on a coin quoted in tokens (`min_loss_of_cost`): `minLossBps` (at most all) of the holding's cost `entry × balance / 10^12`, at least 1. */
+export function lossCoverMinLossOfCost(entry: bigint, balance: bigint, minLossBps: bigint | number): bigint {
+  const cost = (entry * balance) / LOSS_COVER_PRICE_SCALE;
+  const bps = BigInt(minLossBps) > 10_000n ? 10_000n : BigInt(minLossBps);
+  const min = (cost * bps) / 10_000n;
+  return min > 0n ? min : 1n;
+}
+
+/** `CoverRoundLeg`: a leg's round rolled on a coin quoted in tokens (the script's event). */
+export interface CoverRoundLegEvent {
+  mint: PublicKey;
+  round: number;
+  leg: number;
+  b: bigint;
+  lPrev: bigint;
+}
+
+/** A `CoverRoundLeg` event's body (after its discriminator). */
+export function decodeCoverRoundLegEvent(body: Buffer): CoverRoundLegEvent {
+  if (body.length < 32 + 4 + 1 + 16) throw new Error('not a CoverRoundLeg event');
+  return { mint: key(body, 0), round: u32(body, 32), leg: body[36]!, b: u64(body, 37), lPrev: u64(body, 45) };
+}
+
+/** The site's least loss on a coin quoted in tokens: 50 basis points of the holding's cost (§7.6.9). */
+export const TOKEN_LOSS_COVER_MIN_LOSS_BPS = 50;
 
 // ---- events ---------------------------------------------------------------------------------------------
 
@@ -794,6 +923,9 @@ export function lossCoverOwed(h: LossCoverHolding, spot: bigint, terms: CoverTer
 
 // ---- builders -------------------------------------------------------------------------------------------
 
+/** A coin quoted in tokens' `Legs` (the launchpad's `["legs", mint]`; `legsAddress` in legs.ts, kept here so this module needs no other). */
+const lossCoverLegsAddress = (mint: PublicKey): PublicKey => PublicKey.findProgramAddressSync([Buffer.from('legs'), mint.toBuffer()], a.LAUNCH_PROGRAM)[0];
+
 /** The launchpad's `["config"]`, read by `prepare` for the launch pools' LP fee. */
 const LAUNCH_CONFIG_ADDRESS = a.LAUNCH_CONFIG;
 
@@ -817,6 +949,27 @@ export const lossCoverHook = {
   /** The hook's accounts for a prepared mint (`LaunchKeys.customHook`): the program with `extras`. */
   accounts(mint: PublicKey, lpFeeBps: number): CustomHookAccounts {
     return { program: a.LOSS_COVER_HOOK_PROGRAM, extras: lossCoverHook.extras(mint, lpFeeBps) };
+  },
+  /**
+   * `prepare_legs()` for a coin quoted in tokens (docs/token-quotes.md §7.6.9; `loss_cover_hook::client::prepare_legs`): `prepare`'s
+   * accounts (the mint signing), then the legs' pools in leg order (1 to 6; written, not read: they need not exist yet). The state's
+   * `pool` is leg 0's, `reserved[0]` the count; the registry is `extrasLegs`.
+   */
+  prepareLegs(payer: PublicKey, mint: PublicKey, pools: readonly PublicKey[]): TransactionInstruction {
+    if (pools.length < 1 || pools.length > 6) throw new Error('a coin quoted in tokens has 1 to 6 legs');
+    const ix = lossCoverHook.prepare(payer, mint);
+    ix.data = CODERS.lossCoverHook.instruction.encode('prepareLegs', {});
+    ix.keys.push(...pools.map((p) => ro(p)));
+    return ix;
+  },
+  /** The registry's extras of a coin prepared with `prepareLegs(pools)` (`extras_legs`): the state (w), the launch, leg 0's pool, the coin's `Legs`, the other legs' pools. */
+  extrasLegs(mint: PublicKey, pools: readonly PublicKey[]): AccountMeta[] {
+    if (pools.length < 1) throw new Error('a coin quoted in tokens has a leg at least');
+    return [rw(a.lossCoverStateAddress(mint)), ro(a.launchAddress(mint)), ro(pools[0]!), ro(lossCoverLegsAddress(mint)), ...pools.slice(1).map((p) => ro(p))];
+  },
+  /** The hook's accounts for a coin quoted in tokens (`LaunchKeys.customHook`). */
+  accountsLegs(mint: PublicKey, pools: readonly PublicKey[]): CustomHookAccounts {
+    return { program: a.LOSS_COVER_HOOK_PROGRAM, extras: lossCoverHook.extrasLegs(mint, pools) };
   },
   /**
    * `record_payout(lamports, tag)` for `owner`'s holding of `mint`, exactly as the companion builds

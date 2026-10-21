@@ -168,9 +168,9 @@ describe('the constants and the discriminators', () => {
 
 describe('the layouts', () => {
   /** `loss_cover_vectors.rs` `record()`. */
-  const record: LossCoverRecord = { version: 1, flags: LOSS_COVER_FLAG_SOLD, entry: 40_166_666n, amount: 100_000_000_000n, paid: 1_000_000n, updatedSlot: 400_000_123n, paidAt: 1_800_000_100, basisAt: 1_799_999_000, round: 6_000_000 };
+  const record: LossCoverRecord = { version: 1, flags: LOSS_COVER_FLAG_SOLD, entry: 40_166_666n, amount: 100_000_000_000n, paid: 1_000_000n, updatedSlot: 400_000_123n, paidAt: 1_800_000_100, basisAt: 1_799_999_000, round: 6_000_000, leg: 0 };
   /** `state()`. */
-  const state: LossCoverState = { version: 1, bump: 254, mint, launch: key(3), pool: key(4), creator: key(5), reference: 40_166_666n, referenceAt: 1_800_000_000, paidTotal: 123_456_789n, records: 42n, preparedBy: key(1), preparedAt: 1_799_990_000 };
+  const state: LossCoverState = { version: 1, bump: 254, mint, launch: key(3), pool: key(4), creator: key(5), reference: 40_166_666n, referenceAt: 1_800_000_000, paidTotal: 123_456_789n, records: 42n, preparedBy: key(1), preparedAt: 1_799_990_000, legCount: 0 };
   /** `cover_state()`. */
   const coverState: CoverState = { version: 1, mint, coverBps: 10_000, minHolding: 100_000_000_000n, minLoss: 1_000_000n, minAgeSecs: 1_800, roundSecs: 300, minPotLamports: 1_000_000_000n, round: 6_000_002, b: 500_000_000n, lPrev: 5_000_000_000n, lCur: 1_234_567_890n, roundPaid: 450_000_000n, measured: 12, rounds: 3, paidTotal: 2_000_000_000n };
   /** `payout_vectors.rs`'s terms. */

@@ -32,3 +32,5 @@ export * from './native.ts';
 export * from './fees.ts';
 export * from './spl.ts';
 export * from './legs.ts';
+export * from './payouts.ts';
+export * from './tokenGames.ts';

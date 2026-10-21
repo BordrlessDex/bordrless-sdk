@@ -299,8 +299,16 @@ export const AGENT_DECISION_VERSION = 1;
 export interface AgentDecision {
   action: number;
   size: number;
-  /** What the step pays the treasury for the inference, lamports (0 until inference is billed from the pot, phase 2). */
+  /**
+   * What the step pays the treasury for the inference: lamports (0 until inference is billed from the pot, phase 2), or, with
+   * `billLeg`, raw units of that leg's token.
+   */
   billLamports: number;
+  /**
+   * On a coin quoted in tokens (docs/token-quotes.md §7.6.4): the leg whose token pays the bill, 1 to 6 (byte 30, reserved before);
+   * absent or 0, SOL from the companion address, as every decision before it. Read only when set, so a SOL decision decodes as before.
+   */
+  billLeg?: number;
   /** Unix seconds; void after. */
   until: number;
   decidedAt: number;
@@ -324,6 +332,7 @@ export function encodeAgentDecision(d: AgentDecision): Uint8Array {
   view.setBigInt64(16, BigInt(d.decidedAt), true);
   view.setUint32(24, d.seq, true);
   view.setUint16(28, d.confidenceBps, true);
+  out[30] = d.billLeg ?? 0;
   out.set(d.stateHash, 32);
   return out;
 }
@@ -343,6 +352,7 @@ export function decodeAgentDecision(state: Uint8Array): AgentDecision | null {
     seq: view.getUint32(24, true),
     confidenceBps: view.getUint16(28, true),
     stateHash: new Uint8Array(tail.subarray(32, 64)),
+    ...(tail[30] ? { billLeg: tail[30] } : {}),
   };
 }
 

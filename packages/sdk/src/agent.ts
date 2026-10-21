@@ -97,12 +97,22 @@ export interface DecideArgs {
   confidenceBps: number;
   /** SHA-256 of the state the model saw, 32 bytes. */
   stateHash: Uint8Array;
-  /** What the step pays the treasury for the inference, lamports (docs/agents.md "Billing"; 0 when nothing is owed). */
+  /** What the step pays the treasury for the inference, lamports (docs/agents.md "Billing"; 0 when nothing is owed), or with `billLeg` raw units of that leg's token. */
   billLamports: number;
+  /**
+   * On a coin quoted in tokens (docs/token-quotes.md §7.6.4): the leg whose token pays the bill, 1 to 6, to the treasury's associated
+   * account of it; absent or 0, SOL from the companion address. A trailing byte sent only when set, so a SOL decision's arguments are the
+   * 52 bytes they always were (a script built before it reads them the same).
+   */
+  billLeg?: number;
 }
 
 /** The arguments' Borsh size: u8, u8, i64, u32, u16, [u8; 32], u32. */
 export const DECIDE_ARGS_LEN = 52;
+/** With a bill in a leg's token: the trailing `bill_leg` byte too. */
+export const DECIDE_ARGS_LEN_WITH_LEG = 53;
+/** The most legs a coin quoted in tokens has (`bill_leg` 1 to 6). */
+export const BILL_LEG_MAX = 6;
 
 const u8 = (name: string, v: number): number => {
   if (!Number.isInteger(v) || v < 0 || v > 0xff) throw new Error(`${name} is a byte`);
@@ -117,11 +127,14 @@ const u32 = (name: string, v: number): number => {
   return v;
 };
 
-/** The arguments as Borsh, in the starter's order: 52 bytes. */
+/** The arguments as Borsh, in the starter's order: 52 bytes, and the trailing `bill_leg` (53) only with a bill in a leg's token. */
 export function encodeDecideArgs(args: DecideArgs): Buffer {
   if (args.stateHash.length !== 32) throw new Error('stateHash is 32 bytes');
   if (!Number.isSafeInteger(args.until)) throw new Error('until is unix seconds');
-  const out = Buffer.alloc(DECIDE_ARGS_LEN);
+  const leg = args.billLeg ?? 0;
+  if (!Number.isInteger(leg) || leg < 0 || leg > BILL_LEG_MAX) throw new Error(`billLeg is 0 to ${BILL_LEG_MAX}`);
+  const out = Buffer.alloc(leg > 0 ? DECIDE_ARGS_LEN_WITH_LEG : DECIDE_ARGS_LEN);
+  if (leg > 0) out.writeUInt8(leg, DECIDE_ARGS_LEN);
   out.writeUInt8(u8('action', args.action), 0);
   out.writeUInt8(u8('size', args.size), 1);
   out.writeBigInt64LE(BigInt(args.until), 2);
@@ -133,7 +146,7 @@ export function encodeDecideArgs(args: DecideArgs): Buffer {
 }
 
 /** The tail `decide` leaves in the state for these arguments (the program fills `decided_at` from the clock): what `read_decision` then reads. */
-export const decisionOfArgs = (args: DecideArgs, decidedAt: number): AgentDecision => ({ action: args.action, size: args.size, billLamports: args.billLamports, until: args.until, decidedAt, seq: args.seq, confidenceBps: args.confidenceBps, stateHash: args.stateHash });
+export const decisionOfArgs = (args: DecideArgs, decidedAt: number): AgentDecision => ({ action: args.action, size: args.size, billLamports: args.billLamports, until: args.until, decidedAt, seq: args.seq, confidenceBps: args.confidenceBps, stateHash: args.stateHash, ...(args.billLeg ? { billLeg: args.billLeg } : {}) });
 
 /** The 64 bytes `decide` writes for these arguments (`decisionOfArgs`, encoded). */
 export const decisionBytesOfArgs = (args: DecideArgs, decidedAt: number): Uint8Array => encodeAgentDecision(decisionOfArgs(args, decidedAt));

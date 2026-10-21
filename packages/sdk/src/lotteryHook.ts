@@ -53,6 +53,17 @@ export const lotteryHook = {
   accounts(mint: PublicKey): CustomHookAccounts {
     return { program: a.LOTTERY_HOOK_PROGRAM, extras: [rw(a.lotteryStateAddress(mint)), ro(a.launchAddress(mint))] };
   },
+  /**
+   * `prepare_legs(round_secs)` for a coin quoted in tokens (docs/token-quotes.md §7.6.9): `prepare`'s accounts and state, its registry
+   * `[state (w), launch, Legs]` (`accountsLegs`), which the launchpad asks every hook of such a coin for (`HookMissingLegs`).
+   */
+  prepareLegs(payer: PublicKey, mint: PublicKey, roundSecs: number): TransactionInstruction {
+    return build('prepareLegs', { roundSecs }, [rw(payer, true), ro(mint, true), rw(a.lotteryStateAddress(mint)), rw(a.lotteryRegistryAddress(mint)), ro(a.SYSTEM_PROGRAM)]);
+  },
+  /** The hook's accounts for a coin prepared with `prepareLegs` (`extras_legs`): the state (w), the launch, the coin's `Legs`. */
+  accountsLegs(mint: PublicKey): CustomHookAccounts {
+    return { program: a.LOTTERY_HOOK_PROGRAM, extras: [rw(a.lotteryStateAddress(mint)), ro(a.launchAddress(mint)), ro(PublicKey.findProgramAddressSync([Buffer.from('legs'), mint.toBuffer()], a.LAUNCH_PROGRAM)[0])] };
+  },
 };
 
 /** The lottery hook's state for a mint (`LotteryState` at `["state", mint]`): the standard's header first, then the hook's own fields. */

@@ -24,6 +24,15 @@
  * `parseHookDeclaration` holds a file to the schema and its bounds and answers the normal form or one
  * sentence saying what is wrong; `hookDeclarationWords` says it in plain words. No Solana
  * dependencies: the SDK's `launch.createQuoteCutConfig` takes `quoteCut` as it is.
+ *
+ * Coins quoted in tokens (docs/token-quotes.md §7, §7.4): `"quoteTokens": true` says the hook runs on
+ * them: its `prepare` writes the launchpad's `Legs` entry in its registry for every mint
+ * (`legs_registry_entry`, which `create_token_launch` from its config requires: `HookMissingLegs`) and
+ * its code reads every leg's pool from the `Legs`. Such a hook takes no SOL cut (a token coin has no
+ * SOL to cut, and the launchpad refuses a cut config there: `QuoteCutOnTokenLaunch`), so `quoteCut` and
+ * `quoteTokens` never go together; a file with `quoteTokens` alone is `{"version":1,"quoteTokens":true}`.
+ * `parseHookFile` reads both forms (`HookFile`); `parseHookDeclaration`, `hookDeclarationOfFiles` and the
+ * approval's hash stay the SOL cut's (a hook with `quoteTokens` alone has no cut declaration).
  */
 import { LAUNCH_PROTOCOL_SHARE_BPS } from './policy.ts';
 import { utf8Length } from './keeper.ts';
@@ -59,6 +68,15 @@ export interface HookDeclaration {
 
 export type HookDeclarationParse = { ok: true; declaration: HookDeclaration } | { ok: false; problem: string };
 
+/** A hook.json in either form: the SOL cut's caps (null: none) and whether the hook runs on coins quoted in tokens. */
+export interface HookFile {
+  version: 1;
+  quoteCut: HookQuoteCut | null;
+  quoteTokens: boolean;
+}
+
+export type HookFileParse = { ok: true; file: HookFile } | { ok: false; problem: string };
+
 class HookDeclarationProblem extends Error {}
 
 /** Refuses with one sentence, the file named first. */
@@ -83,36 +101,76 @@ function capOf(v: unknown, at: string, min: number, why: string): number {
   return v;
 }
 
-/** The declaration in a parsed JSON value, held to the schema and its bounds: its normal form, or why not, in one sentence. */
-export function hookDeclarationOf(value: unknown): HookDeclarationParse {
+/** A hook.json in a parsed JSON value, either form (`HookFile`), held to the schema and its bounds: its normal form, or why not, in one sentence. */
+export function hookFileOf(value: unknown): HookFileParse {
   try {
-    const root = fieldsOf(value, 'the file', ['version', 'quoteCut'], 'one object');
+    const root = fieldsOf(value, 'the file', ['version', 'quoteCut', 'quoteTokens'], 'one object');
     if (root.version !== HOOK_DECLARATION_VERSION) fail(`version is ${HOOK_DECLARATION_VERSION}, the only one there is.`);
-    if (root.quoteCut === undefined || root.quoteCut === null) fail('quoteCut is required: the most the hook’s quote_cut may take of a buy’s SOL and of a sell’s.');
+    if (root.quoteTokens !== undefined && root.quoteTokens !== null && typeof root.quoteTokens !== 'boolean') fail('quoteTokens is true (the hook runs on coins quoted in tokens: its prepare lists the coin’s Legs and its code reads the legs) or left out.');
+    const quoteTokens = root.quoteTokens === true;
+    const hasCut = root.quoteCut !== undefined && root.quoteCut !== null;
+    if (quoteTokens && hasCut) fail('quoteTokens and quoteCut never go together: a coin quoted in tokens has no SOL to cut (the launchpad refuses a SOL-cut config there). Take quoteCut out to run on token coins, or quoteTokens out to keep the cut.');
+    if (!quoteTokens && !hasCut) fail('quoteCut is required: the most the hook’s quote_cut may take of a buy’s SOL and of a sell’s (or "quoteTokens": true alone, for a hook that runs on coins quoted in tokens).');
+    if (!hasCut) return { ok: true, file: { version: 1, quoteCut: null, quoteTokens } };
     const q = fieldsOf(root.quoteCut, 'quoteCut', ['maxBuyBps', 'maxSellBps'], '{ "maxBuyBps", "maxSellBps" }: the SOL cut’s caps in basis points');
     if (q.maxBuyBps === undefined) fail('quoteCut.maxBuyBps is required: the most of a buy’s SOL the hook may take.');
     if (q.maxSellBps === undefined) fail('quoteCut.maxSellBps is required: the most of a sell’s SOL the hook may take (0 for none).');
     // The launchpad asks the hook on every buy (it may answer 0 there): a config's buy cap is above 0 (`QuoteCut::valid`).
     const maxBuyBps = capOf(q.maxBuyBps, 'quoteCut.maxBuyBps', HOOK_QUOTE_CUT_FLOOR_BPS, 'the launchpad asks the hook on every buy, so the buy cap is above 0 (the hook may still answer 0)');
     const maxSellBps = capOf(q.maxSellBps, 'quoteCut.maxSellBps', 0, '0 and the launchpad never asks the hook on sells');
-    return { ok: true, declaration: { version: 1, quoteCut: { maxBuyBps, maxSellBps } } };
+    return { ok: true, file: { version: 1, quoteCut: { maxBuyBps, maxSellBps }, quoteTokens: false } };
   } catch (error) {
     if (error instanceof HookDeclarationProblem) return { ok: false, problem: error.message };
     throw error;
   }
 }
 
-/** A `hook.json` as submitted: within its size, JSON, then the schema (`hookDeclarationOf`). */
-export function parseHookDeclaration(text: string): HookDeclarationParse {
+/** The SOL cut's declaration in a parsed JSON value: its normal form, or why not, in one sentence (a file with `quoteTokens` alone has none: refused here, read by `hookFileOf`). */
+export function hookDeclarationOf(value: unknown): HookDeclarationParse {
+  const parsed = hookFileOf(value);
+  if (!parsed.ok) return parsed;
+  if (!parsed.file.quoteCut) return { ok: false, problem: `${HOOK_FILE}: quoteCut is required: the most the hook’s quote_cut may take of a buy’s SOL and of a sell’s.` };
+  return { ok: true, declaration: { version: 1, quoteCut: parsed.file.quoteCut } };
+}
+
+/** A `hook.json` as submitted, read as JSON within its size; null with the problem. */
+function hookJsonValue(text: string): { value: unknown } | { problem: string } {
   const bytes = utf8Length(text);
-  if (bytes > HOOK_DECLARATION_LIMITS.bytes) return { ok: false, problem: `${HOOK_FILE} is at most ${group(HOOK_DECLARATION_LIMITS.bytes)} bytes; this one is ${group(bytes)}.` };
-  let value: unknown;
+  if (bytes > HOOK_DECLARATION_LIMITS.bytes) return { problem: `${HOOK_FILE} is at most ${group(HOOK_DECLARATION_LIMITS.bytes)} bytes; this one is ${group(bytes)}.` };
   try {
-    value = JSON.parse(text);
+    return { value: JSON.parse(text) };
   } catch {
-    return { ok: false, problem: `${HOOK_FILE} is not JSON: check its quotes, commas and brackets (no comments, no trailing commas).` };
+    return { problem: `${HOOK_FILE} is not JSON: check its quotes, commas and brackets (no comments, no trailing commas).` };
   }
-  return hookDeclarationOf(value);
+}
+
+/** A `hook.json` as submitted: within its size, JSON, then the SOL cut's schema (`hookDeclarationOf`). */
+export function parseHookDeclaration(text: string): HookDeclarationParse {
+  const read = hookJsonValue(text);
+  return 'problem' in read ? { ok: false, problem: read.problem } : hookDeclarationOf(read.value);
+}
+
+/** A `hook.json` as submitted, either form (`hookFileOf`): what the Workshop's checks hold a submission to. */
+export function parseHookFile(text: string): HookFileParse {
+  const read = hookJsonValue(text);
+  return 'problem' in read ? { ok: false, problem: read.problem } : hookFileOf(read.value);
+}
+
+/** The hook.json among a source's files in either form, or null when there is none or it does not read as the schema. */
+export function hookFileOfFiles(files: readonly { path: string; content: string }[]): HookFile | null {
+  const file = files.find((f) => f.path === HOOK_FILE);
+  if (!file) return null;
+  const parsed = parseHookFile(file.content);
+  return parsed.ok ? parsed.file : null;
+}
+
+/** Whether a hook's source declares it runs on coins quoted in tokens (`"quoteTokens": true` in its hook.json). */
+export const hookQuoteTokensOfFiles = (files: readonly { path: string; content: string }[] | null | undefined): boolean => (files ? hookFileOfFiles(files)?.quoteTokens === true : false);
+
+/** A hook.json in either form, in words: the SOL cut's (`quoteCutWords`) or the token coins'. */
+export function hookFileWords(f: HookFile): string {
+  if (f.quoteCut) return quoteCutWords(f.quoteCut);
+  return 'Runs on coins quoted in tokens: its prepare lists the coin’s Legs in its registry, its code reads every leg’s pool from them, and it takes no SOL cut.';
 }
 
 /** The declaration in a canonical text (keys sorted, no spaces): what its hash is taken of, so the same declaration hashes the same however it was written. */
@@ -120,15 +178,18 @@ export function canonicalHookJson(d: HookDeclaration): string {
   return JSON.stringify({ quoteCut: { maxBuyBps: d.quoteCut.maxBuyBps, maxSellBps: d.quoteCut.maxSellBps }, version: d.version });
 }
 
+/** A hook.json of either form in its canonical text: the SOL cut's (`canonicalHookJson`), or `{"quoteTokens":true,"version":1}`. */
+export function canonicalHookFileJson(f: HookFile): string {
+  return f.quoteCut ? canonicalHookJson({ version: 1, quoteCut: f.quoteCut }) : JSON.stringify({ quoteTokens: true, version: f.version });
+}
+
 /** Whether a file of a submission is the declaration. */
 export const isHookFile = (path: string): boolean => path === HOOK_FILE;
 
 /** The declaration among a source's files, or null when there is none or it does not read as the schema (the static checks refuse that). */
 export function hookDeclarationOfFiles(files: readonly { path: string; content: string }[]): HookDeclaration | null {
-  const file = files.find((f) => f.path === HOOK_FILE);
-  if (!file) return null;
-  const parsed = parseHookDeclaration(file.content);
-  return parsed.ok ? parsed.declaration : null;
+  const f = hookFileOfFiles(files);
+  return f?.quoteCut ? { version: 1, quoteCut: f.quoteCut } : null;
 }
 
 // ---- in plain words -------------------------------------------------------------------------------------

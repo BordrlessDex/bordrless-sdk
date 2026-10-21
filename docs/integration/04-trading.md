@@ -331,8 +331,12 @@ legs; trading opens only once every leg is open.
   accounts, `LEG_SWAP_ACCOUNTS_WITH_KIT`) and pass the mint writable when a rule burns. A coin
   without rules has no hook and trades with the 20 accounts above. Its locks run from when trading
   opened (`lockTimesInForce`; the `TokenLaunchLocks` event names them).
-- Companions and custom hooks don't apply to a token-quoted coin yet. The router (`router.swap`,
-  `router.swapV2`) doesn't wrap `swap_spl`.
+- Since SDK 0.20.0 a token-quoted coin may also have a companion (the presets and Workshop items
+  that opt in), holder rewards paid in a leg's token or as SOL, and the Lottery, Jackpot, Streak or
+  Lossback run per leg (bordrless-programs `docs/token-quotes.md` §7). Its trades still go through
+  `swap_spl` on its legs. A coin whose token hook is a custom one (a game's or Lossback's) passes that
+  hook's slice with `tokenLaunch.legSwapWithSlice(…, customHookSlice(…), baseMintWritable)`;
+  `legSwap` adds only the kit's. The router (`router.swap`, `router.swapV2`) doesn't wrap `swap_spl`.
 
 ## Sending
 

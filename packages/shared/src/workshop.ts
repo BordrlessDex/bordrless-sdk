@@ -377,6 +377,13 @@ export interface WorkshopItem {
    */
   quoteCut?: HookQuoteCut | null;
   /**
+   * It runs on coins quoted in tokens (docs/token-quotes.md §7.4): a hook whose approved hook.json says `quoteTokens` (its registry
+   * lists the coin's `Legs`, it takes no SOL cut), a companion whose approved keeper.json says it (with its `legs`), a pair whose two
+   * halves both do. The launch form offers only these once tokens are picked; the launch API refuses the others on a token coin
+   * (`quote_tokens_rules`). Absent from older servers (read as false).
+   */
+  quoteTokens?: boolean;
+  /**
    * Its agent (docs/agents.md): a companion's or a pair's script's `agent.json` in its normal form
    * with its words, what the Agent badge and panel show. Null without one (a hook never has one);
    * absent from older servers.

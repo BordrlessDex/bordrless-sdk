@@ -287,7 +287,7 @@
       ],
       "returns": {
         "defined": {
-          "name": "PayoutAnswer"
+          "name": "CoverAnswer"
         }
       }
     }
@@ -319,6 +319,19 @@
         177,
         96,
         133
+      ]
+    },
+    {
+      "name": "CoverRoundLeg",
+      "discriminator": [
+        99,
+        105,
+        101,
+        201,
+        91,
+        43,
+        71,
+        196
       ]
     }
   ],
@@ -357,6 +370,11 @@
       "code": 6006,
       "name": "NothingToDo",
       "msg": "nothing to measure or pay in this batch"
+    },
+    {
+      "code": 6007,
+      "name": "NoLegs",
+      "msg": "a coin quoted in tokens: pass its Legs and the companion's legs (CompanionLegs)"
     }
   ],
   "types": [
@@ -574,6 +592,49 @@
               "`reserved`: zero, classic, in every companion made before."
             ],
             "type": "u8"
+          },
+          {
+            "name": "quote_cut_claimed",
+            "docs": [
+              "How much of the launch's `quote_cut_accrued` (the hook's SOL cut, paid into the creator fee",
+              "vault with the creator fee) this companion's fee claims have taken: what a claim takes",
+              "beyond it, up to the whole claim, is the hook's and goes to the pot's bucket."
+            ],
+            "type": {
+              "defined": {
+                "name": "QuoteCutClaimed"
+              }
+            }
+          },
+          {
+            "name": "native_sol",
+            "docs": [
+              "Whether the companion's SOL is lamports on its creator address (`crate::instructions::native`)",
+              "rather than bridged SOL in the creator's holding."
+            ],
+            "type": {
+              "defined": {
+                "name": "NativeSol"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "CoverAnswer",
+      "docs": [
+        "The Borsh of a PayoutAnswer (version 1, a SOL coin) or a PayoutAnswerLegs (version 3, a coin quoted in tokens): read the first byte."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "docs": [
+              "1 or 3; the entries follow as that version's."
+            ],
+            "type": "u8"
           }
         ]
       }
@@ -594,6 +655,38 @@
           {
             "name": "round",
             "type": "u32"
+          },
+          {
+            "name": "b",
+            "type": "u64"
+          },
+          {
+            "name": "l_prev",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CoverRoundLeg",
+      "docs": [
+        "A leg's round rolled on a coin quoted in tokens: its budget `b` and the loss `l_prev` measured",
+        "on the leg the round before, in the leg's token."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "round",
+            "type": "u32"
+          },
+          {
+            "name": "leg",
+            "type": "u8"
           },
           {
             "name": "b",
@@ -741,56 +834,31 @@
       }
     },
     {
-      "name": "PayoutAnswer",
+      "name": "NativeSol",
       "docs": [
-        "What a script's `companion_step` may return: its payouts, which the companion checks against",
-        "the terms, pays and records (`1 + 4 + 13 * n` bytes of Borsh, `n` at most",
-        "`MAX_PAYOUTS_PER_STEP`). No return data, or empty, is no answer: today's step."
+        "A bool (1 byte); absent (read as false) in a companion not grown for it."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
-            "name": "version",
-            "docs": [
-              "`PAYOUT_ANSWER_VERSION`."
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "entries",
-            "type": {
-              "vec": {
-                "defined": {
-                  "name": "PayoutEntry"
-                }
-              }
-            }
+            "name": "on",
+            "type": "bool"
           }
         ]
       }
     },
     {
-      "name": "PayoutEntry",
+      "name": "QuoteCutClaimed",
       "docs": [
-        "One entry of a script's payout answer: `account` an index into the step's remaining accounts",
-        "(a holding of the launch's mint), `lamports` paid to its owner as SOL (0: a touch, recorded and",
-        "not paid), `tag` the script's, passed to the hook's `record_payout` untouched."
+        "A u64; absent (read as 0) in a companion account made before 2026-10-15."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
-            "name": "account",
-            "type": "u8"
-          },
-          {
-            "name": "lamports",
+            "name": "amount",
             "type": "u64"
-          },
-          {
-            "name": "tag",
-            "type": "u32"
           }
         ]
       }

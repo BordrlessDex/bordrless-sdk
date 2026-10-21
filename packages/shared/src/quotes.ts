@@ -18,6 +18,14 @@ export const MAX_QUOTE_TOKENS = 6;
 /** The least virtual quote a leg opens with, raw units of its token: below it the opening price can't be told apart from zero. */
 export const MIN_LEG_VIRTUAL_QUOTE = 1_000n;
 
+/**
+ * "Claim as SOL" (`POST /v1/creator/legs/prepare` with `as: 'sol'`, docs/token-quotes.md §7.3): each leg's creator fee claimed and
+ * swapped to SOL through Jupiter in the same transaction. The slippage the creator may set, in basis points: 1% unless they say
+ * otherwise, at most 10%.
+ */
+export const CLAIM_SOL_DEFAULT_SLIPPAGE_BPS = 100;
+export const CLAIM_SOL_MAX_SLIPPAGE_BPS = 1_000;
+
 /** A quote token's program, as the API and the SDK name it. */
 export type QuoteTokenProgram = 'spl-token' | 'token-2022';
 
@@ -190,3 +198,63 @@ export const NATIVE_MINT_2022 = '9pan9bMn5HatX4EJdBwg9VgCa7Uz5HL8N1m5D3NdXejP';
 
 /** Whether a mint names SOL in either form (SPL Token's wrapped SOL or Token-2022's): SOL launches stay SOL launches. */
 export const isSolMint = (mint: string): boolean => mint === NATIVE_MINT || mint === NATIVE_MINT_2022;
+
+// ---- §7.5: holder rewards in the quote token and the SOL switch (docs/token-quotes.md §7.5.5) --------------------------
+
+/**
+ * A token launch's payouts (`LaunchPrepareRequest.payouts`, behind the API's `QUOTE_PAYOUTS_OPEN`): `sol` the DIY config's "Pay in SOL"
+ * switch (off by default: every paid part, the launcher's, a companion's holders' part and the holder rewards, is in each leg's token;
+ * on, they are sold to SOL on each token's reference pool), and a coin of two legs or more with holder rewards pays them in rounds of
+ * `holderRoundSecs` (600 to 86,400; an hour when absent). Buyback and Snowball keep their pots in the tokens either way.
+ */
+export interface TokenPayoutsRequest {
+  sol?: boolean;
+  holderRoundSecs?: number;
+}
+
+/** How a coin quoted in tokens pays its holder rewards: in its one leg's token (claimed any time), in every leg's token by rounds (pushed each round), or in SOL (the switch). */
+export type TokenRewardKind = 'token' | 'rounds' | 'sol';
+
+/**
+ * `GET /v1/quote-tokens/:mint/sol-switch`: whether a token can take the SOL switch. Its reference pool (Raydium AMM v4, CPMM, CLMM or
+ * Pump AMM, against SOL or USDC, at least 100 SOL deep on its SOL side) registered on chain, or the deepest qualifying pool the launch's
+ * setup registers; when none qualifies the form greys the switch with `reason` (the launch answers `sol_switch_unavailable`).
+ */
+export interface QuoteTokenSolSwitch {
+  mint: string;
+  available: boolean;
+  reason: string | null;
+  reference: { venue: string; pool: string; via: 'sol' | 'usdc'; depthLamports: string; feePpm: number; registered: boolean; paused: boolean } | null;
+}
+
+/** One leg's holder rewards on a coin quoted in tokens (`TokenRewardsSummary.legs`), raw units of its token. */
+export interface TokenRewardsLeg {
+  index: number;
+  quoteMint: string;
+  decimals: number;
+  /** Holder fees the leg's trades paid into the kit's vault, all time. */
+  accrued: string;
+  /** Paid to holders from it: claimed (one leg) or paid by rounds; with the switch, sold to SOL. */
+  paid: string;
+}
+
+/** A coin quoted in tokens' holder rewards as the board and the token page get them (`LaunchSummary.tokenRewards`). */
+export interface TokenRewardsSummary {
+  kind: TokenRewardKind;
+  /** A rounds coin's round length; null otherwise. */
+  roundSecs: number | null;
+  legs: TokenRewardsLeg[];
+  /** With the switch: lamports the legs' holder fees were sold for and shared; null otherwise. */
+  swappedLamports: string | null;
+  /** A rounds coin's current round (`⌊now / roundSecs⌋`) and when the next one starts; null otherwise. */
+  round: number | null;
+  nextRoundAt: number | null;
+}
+
+/** A wallet's holder rewards on a coin quoted in tokens (`RewardPosition.token`): what a claim pays now per leg, or a round's estimate. */
+export interface TokenRewardPosition {
+  kind: TokenRewardKind;
+  legs: { index: number; quoteMint: string; symbol: string; decimals: number; claimable: string }[];
+  /** Rounds: whether this round's pay is waiting for the holding (the keeper pushes it, or a claim sends `pay_round`). */
+  roundPending: boolean | null;
+}

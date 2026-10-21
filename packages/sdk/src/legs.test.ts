@@ -11,8 +11,12 @@ import { decodeKitConfig, decodeLegs, decodePool, isSplPool, kitModulesOf, POOL_
 import * as a from './addresses.ts';
 import { CODERS, IDL } from './coders.ts';
 import { decodeEventPayload } from './events.ts';
-import { decodeHookAccountList, encodeHookAccountList, tokenHookOf } from './hooks.ts';
-import { kitLegs, kitLegsRegistryList, kitLegsTokenHook, LEG_HOOK_FLAGS, LEG_SWAP_ACCOUNTS, LEG_SWAP_ACCOUNTS_WITH_KIT, legBaseSlice, legFeeAccount, legFeesAddress, legHookExtras, legLogEventsOf, legPoolAddress, legQuoteVault, legsAddress, legsHookExtras, legsHookSlice, legsLockDelay, legsMaxWalletHolds, legsSold, legsTradingOpenedAt, legSwapCutsOf, lockTimesInForce, NO_TOKEN_LAUNCH_RULES, splPool, splVaultAddress, TOKEN_LAUNCH_RULES_BYTES, tokenLaunch, tokenLaunchKitAccounts, typedLegEvent, type LegKeys } from './legs.ts';
+import { customHookSlice, customHookTokenHook, decodeHookAccountList, encodeHookAccountList, resolveHookAccounts, tokenHookOf, type CustomHookAccounts } from './hooks.ts';
+import { COMPANION_LEGS_LEN, companion, companionLegsAddress, decodeCompanionLegs } from './companion.ts';
+import { token } from './instructions.ts';
+import { timelockAddress } from './authority.ts';
+import type { AccountMeta } from '@solana/web3.js';
+import { kitLegs, kitLegsRegistryList, kitVaultAddress, kitLegsTokenHook, LEG_HOOK_FLAGS, LEG_SWAP_ACCOUNTS, LEG_SWAP_ACCOUNTS_WITH_KIT, legBaseSlice, legFeeAccount, legFeesAddress, legHookExtras, legLogEventsOf, legPoolAddress, legQuoteVault, legsAddress, legsHookExtras, legsHookSlice, legsLockDelay, legsMaxWalletHolds, legsSold, legsTradingOpenedAt, legSwapCutsOf, lockTimesInForce, legsRegistryEntry, listsLegs, NO_TOKEN_LAUNCH_RULES, splPool, splVaultAddress, TOKEN_LAUNCH_RULES_BYTES, tokenLaunch, tokenLaunchKitAccounts, typedLegEvent, type LegKeys } from './legs.ts';
 
 const k = (): PublicKey => Keypair.generate().publicKey;
 
@@ -30,8 +34,8 @@ interface IdlInstruction {
   args: { name: string }[];
 }
 
-type IdlProgram = 'swap' | 'launch' | 'kit';
-const PROGRAM_OF: Record<IdlProgram, PublicKey> = { swap: a.SWAP_PROGRAM, launch: a.LAUNCH_PROGRAM, kit: a.KIT_PROGRAM };
+type IdlProgram = 'swap' | 'launch' | 'kit' | 'companion';
+const PROGRAM_OF: Record<IdlProgram, PublicKey> = { swap: a.SWAP_PROGRAM, launch: a.LAUNCH_PROGRAM, kit: a.KIT_PROGRAM, companion: a.COMPANION_PROGRAM };
 const instructionOf = (program: IdlProgram, name: string): IdlInstruction => (IDL[program] as unknown as { instructions: IdlInstruction[] }).instructions.find((i) => i.name === name)!;
 
 /**
@@ -209,8 +213,11 @@ describe('the events', () => {
   it('a leg swap’s creator fee is its delta to the leg’s fee account, either side', () => {
     const [mint, quoteMint] = [k(), k()];
     const fee = legFeesAddress(mint, quoteMint).toBase58();
-    expect(legSwapCutsOf({ deltasIn: [{ holding: fee, amount: 1_000_000n }], deltasOut: [] }, mint, quoteMint)).toEqual({ creatorFee: 1_000_000n });
-    expect(legSwapCutsOf({ deltasIn: [], deltasOut: [{ holding: fee, amount: 5n }, { holding: k().toBase58(), amount: 9n }] }, mint, quoteMint)).toEqual({ creatorFee: 5n });
+    expect(legSwapCutsOf({ deltasIn: [{ holding: fee, amount: 1_000_000n }], deltasOut: [] }, mint, quoteMint)).toEqual({ creatorFee: 1_000_000n, holderFee: 0n });
+    expect(legSwapCutsOf({ deltasIn: [], deltasOut: [{ holding: fee, amount: 5n }, { holding: k().toBase58(), amount: 9n }] }, mint, quoteMint)).toEqual({ creatorFee: 5n, holderFee: 0n });
+    // §7.5: with holder rewards the second delta goes to the kit's vault of the leg's token: the holder fee.
+    const vault = kitVaultAddress({ mint, quoteMint, quoteProgram: a.SPL_TOKEN_PROGRAM }).toBase58();
+    expect(legSwapCutsOf({ deltasIn: [{ holding: fee, amount: 10n }, { holding: vault, amount: 7n }], deltasOut: [] }, mint, quoteMint, a.SPL_TOKEN_PROGRAM)).toEqual({ creatorFee: 10n, holderFee: 7n });
   });
 });
 
@@ -252,8 +259,12 @@ describe('phase 1: the kit’s accounts and registry on a coin quoted in tokens'
     const ix = kitLegs.initLegs(caller.address, payer, mint, args);
     expect(heldToIdl(ix, 'kit', 'init_legs')).toEqual([]);
     expect([ix.keys[0]!.pubkey, ix.keys[2]!.pubkey, ix.keys[3]!.pubkey, ix.keys[4]!.pubkey, ix.keys[5]!.pubkey].map(String)).toEqual([caller.address, mint, a.holdingAddress(mint, launch), a.kitConfigAddress(mint), a.kitRegistryAddress(mint)].map(String));
-    const decoded = CODERS.kit.instruction.decode(ix.data) as { name: string; data: { args: Record<string, unknown> } };
+    // No rewards (kind 0): the data ends after the args, as before §7.5 (the kit reads the rewards as none).
+    const decoded = CODERS.kit.instruction.decode(Buffer.concat([ix.data, Buffer.alloc(5)])) as { name: string; data: { args: Record<string, unknown> } };
     expect(decoded.name).toBe('initLegs');
+    const rewarded = kitLegs.initLegs(caller.address, payer, mint, { ...args, rewardMint: launch, modules: 15 }, { kind: 1, roundSecs: 0 });
+    expect(rewarded.data.length).toBe(ix.data.length + 5);
+    expect(rewarded.keys.at(-1)).toEqual({ pubkey: launch, isSigner: false, isWritable: false });
     expect([decoded.data.args.modules, decoded.data.args.maxWalletBps, String(decoded.data.args.earlyUnlockAt)]).toEqual([14, 200, '1800003600']);
   });
 });
@@ -272,7 +283,8 @@ describe('phase 1: the launchpad’s builders with rules against the IDL', () =>
     [0, 0, 100, 50, 200].forEach((v, i) => tail.writeUInt16LE(v, 2 * i));
     [7 * 86_400, 60, 3_600].forEach((v, i) => tail.writeUInt32LE(v, 10 + 4 * i));
     expect(ix.data.equals(Buffer.concat([without.data, tail]))).toBe(true);
-    const decoded = CODERS.launch.instruction.decode(ix.data) as { name: string; data: { args: { rules: Record<string, unknown> } } };
+    // The IDL's struct ends with the payouts (§7.5), which nothing here writes: the coder reads them as zeros appended.
+    const decoded = CODERS.launch.instruction.decode(Buffer.concat([ix.data, Buffer.alloc(5)])) as { name: string; data: { args: { rules: Record<string, unknown> } } };
     expect(decoded.data.args.rules).toMatchObject({ burnBuyBps: 100, burnSellBps: 50, maxWalletBps: 200, creatorLockSecs: 604_800, earlyWindowSecs: 60, earlyLockSecs: 3_600 });
   });
 
@@ -428,5 +440,171 @@ describe('phase 1: the accounts and events', () => {
     // Another launchpad event logged the same way is not read.
     const other = encodeEvent('LegOpened', { launch, mint, index: 1, quoteMint: k(), pool, feeAccount: k(), virtualQuote: new BN(5), share: new BN(6), opened: 2, count: 2, payer: k(), slot: new BN(9), ts: new BN(1) }).toString('base64');
     expect(legLogEventsOf([`Program ${launchpad} invoke [1]`, `Program data: ${other}`, `Program ${launchpad} success`])).toEqual([]);
+  });
+});
+
+// ---- §7.4: Workshop items and the presets on a coin quoted in tokens ----------------------------------------------
+
+describe('§7.4: the launchpad from a config, a custom hook on the legs, the Legs registry entry', () => {
+  const RULES74: LaunchRulesData = { ...NO_TOKEN_LAUNCH_RULES, maxWalletBps: 200 };
+  const hookOf = (extras = 2): CustomHookAccounts => ({ program: k(), extras: Array.from({ length: extras }, (_, i) => ({ pubkey: k(), isSigner: false, isWritable: i === 0 })) });
+  const args = { name: 'Legs', symbol: 'LEG', uri: 'ipfs://x', creatorFeeBps: 100, virtualQuotes: [1n, 2n] };
+
+  it('create_token_launch from a config with a custom hook: the quote mints, the config, the hook, its signer, its registry, its extras, a timelocked hook’s Timelock last', () => {
+    const [creator, mint, treasury, q0, q1, config] = [k(), k(), k(), k(), k(), k()];
+    const hook = hookOf(3);
+    const ix = tokenLaunch.createTokenLaunchWith(creator, mint, treasury, args, [q0, q1], config, hook, { hookTimelocked: true });
+    const rest = heldToIdl(ix, 'launch', 'create_token_launch');
+    expect(marks(rest)).toEqual([ro(q0), ro(q1), ro(config), ro(hook.program), ro(a.tokenHookSigner(hook.program)), ro(a.registryAddress(hook.program, mint)), ...marks(hook.extras), ro(timelockAddress(hook.program))]);
+    // Without the timelock flag, no Timelock; from a config without a hook: the config, then the kit's six when its rules install the kit.
+    expect(tokenLaunch.createTokenLaunchWith(creator, mint, treasury, args, [q0, q1], config, hook).keys.length).toBe(ix.keys.length - 1);
+    const plain = heldToIdl(tokenLaunch.createTokenLaunchWith(creator, mint, treasury, { ...args, rules: RULES74 }, [q0, q1], config, null), 'launch', 'create_token_launch');
+    expect(marks(plain)).toEqual([ro(q0), ro(q1), ro(config), ...marks(tokenLaunchKitAccounts(mint))]);
+    // Without a config, exactly createTokenLaunch; a custom hook comes only from a config.
+    expect(tokenLaunch.createTokenLaunchWith(creator, mint, treasury, args, [q0], null, null).data.equals(tokenLaunch.createTokenLaunch(creator, mint, treasury, args, [q0]).data)).toBe(true);
+    expect(() => tokenLaunch.createTokenLaunchWith(creator, mint, treasury, args, [q0], null, hook)).toThrow(/config/);
+  });
+
+  it('open_leg_custom: the 23 accounts, then the hook, the token program’s signer for it and its extras', () => {
+    const keys = leg();
+    const hook = hookOf(2);
+    const ix = tokenLaunch.openLegCustom(k(), k(), keys, 1, hook);
+    expect(marks(heldToIdl(ix, 'launch', 'open_leg'))).toEqual([ro(hook.program), ro(a.tokenHookSigner(hook.program)), ...marks(hook.extras)]);
+  });
+
+  it('a leg swap with a custom hook’s slice on the coin’s side', () => {
+    const keys = leg();
+    const hook = hookOf(2);
+    const [trader, base, quote] = [k(), k(), k()];
+    const buy = tokenLaunch.legSwapWithSlice(keys, trader, base, quote, 1, 5n, 1n, customHookSlice(hook), true);
+    expect(marks(heldToIdl(buy, 'swap', 'swap_spl', ['base_mint']))).toEqual([...marks(customHookSlice(hook)), ...marks(legHookExtras(keys.mint, keys.quoteMint))]);
+    expect([buy.data[25], buy.data[26]]).toEqual([0, 4]);
+  });
+
+  it('the Legs registry entry: 49 bytes of Borsh, as legs_registry_entry writes it; lists_legs finds it writable or not', () => {
+    const list = { version: 1, accounts: [{ writable: true, source: { kind: 'key' as const, key: k() } }, legsRegistryEntry()] };
+    const bytes = encodeHookAccountList(list);
+    const entry = bytes.subarray(bytes.length - 49);
+    expect(entry.toString('hex')).toBe('0001' + a.LAUNCH_PROGRAM.toBuffer().toString('hex') + '02000000' + '00040000006c656773' + '0101');
+    expect([listsLegs(list), listsLegs({ version: 1, accounts: [{ ...legsRegistryEntry(), writable: true }] }), listsLegs({ version: 1, accounts: [list.accounts[0]!] })]).toEqual([true, true, false]);
+    // Resolved for a mint, it is the coin's Legs.
+    const mint = k();
+    expect(resolveHookAccounts({ version: 1, accounts: [legsRegistryEntry()] }, [k(), mint, k(), k(), k()])[0]!.pubkey.equals(legsAddress(mint))).toBe(true);
+  });
+});
+
+describe('§7.4: the companion on a coin quoted in tokens, against its IDL', () => {
+  const RULES74: LaunchRulesData = { ...NO_TOKEN_LAUNCH_RULES, burnBuyBps: 100, maxWalletBps: 200 };
+
+  it('launch_token: the launcher (s), the companion, the creator address, the CompanionLegs, the launchpad; then create_token_launch’s accounts, only the mint signing', () => {
+    const [launcher, mint, treasury, q0] = [k(), k(), k(), k()];
+    const creator = a.companionCreatorAddress(mint);
+    const inner = tokenLaunch.createTokenLaunchWith(creator, mint, treasury, { name: 'C', symbol: 'C', uri: 'u', creatorFeeBps: 200, virtualQuotes: [5n], rules: RULES74 }, [q0], null, null);
+    const ix = companion.launchToken(launcher, mint, inner, { name: 'C', symbol: 'C', uri: 'u', creatorFeeBps: 200, virtualQuotes: [5n], rules: RULES74 });
+    const rest = heldToIdl(ix, 'companion', 'launch_token');
+    expect([ix.keys[1]!.pubkey, ix.keys[2]!.pubkey, ix.keys[3]!.pubkey].map(String)).toEqual([a.companionAddress(mint), creator, companionLegsAddress(mint)].map(String));
+    expect(companionLegsAddress(mint).equals(PublicKey.findProgramAddressSync([Buffer.from('companion-legs'), mint.toBuffer()], a.COMPANION_PROGRAM)[0])).toBe(true);
+    expect(rest.map((m) => [m.pubkey.toBase58(), m.isWritable, m.isSigner])).toEqual(inner.keys.map((m) => [m.pubkey.toBase58(), m.isWritable, m.pubkey.equals(mint)]));
+    const decoded = CODERS.companion.instruction.decode(Buffer.concat([ix.data, Buffer.alloc(5)])) as unknown as { name: string; data: { args: { rules: Record<string, unknown>; virtualQuotes: BN[] } } };
+    expect([decoded.name, Number(decoded.data.args.rules.maxWalletBps), decoded.data.args.virtualQuotes.map(String)]).toEqual(['launchToken', 200, ['5']]);
+    // No rules: the companion still sends them (zeros), whole.
+    const none = companion.launchToken(launcher, mint, inner, { name: 'C', symbol: 'C', uri: 'u', creatorFeeBps: 200, virtualQuotes: [5n] });
+    expect(none.data.length).toBe(ix.data.length);
+  });
+
+  it('claim_fees_leg: the leg step’s named accounts, claim_creator_fees_token for the creator address with the launchpad, the bounty account last', () => {
+    const keys = leg({ quoteProgram: a.SPL_TOKEN_PROGRAM });
+    const cranker = k();
+    const creator = a.companionCreatorAddress(keys.mint);
+    const ix = companion.claimFeesLeg(cranker, keys, 2, true);
+    const rest = heldToIdl(ix, 'companion', 'claim_fees_leg');
+    const claim = tokenLaunch.claimCreatorFeesToken(cranker, creator, keys, 2);
+    expect(marks(rest)).toEqual([...claim.keys.map((m) => [m.pubkey.toBase58(), m.isWritable, false] as [string, boolean, boolean]), ro(a.LAUNCH_PROGRAM), rw(a.associatedTokenAddress(cranker, keys.quoteMint, a.SPL_TOKEN_PROGRAM))]);
+    expect([...ix.data.subarray(8)]).toEqual([2]);
+    expect(companion.claimFeesLeg(cranker, keys, 2, false).keys.length).toBe(ix.keys.length - 1);
+  });
+
+  it('withdraw_leg: the launcher named, then the leg’s mint, the creator address’s and the launcher’s accounts of it, its program and the ATA program', () => {
+    const keys = leg();
+    const [sender, beneficiary] = [k(), k()];
+    const ix = companion.withdrawLeg(sender, beneficiary, keys, 0);
+    const rest = heldToIdl(ix, 'companion', 'withdraw_leg');
+    expect(ix.keys[3]!.pubkey.equals(beneficiary)).toBe(true);
+    expect(marks(rest)).toEqual([ro(keys.quoteMint), rw(a.associatedTokenAddress(a.companionCreatorAddress(keys.mint), keys.quoteMint, keys.quoteProgram)), rw(a.associatedTokenAddress(beneficiary, keys.quoteMint, keys.quoteProgram)), ro(keys.quoteProgram), ro(a.ATA_PROGRAM)]);
+  });
+
+  it('buyback_leg and snowball_step_leg: the creator address’s leg swap with the coin’s slice and the mint writable, create_holding, the burn (a buyback) or the Legs (a Snowball), the bounty', () => {
+    const keys = leg({ quoteProgram: a.SPL_TOKEN_PROGRAM });
+    const cranker = k();
+    const creator = a.companionCreatorAddress(keys.mint);
+    const holding = a.holdingAddress(keys.mint, creator);
+    const swapOf = (slice: AccountMeta[]) => tokenLaunch.legSwapWithSlice(keys, creator, holding, a.associatedTokenAddress(creator, keys.quoteMint, a.SPL_TOKEN_PROGRAM), 1, 0n, 0n, slice, true);
+    const plainRules = NO_TOKEN_LAUNCH_RULES;
+    const viaKit = companion.buybackLeg(cranker, keys, 1, RULES74, null, true);
+    const rest = heldToIdl(viaKit, 'companion', 'buyback_leg');
+    const swap = swapOf(legsHookSlice(keys.mint));
+    const flat = (ix: TransactionInstruction): [string, boolean, boolean][] => [...ix.keys.map((m) => [m.pubkey.toBase58(), m.isWritable, false] as [string, boolean, boolean]), ro(ix.programId)];
+    const burn = token.burn(creator, holding, keys.mint, 0n, kitLegsTokenHook(keys.mint));
+    expect(marks(rest)).toEqual([...flat(swap), ...flat(token.createHolding(cranker, keys.mint, creator)), ...flat(burn), rw(a.associatedTokenAddress(cranker, keys.quoteMint, a.SPL_TOKEN_PROGRAM))]);
+    // The swap's mint writable (it burns), its slice the kit's with the Legs.
+    expect(swap.keys[3]!.isWritable).toBe(true);
+    // No rules: no slice, the burn hookless; a custom hook: its slice, its registry after the swap, the burn through it.
+    const plain = heldToIdl(companion.buybackLeg(cranker, keys, 1, plainRules, null, false), 'companion', 'buyback_leg');
+    expect(marks(plain)).toEqual([...flat(swapOf([])), ...flat(token.createHolding(cranker, keys.mint, creator)), ...flat(token.burn(creator, holding, keys.mint, 0n, null))]);
+    const hook: CustomHookAccounts = { program: k(), extras: [{ pubkey: k(), isSigner: false, isWritable: true }] };
+    const viaHook = heldToIdl(companion.buybackLeg(cranker, keys, 1, plainRules, hook, false), 'companion', 'buyback_leg');
+    expect(marks(viaHook)).toEqual([...flat(swapOf(customHookSlice(hook))), ro(a.registryAddress(hook.program, keys.mint)), ...flat(token.createHolding(cranker, keys.mint, creator)), ...flat(token.burn(creator, holding, keys.mint, 0n, customHookTokenHook(hook)))]);
+    // The Snowball's step: its terms at 5, the trade's accounts, the Legs, the bounty.
+    const snow = companion.snowballStepLeg(cranker, keys, 0, RULES74, null, true);
+    expect(snow.keys[5]!.pubkey.equals(a.snowballAddress(keys.mint))).toBe(true);
+    expect(marks(heldToIdl(snow, 'companion', 'snowball_step_leg'))).toEqual([...flat(swap), ...flat(token.createHolding(cranker, keys.mint, creator)), ro(legsAddress(keys.mint)), rw(a.associatedTokenAddress(cranker, keys.quoteMint, a.SPL_TOKEN_PROGRAM))]);
+  });
+
+  it('decodes CompanionLegs through the IDL (written here by the IDL’s own layout, whatever it grows to): the first count legs, each a LegPot', () => {
+    // The IDL coder's encode writes at most 1,000 bytes, so the account's layout writes into a buffer of its size.
+    type IdlType = string | { array: [IdlType, number] } | { defined: { name: string } };
+    const types = (IDL.companion as unknown as { types: { name: string; type: { fields: { name: string; type: IdlType }[] } }[] }).types;
+    const camel = (s: string) => s.replace(/_(\w)/g, (_, c: string) => c.toUpperCase());
+    // Every field the IDL names, zero, so a field the layout gains needs nothing here.
+    const zero = (t: IdlType): unknown =>
+      typeof t === 'string' ? (t === 'pubkey' ? PublicKey.default : /^[ui](64|128)$/.test(t) ? new BN(0) : 0)
+      : 'array' in t ? Array.from({ length: t.array[1] }, () => zero(t.array[0]))
+      : Object.fromEntries(types.find((d) => d.name === t.defined.name)!.type.fields.map((f) => [camel(f.name), zero(f.type)]));
+    const mint = k();
+    const q = k();
+    const value = zero({ defined: { name: 'CompanionLegs' } }) as Record<string, unknown> & { legs: Record<string, unknown>[] };
+    Object.assign(value, { version: 1, bump: 255, mint, count: 1 });
+    Object.assign(value.legs[0]!, { quoteMint: q, quoteProgram: 1, decimals: 8, currency: 0, pendingBuyback: new BN(7), pendingBeneficiary: new BN(3), pendingPot: new BN(11), tokensHeld: new BN(13), referencePrice: new BN((10n ** 21n).toString()), lastAt: new BN(99), claimedTotal: new BN(21), paidBeneficiaryTotal: new BN(5) });
+    const layout = (CODERS.companion.accounts as unknown as { accountLayouts: Map<string, { discriminator: number[]; layout: { encode: (v: unknown, b: Buffer) => number } }> }).accountLayouts.get('companionLegs')!;
+    const data = Buffer.alloc(COMPANION_LEGS_LEN);
+    Buffer.from(layout.discriminator).copy(data, 0);
+    expect(8 + layout.layout.encode(value, data.subarray(8))).toBe(COMPANION_LEGS_LEN);
+    // The discriminator §7.4 gives, and at least its size (the review's Snowball fields grow each leg).
+    expect([...data.subarray(0, 8)]).toEqual([0x8e, 0x9d, 0x68, 0xfd, 0xa3, 0xaf, 0xf4, 0xea]);
+    expect(COMPANION_LEGS_LEN).toBeGreaterThanOrEqual(1_053);
+    const c = decodeCompanionLegs(data);
+    expect(c).toMatchObject({ version: 1, count: 1 });
+    expect(c.mint.equals(mint)).toBe(true);
+    expect(c.legs).toHaveLength(1);
+    expect(c.legs[0]).toMatchObject({ quoteProgram: 1, decimals: 8, currency: 0, pendingBuyback: 7n, pendingBeneficiary: 3n, pendingPot: 11n, tokensHeld: 13n, referencePrice: 10n ** 21n, lastAt: 99, claimedTotal: 21n, paidBeneficiaryTotal: 5n });
+    expect(c.legs[0]!.quoteMint.equals(q)).toBe(true);
+  });
+
+  it('reads the companion’s six leg events and the launchpad’s TokenLaunchConfigured typed', () => {
+    const encodeIn = (program: 'companion' | 'launch', name: string, data: Record<string, unknown>): Buffer => {
+      const idl = IDL[program] as unknown as { events: { name: string; discriminator: number[] }[] };
+      return Buffer.concat([Buffer.from(idl.events.find((e) => e.name === name)!.discriminator), CODERS[program].types.encode(name.charAt(0).toLowerCase() + name.slice(1), data)]);
+    };
+    const [comp, q, cranker, dest] = [k(), k(), k(), k()];
+    const read = (program: 'companion' | 'launch', name: string, data: Record<string, unknown>) => typedLegEvent({ program, ...decodeEventPayload(program, encodeIn(program, name, data))! });
+    expect(read('companion', 'LegFeesClaimed', { companion: comp, index: 1, quoteMint: q, claimed: new BN(100), bounty: new BN(1), toBuyback: new BN(60), toHolders: new BN(0), toBeneficiary: new BN(39), toPot: new BN(0), cranker })).toEqual({ kind: 'companion.LegFeesClaimed', companion: comp.toBase58(), index: 1, quoteMint: q.toBase58(), claimed: 100n, bounty: 1n, toBuyback: 60n, toHolders: 0n, toBeneficiary: 39n, toPot: 0n, cranker: cranker.toBase58() });
+    expect(read('companion', 'LegBeneficiaryPaid', { companion: comp, index: 0, quoteMint: q, amount: new BN(39), destination: dest })).toMatchObject({ kind: 'companion.LegBeneficiaryPaid', amount: 39n, destination: dest.toBase58() });
+    expect(read('companion', 'LegBoughtBack', { companion: comp, index: 2, spent: new BN(50), burned: new BN(7000), bounty: new BN(0), priceAfter: new BN('123456789012345678901'), cranker })).toMatchObject({ kind: 'companion.LegBoughtBack', index: 2, spent: 50n, burned: 7000n, priceAfter: 123456789012345678901n });
+    expect(read('companion', 'LegBuybackWaited', { companion: comp, index: 0, price: new BN(5), reference: new BN(4) })).toMatchObject({ kind: 'companion.LegBuybackWaited', price: 5n, reference: 4n });
+    expect(read('companion', 'LegSnowballTraded', { companion: comp, index: 0, side: 0, onStep: true, quote: new BN(9), tokens: new BN(8), bounty: new BN(0), priceBefore: new BN(1), priceAfter: new BN(2), potAfter: new BN(3), tokensAfter: new BN(4), cranker })).toMatchObject({ kind: 'companion.LegSnowballTraded', side: 'sell', onStep: true, quote: 9n, tokensAfter: 4n });
+    expect(read('companion', 'LegSnowballFollowed', { companion: comp, index: 0, referenceBefore: new BN(6), price: new BN(7) })).toMatchObject({ kind: 'companion.LegSnowballFollowed', referenceBefore: 6n, price: 7n });
+    const [launch, mint, config, hook] = [k(), k(), k(), k()];
+    expect(read('launch', 'TokenLaunchConfigured', { launch, mint, config, customHook: hook, customHookFlags: 0x3c1, ts: new BN(5) })).toEqual({ kind: 'launch.TokenLaunchConfigured', launch: launch.toBase58(), mint: mint.toBase58(), config: config.toBase58(), customHook: hook.toBase58(), customHookFlags: 0x3c1, ts: 5 });
+    expect(read('launch', 'TokenLaunchConfigured', { launch, mint, config, customHook: null, customHookFlags: 0, ts: new BN(5) })).toMatchObject({ customHook: null });
   });
 });

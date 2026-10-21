@@ -17,7 +17,7 @@ describe('checkKeeperJson', () => {
   });
 
   it('refuses what the Workshop refuses, with its sentence', () => {
-    expect(checkKeeperJson('{"version":1}')).toEqual({ ok: false, problem: 'keeper.json: holdings is required: which holdings each step brings.' });
+    expect(checkKeeperJson('{"version":1}')).toEqual({ ok: false, problem: 'keeper.json: holdings is required: which holdings each step brings (null with wallets, or with quoteTokens and its legs).' });
     expect(checkKeeperJson(KEEPER_EXAMPLE.replace('"ownerQuoteHolding"', '"anyone"'))).toEqual({ ok: false, problem: 'keeper.json: holdings.payTo is one of none, owner, ownerQuoteHolding, ownerTokenAccount: where each holding is paid.' });
   });
 

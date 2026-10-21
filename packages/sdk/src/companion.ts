@@ -44,7 +44,10 @@ import * as a from './addresses.ts';
 import { CODERS } from './coders.ts';
 import { MAX_ROUND_SECS, roundEnd, validRoundSecs } from './game.ts';
 import { MAX_MIN_STREAK_SECS, MAX_TIMER_SECS, MIN_TIMER_SECS } from './gameKinds.ts';
-import { customHookTokenHook, kitTokenHook, type CustomHookAccounts, type HookAccountList, type TokenHook } from './hooks.ts';
+import { customHookSlice, customHookTokenHook, kitTokenHook, type CustomHookAccounts, type HookAccountList, type TokenHook } from './hooks.ts';
+import { kitModulesOf, type LaunchRulesData } from './accounts.ts';
+import { kitPayouts, swapToSolRest } from './payouts.ts';
+import { NO_TOKEN_LAUNCH_RULES, TOKEN_LAUNCH_RULES_BYTES, hasTokenLaunchRules, kitLegsTokenHook, legBaseSlice, legQuoteAccount, legsAddress, tokenLaunch, tokenLaunchArgsData, type CreateTokenLaunchArgs, type LegKeys } from './legs.ts';
 import { PROTOCOL_PROGRAMS } from './inspect.ts';
 import { bridge, kit, launch, token, type CreateLaunchArgs, type LaunchKeys } from './instructions.ts';
 import { drawSeed, oraoRequestV2, type SeedSlot } from './orao.ts';
@@ -180,6 +183,27 @@ const hookRegistry = (keys: LaunchKeys): AccountMeta[] => (keys.customHook ? [ro
 
 const step = (cranker: PublicKey, mint: PublicKey): AccountMeta[] => [rw(cranker, true), rw(a.companionAddress(mint)), rw(a.companionCreatorAddress(mint)), ro(a.launchAddress(mint)), ro(a.SYSTEM_PROGRAM)];
 const unwrapAccounts = (creator: PublicKey): AccountMeta[] => remaining(bridge.unwrapSol(creator, 0n));
+
+/** A preset companion's pots on the legs of a coin quoted in tokens: `PDA(["companion-legs", mint])` under the companion (docs/token-quotes.md §7.4). */
+export const companionLegsAddress = (mint: PublicKey): PublicKey => PublicKey.findProgramAddressSync([Buffer.from('companion-legs'), mint.toBuffer()], a.COMPANION_PROGRAM)[0];
+
+/** The named accounts of a leg step (`claim_fees_leg`, `buyback_leg`; the Snowball's terms go in at 5 for `snowball_step_leg`): the companion read-only. */
+const legStep = (cranker: PublicKey, mint: PublicKey): AccountMeta[] => [rw(cranker, true), ro(a.companionAddress(mint)), rw(a.companionCreatorAddress(mint)), ro(a.launchAddress(mint)), rw(companionLegsAddress(mint)), ro(a.SYSTEM_PROGRAM)];
+
+/** The sender's associated account of the leg's token, for the bounty, or nothing. */
+const legBounty = (keys: LegKeys, cranker: PublicKey, bounty: boolean): AccountMeta[] => (bounty ? [rw(legQuoteAccount(keys, cranker))] : []);
+
+/**
+ * A leg trade by the creator address, as the program builds it (`leg_trade_accounts`): the leg's `swap_spl` (a buy's; a sell takes the same
+ * accounts) with the coin's slice (a custom hook's, else the kit's when the rules install it) and the mint writable, the hook's registry (the
+ * program resolves the hook's extras from it), `create_holding` of the creator's coin holding (the sender paying it the first time).
+ */
+function legTradeAccounts(cranker: PublicKey, keys: LegKeys, rules: LaunchRulesData, customHook: CustomHookAccounts | null): AccountMeta[] {
+  const creator = a.companionCreatorAddress(keys.mint);
+  const slice = customHook ? customHookSlice(customHook) : legBaseSlice(keys.mint, kitModulesOf(rules));
+  const swap = tokenLaunch.legSwapWithSlice(keys, creator, a.holdingAddress(keys.mint, creator), legQuoteAccount(keys, creator), 1, 0n, 0n, slice, true);
+  return [...remaining(swap), ...(customHook ? [ro(a.registryAddress(customHook.program, keys.mint))] : []), ...remaining(token.createHolding(cranker, keys.mint, creator))];
+}
 
 /** The named accounts of `draw`, `reveal`, `expire` and `retire` (`GameStep`). */
 const gameStep = (cranker: PublicKey, mint: PublicKey, hook: PublicKey): AccountMeta[] => [
@@ -478,6 +502,118 @@ export const companion = {
     ];
     const named = [rw(cranker, true), rw(a.companionAddress(keys.mint)), rw(creator), ro(a.launchAddress(keys.mint)), rw(a.snowballAddress(keys.mint)), ro(a.SYSTEM_PROGRAM)];
     return build('snowballStep', {}, named, extra);
+  },
+
+  // ---- coins quoted in tokens (docs/token-quotes.md §7.4) ----
+
+  /**
+   * `launch_token`: `create_token_launch` through the companion (`bordrless_companion::client::launch_token`), its creator address the
+   * launch's creator. Build `createTokenLaunch` with `tokenLaunch.createTokenLaunchWith(companionCreatorAddress(mint), …)`; the mint signs.
+   * A script companion (its `pot_bps` 10,000) or a preset (a buyback, the launcher's part, a split of the two, a Snowball), whose pots
+   * on the legs (`companionLegsAddress`) it makes; no game, holders' part or payees (`TokenLaunchKind`, `TokenCoinPayees`). The args
+   * always carry the rules (the companion forwards them to the new launchpad, which takes either form).
+   */
+  launchToken(launcher: PublicKey, mint: PublicKey, createTokenLaunch: TransactionInstruction, args: CreateTokenLaunchArgs): TransactionInstruction {
+    const named = [ro(launcher, true), rw(a.companionAddress(mint)), rw(a.companionCreatorAddress(mint)), rw(companionLegsAddress(mint)), ro(a.LAUNCH_PROGRAM)];
+    const inner = createTokenLaunch.keys.map((m) => ({ pubkey: m.pubkey, isSigner: m.isSigner && m.pubkey.equals(mint), isWritable: m.isWritable }));
+    // The rules always (as §7.4 built it), the payouts only when set (§7.5: data that ends before them reads as none).
+    const full = tokenLaunchArgsData('companion', 'launchToken', { ...args, rules: args.rules ?? NO_TOKEN_LAUNCH_RULES, payouts: args.payouts ?? null });
+    const keep = hasTokenLaunchRules(args.rules) || (args.payouts && (args.payouts.flags !== 0 || args.payouts.holderRoundSecs !== 0)) ? full : Buffer.concat([full, Buffer.alloc(TOKEN_LAUNCH_RULES_BYTES)]);
+    return new Ix({ programId: a.COMPANION_PROGRAM, keys: [...named, ro(a.COMPANION_EVENT_AUTHORITY), ro(a.COMPANION_PROGRAM), ...inner], data: keep });
+  },
+  /**
+   * `claim_fees_leg(index)` (anyone) of a preset companion's coin: the launchpad's `claim_creator_fees_token` for the creator address (the
+   * sender paying its token account of the leg's token the first time), then the split of what that account holds above the leg's
+   * set-aside; with `bounty` the sender's own associated account of the leg's token (it must exist) takes the bounty.
+   */
+  claimFeesLeg(cranker: PublicKey, keys: LegKeys, index: number, bounty: boolean): TransactionInstruction {
+    const creator = a.companionCreatorAddress(keys.mint);
+    const extra = [...remaining(tokenLaunch.claimCreatorFeesToken(cranker, creator, keys, index)), ...legBounty(keys, cranker, bounty)];
+    return build('claimFeesLeg', { index }, legStep(cranker, keys.mint), extra);
+  },
+  /**
+   * `launch_token` of a game companion (§7.6.9, `launch_token_game`): its `Game` appended after `create_token_launch`'s accounts, writable
+   * (its token terms read, and the game marked launched in the legs' tokens: review 5, F4; never forwarded; `MissingAccount` without it).
+   * A game in the legs' tokens has its terms (`setGameTokenTerms`) and no SOL switch; with the switch it has none (`TokenGameTerms`).
+   */
+  launchTokenGame(launcher: PublicKey, mint: PublicKey, createTokenLaunch: TransactionInstruction, args: CreateTokenLaunchArgs): TransactionInstruction {
+    const ix = companion.launchToken(launcher, mint, createTokenLaunch, args);
+    ix.keys.push(rw(a.gameAddress(mint)));
+    return ix;
+  },
+  /**
+   * `set_game_token_terms(min_pot_bps)` (§7.6.9), the mint signing, before the launch: a game's least pot on a coin quoted in tokens without
+   * the switch, in basis points of the coin's opening value summed over the legs (0 to 10,000; 0 clears it; the site sends 100). It marks
+   * the pot as kept per leg in the legs' tokens. A strategy takes none (`StrategyOnTokenCoin`).
+   */
+  setGameTokenTerms(mint: PublicKey, minPotBps: number): TransactionInstruction {
+    if (!Number.isInteger(minPotBps) || minPotBps < 0 || minPotBps > 10_000) throw new Error('min_pot_bps is 0 to 10,000');
+    return build('setGameTokenTerms', { minPotBps }, [ro(mint, true), ro(a.companionAddress(mint)), rw(a.gameAddress(mint))], []);
+  },
+  /**
+   * `launch_token` of a preset with payees on a coin quoted in tokens without the switch (§7.5.5): the companion's `PayeesLegs` after
+   * `create_token_launch`'s accounts (`PayeesLegsMissing` otherwise), made there from the creator address's lamports.
+   */
+  launchTokenWithPayees(launcher: PublicKey, mint: PublicKey, createTokenLaunch: TransactionInstruction, args: CreateTokenLaunchArgs): TransactionInstruction {
+    const ix = companion.launchToken(launcher, mint, createTokenLaunch, args);
+    ix.keys.push(rw(payeesLegsAddress(mint)));
+    return ix;
+  },
+  /**
+   * `withdraw_leg(index)` of a companion with payees (§7.5.5, `wallets` in `set_payees`' order): after `withdrawLeg`'s accounts its `Payees`,
+   * its `PayeesLegs` (w), and each payee's wallet and associated account of the leg's token (w; made when missing, the sender paying).
+   */
+  withdrawLegWithPayees(sender: PublicKey, beneficiary: PublicKey, keys: LegKeys, index: number, wallets: readonly PublicKey[]): TransactionInstruction {
+    const ix = companion.withdrawLeg(sender, beneficiary, keys, index);
+    ix.keys.push(ro(a.payeesAddress(keys.mint)), rw(payeesLegsAddress(keys.mint)), ...wallets.flatMap((w) => [ro(w), rw(legQuoteAccount(keys, w))]));
+    return ix;
+  },
+  /**
+   * `share_leg(index)` (anyone, switch off): the leg's holders' part shared through the kit's `share_token` for the creator address (its
+   * accounts as remaining, the creator unsigned), with `bounty` the sender's account of the leg's token after them.
+   */
+  shareLeg(cranker: PublicKey, keys: LegKeys, index: number, bounty: boolean): TransactionInstruction {
+    const creator = a.companionCreatorAddress(keys.mint);
+    const extra = [...remaining(kitPayouts.shareToken(creator, keys.mint, index, keys.quoteMint, keys.quoteProgram, legQuoteAccount(keys, creator), 0n)), ...legBounty(keys, cranker, bounty)];
+    return build('shareLeg', { index }, legStep(cranker, keys.mint), extra);
+  },
+  /**
+   * `swap_bucket_to_sol(index, part)` (anyone, switch on): `part` 0 the launcher's, 1 the holders', 2 a game's pot (§7.6.9, `PART_POT`) of leg `keys` sold to SOL onto
+   * the creator address; `venue` the token's reference pool's venue accounts (or `viaUsdcAccounts` with the creator address as the seller).
+   */
+  swapBucketToSol(cranker: PublicKey, keys: LegKeys, index: number, part: 0 | 1 | 2, venue: AccountMeta[]): TransactionInstruction {
+    const mint = keys.mint;
+    const creator = a.companionCreatorAddress(mint);
+    const named = [rw(cranker, true), rw(a.companionAddress(mint)), rw(creator), ro(a.launchAddress(mint)), rw(companionLegsAddress(mint)), ro(a.SYSTEM_PROGRAM), ro(a.LAUNCH_PROGRAM)];
+    const rest = swapToSolRest(creator, mint, keys.quoteMint, keys.quoteProgram, venue);
+    return build('swapBucketToSol', { index, part }, named, [ro(legsAddress(mint)), ro(keys.quoteMint), rw(legQuoteAccount(keys, creator)), ...rest.slice(1)]);
+  },
+  /** `withdraw_leg(index)` (anyone, `sender` paying the launcher's token account the first time): the leg's launcher's part to `beneficiary`'s associated account of the leg's token. */
+  withdrawLeg(sender: PublicKey, beneficiary: PublicKey, keys: LegKeys, index: number): TransactionInstruction {
+    const creator = a.companionCreatorAddress(keys.mint);
+    const named = [rw(sender, true), ro(a.companionAddress(keys.mint)), rw(creator), ro(beneficiary), ro(a.launchAddress(keys.mint)), rw(companionLegsAddress(keys.mint)), ro(a.SYSTEM_PROGRAM)];
+    const extra = [ro(keys.quoteMint), rw(legQuoteAccount(keys, creator)), rw(legQuoteAccount(keys, beneficiary)), ro(keys.quoteProgram), ro(a.ATA_PROGRAM)];
+    return build('withdrawLeg', { index }, named, extra);
+  },
+  /**
+   * `buyback_leg(index)` (anyone) of a buyback companion's coin whose rules are `rules` (`Launch.rules`) and custom hook `customHook` (its
+   * extras resolved for the creator address's buy and burn): the leg's `swap_spl` for the creator address with the coin's slice and the
+   * mint writable, the hook's registry, `create_holding` of the creator's coin holding, the token program's `burn`, and with `bounty` the
+   * sender's account of the leg's token.
+   */
+  buybackLeg(cranker: PublicKey, keys: LegKeys, index: number, rules: LaunchRulesData, customHook: CustomHookAccounts | null, bounty: boolean): TransactionInstruction {
+    const creator = a.companionCreatorAddress(keys.mint);
+    const holding = a.holdingAddress(keys.mint, creator);
+    const hook: TokenHook | null = customHook ? customHookTokenHook(customHook) : kitModulesOf(rules) !== 0 ? kitLegsTokenHook(keys.mint) : null;
+    const extra = [...legTradeAccounts(cranker, keys, rules, customHook), ...remaining(token.burn(creator, holding, keys.mint, 0n, hook)), ...legBounty(keys, cranker, bounty)];
+    return build('buybackLeg', { index }, legStep(cranker, keys.mint), extra);
+  },
+  /** `snowball_step_leg(index)` (anyone) of a Snowball's coin: as `buybackLeg` without the burn, the Snowball's terms among the named accounts and the coin's `Legs` (its early-buyer window) after the trade's. */
+  snowballStepLeg(cranker: PublicKey, keys: LegKeys, index: number, rules: LaunchRulesData, customHook: CustomHookAccounts | null, bounty: boolean): TransactionInstruction {
+    const named = legStep(cranker, keys.mint);
+    named.splice(5, 0, ro(a.snowballAddress(keys.mint)));
+    const extra = [...legTradeAccounts(cranker, keys, rules, customHook), ro(legsAddress(keys.mint)), ...legBounty(keys, cranker, bounty)];
+    return build('snowballStepLeg', { index }, named, extra);
   },
 
   // ---- approvals and script companions (2026-10-12, `scripts.ts`) ----
@@ -1172,6 +1308,95 @@ export function decodeCompanion(data: Buffer): Companion {
   };
 }
 
+/**
+ * One leg's pots of a preset companion on a coin quoted in tokens (`LegPot`, docs/token-quotes.md §7.4), raw units of the leg's token.
+ * Read through the companion IDL (`decodeCompanionLegs`), never by offsets: the layout grows (the review's Snowball fields, §7.5), and
+ * a new IDL in packages/sdk/idl is all a change takes.
+ */
+export interface LegPot {
+  quoteMint: PublicKey;
+  /** 0 SPL Token, 1 Token-2022. */
+  quoteProgram: number;
+  decimals: number;
+  /** 0: the parts are paid in the leg's token (`pays_in_token`; the SOL switch of §7.5 sets another). */
+  currency: number;
+  pendingBuyback: bigint;
+  pendingHolders: bigint;
+  pendingBeneficiary: bigint;
+  /** A Snowball's pot on this leg. */
+  pendingPot: bigint;
+  /** The coins a Snowball bought with this leg's pot. */
+  tokensHeld: bigint;
+  /** The leg's buyback reference price (quote per base unit times 10^12) and when it last moved. */
+  referencePrice: bigint;
+  referenceAt: number;
+  /** The leg's last buyback (and, before the IDL has `snowball_last_at`, Snowball) step. */
+  lastAt: number;
+  /** A Snowball's own reference price and last trade on this leg (`snowball_reference`, `snowball_last_at`): null with an IDL without them. */
+  snowballReference: bigint | null;
+  snowballLastAt: number | null;
+  claimedTotal: bigint;
+  bountiesTotal: bigint;
+  spentTotal: bigint;
+  burnedTotal: bigint;
+  paidBeneficiaryTotal: bigint;
+  /** §7.5: the holders' part shared through the kit (`share_leg`), and the tokens sold to SOL (`swap_bucket_to_sol`); null with an IDL without them. */
+  sharedTotal: bigint | null;
+  swappedTotal: bigint | null;
+  /**
+   * §7.6.9: a game's prize on this leg (a lottery draw's, a jackpot round's or a streak epoch's, fixed at the request or the close) and
+   * what of it was paid; for a script with payout terms its window's pot and what the window paid (`window_pot`, `window_paid` per leg).
+   * Absent with an IDL without them.
+   */
+  prize?: bigint;
+  prizePaid?: bigint;
+}
+
+/** A companion's payees on a coin quoted in tokens, what each is owed per leg: `PDA(["payees-legs", mint])` (`decodePayeesLegs`). */
+export const payeesLegsAddress = (mint: PublicKey): PublicKey => PublicKey.findProgramAddressSync([Buffer.from('payees-legs'), mint.toBuffer()], a.COMPANION_PROGRAM)[0];
+
+/** A preset companion's `CompanionLegs`: its pots per leg, the first `count` (the launch's legs). */
+export interface CompanionLegs {
+  version: number;
+  mint: PublicKey;
+  count: number;
+  legs: LegPot[];
+}
+
+/** `CompanionLegs`' size, from the companion IDL (1,053 B as §7.4 built it: 8 + 1 + 1 + 32 + 1 + 6 × 163 + 32; it grows with the IDL). */
+export const COMPANION_LEGS_LEN: number = (CODERS.companion.accounts as unknown as { size: (name: string) => number }).size('companionLegs');
+
+/** A `CompanionLegs` account, by its IDL name. */
+export function decodeCompanionLegs(data: Buffer): CompanionLegs {
+  const r = CODERS.companion.accounts.decode('companionLegs', data) as Record<string, unknown>;
+  const count = num(r.count);
+  const legs = (r.legs as Record<string, unknown>[]).slice(0, count).map((l) => ({
+    quoteMint: l.quoteMint as PublicKey,
+    quoteProgram: num(l.quoteProgram),
+    decimals: num(l.decimals),
+    currency: num(l.currency),
+    pendingBuyback: big(l.pendingBuyback),
+    pendingHolders: big(l.pendingHolders),
+    pendingBeneficiary: big(l.pendingBeneficiary),
+    pendingPot: big(l.pendingPot),
+    tokensHeld: big(l.tokensHeld),
+    referencePrice: big(l.referencePrice),
+    referenceAt: num(l.referenceAt),
+    lastAt: num(l.lastAt),
+    snowballReference: l.snowballReference === undefined ? null : big(l.snowballReference),
+    snowballLastAt: l.snowballLastAt === undefined ? null : num(l.snowballLastAt),
+    claimedTotal: big(l.claimedTotal),
+    bountiesTotal: big(l.bountiesTotal),
+    spentTotal: big(l.spentTotal),
+    burnedTotal: big(l.burnedTotal),
+    paidBeneficiaryTotal: big(l.paidBeneficiaryTotal),
+    sharedTotal: l.sharedTotal === undefined ? null : big(l.sharedTotal),
+    swappedTotal: l.swappedTotal === undefined ? null : big(l.swappedTotal),
+    ...(l.prize === undefined ? {} : { prize: big(l.prize), prizePaid: big(l.prizePaid) }),
+  }));
+  return { version: num(r.version), mint: r.mint as PublicKey, count, legs };
+}
+
 /** `Companion.version` of a companion whose beneficiary part is shared (`set_payees`): its `withdraw` takes its payees (`companion.withdrawWithPayees`). */
 export const COMPANION_VERSION_WITH_PAYEES = 2;
 /** The most wallets that share a beneficiary part. */
@@ -1255,6 +1480,16 @@ export interface Game {
   /** Phase 3a (X4): the deploy slot of the hook's code when its hashed audit last held for it (`hookAuditOk`); 0 and false until a step checks one. */
   hookAuditSlot: number;
   hookAuditOk: boolean;
+  /**
+   * §7.6.9: a game on a coin quoted in tokens whose pot is kept per leg in the legs' tokens (`set_game_token_terms`): its least pot in
+   * basis points of the coin's opening value (`reserved[0..2]`, byte 452); 0 for every other game (its pot is lamports).
+   */
+  minPotBps?: number;
+  /**
+   * §7.6.9 review 5 (F4): `launch_token` launched it in the legs' tokens with its terms (`reserved[2]` 1, byte 454). Only then is its pot
+   * kept per leg (`gameInTokens`): terms set before a SOL coin's `launch` are never read.
+   */
+  launchedInTokens?: boolean;
 }
 
 /** A `Game` account, by its IDL name `game`. */
@@ -1306,6 +1541,8 @@ export function decodeGame(data: Buffer): Game {
     epochPaid: big(r.epochPaid),
     hookAuditSlot: num(r.hookAuditSlot),
     hookAuditOk: Boolean(r.hookAuditOk),
+    minPotBps: r.reserved === undefined ? 0 : Buffer.from(r.reserved as number[]).readUInt16LE(0),
+    launchedInTokens: r.reserved !== undefined && (r.reserved as number[])[2] === 1,
   };
 }
 

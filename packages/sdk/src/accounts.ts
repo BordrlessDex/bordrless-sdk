@@ -289,6 +289,11 @@ export interface Launch {
    * `Legs`; it never graduates. Absent from launches decoded by older code.
    */
   tokenQuoted?: boolean;
+  /**
+   * A coin quoted in tokens' payouts (`Launch.reserved[19]`, byte 530, docs/token-quotes.md §7.5): bit 0 the SOL switch. 0 for every
+   * launch made before §7.5; absent from launches decoded by older code.
+   */
+  payouts?: number;
 }
 
 /** A custom hook's SOL cut caps, in basis points of a buy's SOL in and a sell's SOL out (each at most `QUOTE_CUT_MAX_BPS`). */
@@ -440,6 +445,16 @@ export interface KitConfig {
    * configs decoded by older code.
    */
   tokenQuoted?: boolean;
+  /**
+   * A coin quoted in tokens' reward kind (`reserved[10]`, byte 386, docs/token-quotes.md §7.5): 1 the leg's token (one leg, the
+   * accumulator, `claim_token`), 2 rounds (several legs, `start_round`/`pay_round`), 3 SOL (the switch, native from birth); 0 on
+   * every kit made before. With its round length (`reserved[11..15]`), the reward token's program (`reserved[15]`: 0 SPL Token,
+   * 1 Token-2022) and decimals (`reserved[16]`). Absent from configs decoded by older code.
+   */
+  rewardKind?: number;
+  roundSecs?: number;
+  rewardProgram?: number;
+  rewardDecimals?: number;
 }
 
 export interface TaxConfig {
@@ -732,6 +747,7 @@ export const decodeLaunch = (data: Buffer): Launch => {
     partnerShareBps: u16At(r.reserved as number[], 14),
     isNative: Number((r.reserved as number[])[17]) === 1,
     tokenQuoted: Number((r.reserved as number[])[18]) === 2,
+    payouts: Number((r.reserved as number[])[19] ?? 0),
   };
 };
 
@@ -805,6 +821,10 @@ export const decodeKitConfig = (data: Buffer): KitConfig => {
     lamportsBase: u64At(r.reserved as number[], 1),
     creatorIsCompanion: Boolean(r.creatorIsCompanion),
     tokenQuoted: Number((r.reserved as number[])[9]) === 2,
+    rewardKind: Number((r.reserved as number[])[10] ?? 0),
+    roundSecs: Buffer.from((r.reserved as number[]).slice(11, 15).map(Number)).readUInt32LE(0),
+    rewardProgram: Number((r.reserved as number[])[15] ?? 0),
+    rewardDecimals: Number((r.reserved as number[])[16] ?? 0),
   };
 };
 

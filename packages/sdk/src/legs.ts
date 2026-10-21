@@ -24,7 +24,8 @@ import { kitModulesOf, rulesBurn, type LaunchRulesData, type LegsAccount } from 
 import * as a from './addresses.ts';
 import { CODERS, type ProgramName } from './coders.ts';
 import { decodeEventPayload, type DecodedEvent, type SwappedEvent } from './events.ts';
-import { resolveHookAccounts, type HookAccountList, type TokenHook } from './hooks.ts';
+import { customHookLaunchAccounts, customHookSlice, resolveHookAccounts, type CustomHookAccounts, type HookAccountList, type AccountSource, type TokenHook } from './hooks.ts';
+import { timelockAddress } from './authority.ts';
 import type { CreatePoolArgs, SwapArgs } from './instructions.ts';
 
 const ro = (pubkey: PublicKey, isSigner = false): AccountMeta => ({ pubkey, isSigner, isWritable: false });
@@ -76,6 +77,11 @@ export const legQuoteVault = (keys: LegKeys): PublicKey => splVaultAddress(legPo
 export const legQuoteAccount = (keys: Pick<LegKeys, 'quoteMint' | 'quoteProgram'>, owner: PublicKey): PublicKey => a.associatedTokenAddress(owner, keys.quoteMint, keys.quoteProgram);
 /** A leg's creator-fee account. */
 export const legFeeAccount = (keys: Pick<LegKeys, 'mint' | 'quoteMint'>): PublicKey => legFeesAddress(keys.mint, keys.quoteMint);
+/**
+ * The kit's vault of a leg's token (`bordrless_launch::client::kit_vault_address`, docs/token-quotes.md §7.5): the kit config's associated
+ * token account of it, where a coin with holder rewards takes the leg's holder fee (callback index 9 of its trades) and `open_leg` makes it.
+ */
+export const kitVaultAddress = (keys: Pick<LegKeys, 'mint' | 'quoteMint' | 'quoteProgram'>): PublicKey => a.associatedTokenAddress(a.kitConfigAddress(keys.mint), keys.quoteMint, keys.quoteProgram);
 
 // ---- the kit on a coin quoted in tokens (phase 1) --------------------------------------------------------
 
@@ -128,6 +134,25 @@ export const legsSold = (legs: Pick<LegsAccount, 'legs'>): bigint => legs.legs.r
  * The trade that crosses `lift_at` is itself still capped.
  */
 export const legsMaxWalletHolds = (legs: Pick<LegsAccount, 'legs' | 'liftAt' | 'lifted'>): boolean => !legs.lifted && !(legs.liftAt > 0n && legsSold(legs) >= legs.liftAt);
+
+/**
+ * The entry a Workshop hook that declares `quoteTokens` writes in its registry for every mint (`bordrless_launch::instructions::legs_registry_entry`,
+ * docs/token-quotes.md §7.4): the coin's `Legs`, `Pda(LAUNCHPAD, ["legs", Account(1)])`, read-only. On a SOL coin the address holds nothing; on a
+ * coin quoted in tokens it is the `Legs`, which the hook reads to know every leg's pool. `create_token_launch` from a config refuses a hook whose
+ * registry lacks it (`HookMissingLegs`).
+ */
+export const LEGS_REGISTRY_SOURCE: AccountSource = { kind: 'pda', program: a.LAUNCH_PROGRAM, seeds: [{ kind: 'literal', bytes: enc('legs') }, { kind: 'account', index: 1 }] };
+export const legsRegistryEntry = (): HookAccountList['accounts'][number] => ({ writable: false, source: LEGS_REGISTRY_SOURCE });
+
+/** Whether a hook's registry lists the coin's `Legs` (`lists_legs`: the entry above, writable or not). */
+export function listsLegs(list: HookAccountList): boolean {
+  return list.accounts.some((x) => {
+    const src = x.source;
+    if (src.kind !== 'pda' || !src.program.equals(a.LAUNCH_PROGRAM) || src.seeds.length !== 2) return false;
+    const [first, second] = src.seeds;
+    return first!.kind === 'literal' && Buffer.from(first!.bytes).equals(enc('legs')) && second!.kind === 'account' && second!.index === 1;
+  });
+}
 
 /** When trading opened on a coin quoted in tokens: the latest leg's `opened_at` once every leg is open (`Legs::trading_opened_at`); null before. */
 export const legsTradingOpenedAt = (legs: Pick<LegsAccount, 'count' | 'opened' | 'legs'>): number | null =>
@@ -249,6 +274,27 @@ export interface CreateTokenLaunchArgs {
    * which the launchpad reads as none before and after its upgrade.
    */
   rules?: LaunchRulesData | null;
+  /**
+   * §7.5's payouts (`TokenPayouts`): the SOL switch (`flags` bit 0) and a rounds coin's round length (0: an hour). Absent or both 0:
+   * nothing is written, so the data is the call before §7.5; set without rules, 22 zero bytes of rules go first.
+   */
+  payouts?: { flags: number; holderRoundSecs: number } | null;
+}
+
+/** `TokenPayouts` in Borsh: `flags: u8`, `holder_round_secs: u32`. */
+const TOKEN_PAYOUTS_LEN = 5;
+
+/**
+ * `create_token_launch`'s arguments as the launchpad's hand-written read takes them: the IDL's whole struct, less the payouts when they
+ * are 0, less the rules too when they are none as well (data that ends early reads as 0). The companion's `launch_token` takes the same.
+ */
+export function tokenLaunchArgsData(coder: 'launch' | 'companion', name: string, args: CreateTokenLaunchArgs): Buffer {
+  const rules = hasTokenLaunchRules(args.rules) ? args.rules : null;
+  const payouts = args.payouts && (args.payouts.flags !== 0 || args.payouts.holderRoundSecs !== 0) ? args.payouts : null;
+  const base = { name: args.name, symbol: args.symbol, uri: args.uri, creatorFeeBps: args.creatorFeeBps, virtualQuotes: args.virtualQuotes.map(bn) };
+  const data = CODERS[coder].instruction.encode(name, { args: { ...base, rules: { ...(rules ?? NO_TOKEN_LAUNCH_RULES) }, payouts: { flags: payouts?.flags ?? 0, holderRoundSecs: payouts?.holderRoundSecs ?? 0 } } });
+  if (payouts) return data;
+  return data.subarray(0, data.length - TOKEN_PAYOUTS_LEN - (rules ? 0 : TOKEN_LAUNCH_RULES_BYTES));
 }
 
 export const tokenLaunch = {
@@ -258,19 +304,44 @@ export const tokenLaunch = {
    * (`tokenLaunchKitAccounts`; a burn alone takes none). The rules ride as the args' last field; none sends today's data.
    */
   createTokenLaunch(creator: PublicKey, mint: PublicKey, treasury: PublicKey, args: CreateTokenLaunchArgs, quoteMints: PublicKey[]): TransactionInstruction {
+    return tokenLaunch.createTokenLaunchWith(creator, mint, treasury, args, quoteMints, null, null);
+  },
+  /**
+   * `create_token_launch` from a launch config (`bordrless_launch::client::create_token_launch_with`, docs/token-quotes.md §7.4): after the
+   * quote mints, the config (r), then with its custom hook the hook's launch accounts (the hook, the token program's signer for it, its
+   * registry for the mint, its extras as the registry lists them; `customHookLaunchAccounts`) and a timelocked hook's `Timelock` last
+   * (`hookTimelocked`), else the kit's six when the config's rules install the kit. `creator` may be a companion's creator address
+   * (`companion.launchToken` wraps this). Without a config, exactly `createTokenLaunch`. The rules are the config's (`ConfigMismatch` otherwise).
+   */
+  createTokenLaunchWith(creator: PublicKey, mint: PublicKey, treasury: PublicKey, args: CreateTokenLaunchArgs, quoteMints: PublicKey[], launchConfig: PublicKey | null, customHook: CustomHookAccounts | null, opts: { hookTimelocked?: boolean } = {}): TransactionInstruction {
     const launch = a.launchAddress(mint);
     const rules = hasTokenLaunchRules(args.rules) ? args.rules : null;
     const metas = withEvents(a.LAUNCH_PROGRAM, [rw(creator, true), rw(a.LAUNCH_CONFIG), rw(treasury), rw(mint, true), rw(launch), rw(legsAddress(mint)), rw(a.holdingAddress(mint, launch)), ro(a.TOKEN_PROGRAM), ro(a.TOKEN_EVENT_AUTHORITY), ro(a.SYSTEM_PROGRAM)]);
-    const kit = rules && kitModulesOf(rules) !== 0 ? tokenLaunchKitAccounts(mint) : [];
-    const base = { name: args.name, symbol: args.symbol, uri: args.uri, creatorFeeBps: args.creatorFeeBps, virtualQuotes: args.virtualQuotes.map(bn) };
-    // The coder writes the IDL's whole struct (rules required there); without rules their 22 bytes are dropped, which the launchpad reads as none.
-    const data = CODERS.launch.instruction.encode('createTokenLaunch', { args: { ...base, rules: { ...(rules ?? NO_TOKEN_LAUNCH_RULES) } } });
-    return new TransactionInstruction({ programId: a.LAUNCH_PROGRAM, keys: [...metas, ...quoteMints.map((q) => ro(q)), ...kit], data: rules ? data : data.subarray(0, data.length - TOKEN_LAUNCH_RULES_BYTES) });
+    let kit = rules && kitModulesOf(rules) !== 0 ? tokenLaunchKitAccounts(mint) : [];
+    if (launchConfig) kit = [ro(launchConfig), ...(customHook ? [...customHookLaunchAccounts(customHook, mint), ...(opts.hookTimelocked ? [ro(timelockAddress(customHook.program))] : [])] : kit)];
+    else if (customHook) throw new Error('a custom hook comes from a launch config: name the config');
+    // The coder writes the IDL's whole struct (rules and payouts required there); what is none is dropped from the end (`tokenLaunchArgsData`).
+    return new TransactionInstruction({ programId: a.LAUNCH_PROGRAM, keys: [...metas, ...quoteMints.map((q) => ro(q)), ...kit], data: tokenLaunchArgsData('launch', 'createTokenLaunch', args) });
   },
-  /** `open_leg(index)`, `payer` paying the rent; `dexTreasury` the DEX config's treasury; `modules` the launch's kit modules (`Launch.modules`): with a kit its three accounts follow (`open_leg_with`). */
+  /**
+   * `open_leg(index)`, `payer` paying the rent; `dexTreasury` the DEX config's treasury; `modules` the launch's kit modules (`Launch.modules`):
+   * with a kit its three accounts follow, and with holder rewards (§7.5) the kit's vault of the leg's token as a fourth, made here when
+   * missing, the payer paying (`open_leg_with`).
+   */
   openLeg(payer: PublicKey, dexTreasury: PublicKey, keys: LegKeys, index: number, modules = 0): TransactionInstruction {
     const ix = tokenLaunch.openLegWithoutKit(payer, dexTreasury, keys, index);
     if (modules !== 0) ix.keys.push(ro(a.KIT_PROGRAM), ro(a.tokenHookSigner(a.KIT_PROGRAM)), rw(a.kitConfigAddress(keys.mint)));
+    if ((modules & 1) !== 0) ix.keys.push(rw(kitVaultAddress(keys)));
+    return ix;
+  },
+  /**
+   * `open_leg(index)` of a launch from a config with a custom hook (`bordrless_launch::client::open_leg_custom`, §7.4): the hook, the token
+   * program's signer for it and its extras resolved for the deposit (the launch's holding of the coin to the leg pool's base vault, the
+   * launch the authority) after the 23 accounts.
+   */
+  openLegCustom(payer: PublicKey, dexTreasury: PublicKey, keys: LegKeys, index: number, customHook: CustomHookAccounts): TransactionInstruction {
+    const ix = tokenLaunch.openLegWithoutKit(payer, dexTreasury, keys, index);
+    ix.keys.push(...customHookSlice(customHook));
     return ix;
   },
   /** `open_leg(index)` of a launch without kit rules (`bordrless_launch::client::open_leg`). */
@@ -326,8 +397,15 @@ export const tokenLaunch = {
    */
   legSwapWith(keys: LegKeys, trader: PublicKey, traderBase: PublicKey, traderQuote: PublicKey, direction: 0 | 1, amountIn: bigint, minAmountOut: bigint, rules: LaunchRulesData | null = null): TransactionInstruction {
     const slice = rules ? legBaseSlice(keys.mint, kitModulesOf(rules)) : [];
+    return tokenLaunch.legSwapWithSlice(keys, trader, traderBase, traderQuote, direction, amountIn, minAmountOut, slice, rules ? rulesBurn(rules) : false);
+  },
+  /**
+   * A `swap_spl` on a leg with the coin's token-hook `slice` on its side (`bordrless_launch::client::leg_swap_with_slice`): the kit's
+   * (`legBaseSlice`), a custom hook's (`customHookSlice`), or none; `baseMintWritable` when the coin burns on the trade.
+   */
+  legSwapWithSlice(keys: LegKeys, trader: PublicKey, traderBase: PublicKey, traderQuote: PublicKey, direction: 0 | 1, amountIn: bigint, minAmountOut: bigint, slice: AccountMeta[], baseMintWritable: boolean): TransactionInstruction {
     return splPool.swapSpl(
-      { trader, pool: legPoolAddress(keys), baseMint: keys.mint, quoteMint: keys.quoteMint, quoteProgram: keys.quoteProgram, traderBase, traderQuote, hookProgram: a.LAUNCH_PROGRAM, baseMintWritable: rules ? rulesBurn(rules) : false },
+      { trader, pool: legPoolAddress(keys), baseMint: keys.mint, quoteMint: keys.quoteMint, quoteProgram: keys.quoteProgram, traderBase, traderQuote, hookProgram: a.LAUNCH_PROGRAM, baseMintWritable },
       { direction, amountIn, minAmountOut, inHookAccounts: direction === 1 ? 0 : slice.length, outHookAccounts: direction === 1 ? slice.length : 0, hookData: new Uint8Array() },
       [...slice, ...legHookExtras(keys.mint, keys.quoteMint)],
     );
@@ -346,14 +424,12 @@ export const kitLegs = {
    * The kit's `init_legs` (`bordrless_kit::client::init_legs`): signed by the launch's kit-caller PDA (so only the launchpad's
    * `create_token_launch` sends it, by CPI) and paid by `payer`; `args` the kit's `KitInitArgs` (no reward mint).
    */
-  initLegs(kitCaller: PublicKey, payer: PublicKey, mint: PublicKey, args: Record<string, unknown> & { launch: PublicKey }): TransactionInstruction {
-    return ix(
-      a.KIT_PROGRAM,
-      'kit',
-      'initLegs',
-      { args },
-      withEvents(a.KIT_PROGRAM, [ro(kitCaller, true), rw(payer, true), ro(mint), ro(a.holdingAddress(mint, args.launch)), rw(a.kitConfigAddress(mint)), rw(a.kitRegistryAddress(mint)), ro(a.SYSTEM_PROGRAM)]),
-    );
+  initLegs(kitCaller: PublicKey, payer: PublicKey, mint: PublicKey, args: Record<string, unknown> & { launch: PublicKey; rewardMint?: PublicKey }, rewards: { kind: number; roundSecs: number } = { kind: 0, roundSecs: 0 }): TransactionInstruction {
+    // §7.5 (`init_legs_with`): the rewards' 5 bytes only with a kind; kind 1 names its reward mint (the leg's quote) after the event accounts.
+    const data = CODERS.kit.instruction.encode('initLegs', { args, rewards });
+    const keys = withEvents(a.KIT_PROGRAM, [ro(kitCaller, true), rw(payer, true), ro(mint), ro(a.holdingAddress(mint, args.launch)), rw(a.kitConfigAddress(mint)), rw(a.kitRegistryAddress(mint)), ro(a.SYSTEM_PROGRAM)]);
+    if (rewards.kind === 1 && args.rewardMint) keys.push(ro(args.rewardMint));
+    return new TransactionInstruction({ programId: a.KIT_PROGRAM, keys, data: rewards.kind === 0 ? data.subarray(0, data.length - 5) : data });
   },
 };
 
@@ -483,7 +559,30 @@ export interface LegsMaxWalletLiftedEvent {
   ts: number;
 }
 
-export type LegEvent = SplPoolCreatedEvent | TokenLaunchCreatedEvent | LegOpenedEvent | LegCreatorFeesClaimedEvent | TokenLaunchRulesEvent | TokenLaunchLocksEvent | LegsMaxWalletLiftedEvent;
+/** §7.4: the launchpad's `TokenLaunchConfigured`, after `TokenLaunchCreated` for a coin launched from a config: the config, its custom hook (null: none) and the hook's flags. */
+export interface TokenLaunchConfiguredEvent {
+  kind: 'launch.TokenLaunchConfigured';
+  launch: string;
+  mint: string;
+  config: string;
+  customHook: string | null;
+  customHookFlags: number;
+  ts: number;
+}
+
+/**
+ * §7.4: a preset companion's steps on a leg (`claim_fees_leg`, `withdraw_leg`, `buyback_leg`, `snowball_step_leg`), amounts in raw units of
+ * the leg's token (`index` names the leg; the coin's legs give its token). They name the companion only, never the mint.
+ */
+export type CompanionLegEvent =
+  | { kind: 'companion.LegFeesClaimed'; companion: string; index: number; quoteMint: string; claimed: bigint; bounty: bigint; toBuyback: bigint; toHolders: bigint; toBeneficiary: bigint; toPot: bigint; cranker: string }
+  | { kind: 'companion.LegBeneficiaryPaid'; companion: string; index: number; quoteMint: string; amount: bigint; destination: string }
+  | { kind: 'companion.LegBoughtBack'; companion: string; index: number; spent: bigint; burned: bigint; bounty: bigint; priceAfter: bigint; cranker: string }
+  | { kind: 'companion.LegBuybackWaited'; companion: string; index: number; price: bigint; reference: bigint }
+  | { kind: 'companion.LegSnowballTraded'; companion: string; index: number; side: 'buy' | 'sell'; onStep: boolean; quote: bigint; tokens: bigint; bounty: bigint; priceBefore: bigint; priceAfter: bigint; potAfter: bigint; tokensAfter: bigint; cranker: string }
+  | { kind: 'companion.LegSnowballFollowed'; companion: string; index: number; referenceBefore: bigint; price: bigint };
+
+export type LegEvent = SplPoolCreatedEvent | TokenLaunchCreatedEvent | LegOpenedEvent | LegCreatorFeesClaimedEvent | TokenLaunchRulesEvent | TokenLaunchLocksEvent | LegsMaxWalletLiftedEvent | TokenLaunchConfiguredEvent | CompanionLegEvent;
 
 const rulesOfEvent = (r: Record<string, unknown>): LaunchRulesData => ({ holderFeeBuyBps: num(r.holderFeeBuyBps), holderFeeSellBps: num(r.holderFeeSellBps), burnBuyBps: num(r.burnBuyBps), burnSellBps: num(r.burnSellBps), maxWalletBps: num(r.maxWalletBps), creatorLockSecs: num(r.creatorLockSecs), earlyWindowSecs: num(r.earlyWindowSecs), earlyLockSecs: num(r.earlyLockSecs) });
 
@@ -523,6 +622,26 @@ const LEGS_MAX_WALLET_LIFTED = Buffer.from([0xb2, 0x72, 0xea, 0xfd, 0xfd, 0x95, 
 export function typedLegEvent(ev: Pick<DecodedEvent, 'program' | 'name' | 'data'>): LegEvent | null {
   const d = ev.data;
   if (ev.program === 'launch' && ev.name === 'tokenLaunchRules') return { kind: 'launch.TokenLaunchRules', launch: str(d.launch), mint: str(d.mint), rules: rulesOfEvent(d.rules as Record<string, unknown>), modules: num(d.modules), kitConfig: d.kitConfig == null ? null : str(d.kitConfig), creatorUnlockAt: num(d.creatorUnlockAt), earlyWindowEnd: num(d.earlyWindowEnd), earlyUnlockAt: num(d.earlyUnlockAt), liftAt: big(d.liftAt), ts: num(d.ts) };
+  if (ev.program === 'launch' && ev.name === 'tokenLaunchConfigured') return { kind: 'launch.TokenLaunchConfigured', launch: str(d.launch), mint: str(d.mint), config: str(d.config), customHook: d.customHook == null ? null : str(d.customHook), customHookFlags: num(d.customHookFlags), ts: num(d.ts) };
+  if (ev.program === 'companion') {
+    const base = { companion: str(d.companion), index: num(d.index) };
+    switch (ev.name) {
+      case 'legFeesClaimed':
+        return { kind: 'companion.LegFeesClaimed', ...base, quoteMint: str(d.quoteMint), claimed: big(d.claimed), bounty: big(d.bounty), toBuyback: big(d.toBuyback), toHolders: big(d.toHolders), toBeneficiary: big(d.toBeneficiary), toPot: big(d.toPot), cranker: str(d.cranker) };
+      case 'legBeneficiaryPaid':
+        return { kind: 'companion.LegBeneficiaryPaid', ...base, quoteMint: str(d.quoteMint), amount: big(d.amount), destination: str(d.destination) };
+      case 'legBoughtBack':
+        return { kind: 'companion.LegBoughtBack', ...base, spent: big(d.spent), burned: big(d.burned), bounty: big(d.bounty), priceAfter: big(d.priceAfter), cranker: str(d.cranker) };
+      case 'legBuybackWaited':
+        return { kind: 'companion.LegBuybackWaited', ...base, price: big(d.price), reference: big(d.reference) };
+      case 'legSnowballTraded':
+        return { kind: 'companion.LegSnowballTraded', ...base, side: num(d.side) === 1 ? 'buy' : 'sell', onStep: d.onStep === true || d.onStep === 'true', quote: big(d.quote), tokens: big(d.tokens), bounty: big(d.bounty), priceBefore: big(d.priceBefore), priceAfter: big(d.priceAfter), potAfter: big(d.potAfter), tokensAfter: big(d.tokensAfter), cranker: str(d.cranker) };
+      case 'legSnowballFollowed':
+        return { kind: 'companion.LegSnowballFollowed', ...base, referenceBefore: big(d.referenceBefore), price: big(d.price) };
+      default:
+        return null;
+    }
+  }
   if (ev.program === 'launch' && ev.name === 'tokenLaunchLocks') return { kind: 'launch.TokenLaunchLocks', launch: str(d.launch), mint: str(d.mint), tradingOpenedAt: num(d.tradingOpenedAt), delay: num(d.delay), creatorUnlockAt: num(d.creatorUnlockAt), earlyWindowEnd: num(d.earlyWindowEnd), earlyUnlockAt: num(d.earlyUnlockAt), ts: num(d.ts) };
   if (ev.program === 'launch' && ev.name === 'legsMaxWalletLifted') return { kind: 'launch.LegsMaxWalletLifted', launch: str(d.launch), mint: str(d.mint), pool: str(d.pool), sold: big(d.sold), liftAt: big(d.liftAt), ts: num(d.ts) };
   if (ev.program === 'swap' && ev.name === 'splPoolCreated') return { kind: 'swap.SplPoolCreated', pool: str(d.pool), quoteMint: str(d.quoteMint), quoteProgram: str(d.quoteProgram), quoteDecimals: num(d.quoteDecimals), quoteVault: str(d.quoteVault) };
@@ -540,8 +659,11 @@ export function typedLegEvent(ev: Pick<DecodedEvent, 'program' | 'name' | 'data'
  * The creator fee a leg's `Swapped` paid (§2.4: the launchpad's answer is the creator fee alone, a
  * quote-side delta to the leg's fee account, from a buy's input or a sell's output), raw quote units.
  */
-export function legSwapCutsOf(ev: Pick<SwappedEvent, 'deltasIn' | 'deltasOut'>, mint: PublicKey, quoteMint: PublicKey): { creatorFee: bigint } {
+export function legSwapCutsOf(ev: Pick<SwappedEvent, 'deltasIn' | 'deltasOut'>, mint: PublicKey, quoteMint: PublicKey, quoteProgram: PublicKey | null = null): { creatorFee: bigint; holderFee: bigint } {
   const fees = legFeesAddress(mint, quoteMint).toBase58();
-  const sum = [...ev.deltasIn, ...ev.deltasOut].filter((d) => d.holding === fees).reduce((t, d) => t + d.amount, 0n);
-  return { creatorFee: sum };
+  // §7.5: with holder rewards a second delta, the holder fee, goes to the kit's vault of the leg's token (callback index 9).
+  const vault = quoteProgram ? kitVaultAddress({ mint, quoteMint, quoteProgram }).toBase58() : null;
+  const all = [...ev.deltasIn, ...ev.deltasOut];
+  const sum = (to: string | null): bigint => (to === null ? 0n : all.filter((d) => d.holding === to).reduce((t, d) => t + d.amount, 0n));
+  return { creatorFee: sum(fees), holderFee: sum(vault) };
 }

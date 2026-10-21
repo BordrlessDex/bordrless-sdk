@@ -4,7 +4,104 @@ The public package is `@bordrless/sdk` on npm, published from the public reposit
 BordrlessDex/bordrless-sdk together with `@bordrless/shared` (shared first; the SDK depends on the
 same version of it). The monorepo is where both are written.
 
-## 0.19.1: rules on coins quoted in tokens (phase 1, live 21 Oct 2026)
+## 0.20.0: every feature on token-quoted coins (21 Oct 2026)
+
+A coin quoted in tokens now gets what a SOL coin gets (bordrless-programs `docs/token-quotes.md` §7):
+companion presets and Workshop items that opt in, holder rewards paid in a leg's token (or as SOL),
+the Lottery, Jackpot, Streak and Lossback run per leg, agents billed in a leg's token, and claiming a
+creator's fees as SOL. These builders need the kit, launchpad, companion, `lottery_hook` and Loss
+cover upgrades of bordrless-programs `token-coins`; a SOL coin's transactions are unchanged.
+
+### Agents bill a leg’s token on coins quoted in tokens (§7.6.4, 21 Oct 2026)
+
+- `agent.ts`: `DecideArgs.billLeg` (1 to 6; the trailing `bill_leg` byte, sent only when set: a SOL decision’s arguments are the 52
+  bytes they were), `DECIDE_ARGS_LEN_WITH_LEG` (53), `BILL_LEG_MAX`; `decisionOfArgs` carries it.
+- `@bordrless/shared`: `AgentDecision.billLeg` (the tail’s byte 30, read only when set: a SOL decision decodes as before).
+- The script starter (`starters/script`) learns it: `decide` takes the trailing byte, `read_decision` reads it, `pay_bill_leg` pays
+  the bill in that leg’s token to the treasury’s associated account of it.
+
+### Games and Lossback on coins quoted in tokens (§7.6, 21 Oct 2026)
+
+**What's new.** A lottery, a jackpot, a streak or a Lossback coin may be quoted in tokens: a game's pot kept per leg in the legs'
+tokens (or sold to SOL with the switch), its prizes paid in each leg's token; Lossback's basis per leg and its cover paid in the leg's
+token (bordrless-programs `docs/token-quotes.md` §7.6.9; companion, `lottery_hook`, `loss_cover_hook` and `loss_cover_script`
+upgrades not deployed yet). Every existing builder sends what it sent before.
+
+- `tokenGames.ts` (new): `tokenPotAccounts`, `legPrizeAccounts`, `legFeeAccounts` and `withAccounts` (the remaining accounts a game
+  step in tokens adds, as the companion's client lays them), `PART_POT`, `TOKEN_POT_SCALE`, `TOKEN_MIN_MIN_POT_BPS`,
+  `TOKEN_GAME_MIN_POT_BPS_DEFAULT`, `LOTTERY_TOKEN_FLOAT_LAMPORTS`, `LOSS_COVER_TOKEN_BATCH`; the thresholds (`gameInTokens`,
+  `tokenPotBps`, `lamportsAsBps`, `hookCapBps`, `tokenDrawThresholdBps`, `gameMinPotBpsAt`, `legCapOf`, `legPrizeOf`,
+  `legPrizeLeft`); Lossback's token step (`lossCoverTokenStepHead`, `lossCoverTokenPayee`); `typedTokenGameEvent` for
+  `GameTokenTermsSet`, `LegPrizesFixed`, `LegPrizePaid`, `LegPotToBuyback`, `LegScriptPayout`.
+- `companion.ts`: `companion.setGameTokenTerms`, `companion.launchTokenGame`; `swapBucketToSol` takes part 2; `Game.minPotBps`
+  (byte 452); `LegPot.prize` and `prizePaid` (187, 195).
+- `lotteryHook.ts`: `prepareLegs`, `accountsLegs`. `gameKinds.ts`: `studioGameHook.prepareLegs`, `accountsLegs`.
+- `lossCover.ts`: `lossCoverHook.prepareLegs`, `extrasLegs`, `accountsLegs`; `LossCoverRecord.leg` (byte 54),
+  `LossCoverState.legCount` (byte 210); `PayoutAnswerLegs` (`encodePayoutAnswerLegs`, `decodePayoutAnswerLegs`, version 3 in
+  `decodeScriptAnswer`); `decodeCoverLegRounds` (`COVER_STATE_LEN_LEGS` 384), `lossCoverMinLossOfCost`,
+  `TOKEN_LOSS_COVER_MIN_LOSS_BPS`, `decodeCoverRoundLegEvent`.
+- IDLs: the companion's `set_game_token_terms`, five events and errors 6105 to 6109; `lottery_hook`'s and `loss_cover_hook`'s
+  `prepare_legs`; `loss_cover_script`'s `CoverRoundLeg` and `NoLegs` (its answer is now `CoverAnswer`).
+- `@bordrless/shared`: `minPotBps` on the game requests; `GameSummary.tokens` (`GameTokenPot`), `LossCoverSummary.legs`,
+  `CompanionLegSummary.prize`/`prizePaid`. All optional.
+
+### Holder rewards in the quote token and the SOL switch (§7.5, 21 Oct 2026)
+
+**What's new.** A coin quoted in tokens may pay holder rewards (in its leg's token on one leg, in every leg's token by rounds on
+several, or in SOL with the switch), and its paid parts in SOL (the switch: a creator's fees, a companion's launcher's and holders'
+parts, the holder rewards, sold on each token's reference pool); a preset may share with holders and pay payees in the legs' tokens
+(bordrless-programs `docs/token-quotes.md` §7.5.5; kit, launchpad and companion upgrades not deployed yet). Every existing builder
+sends what it sent before.
+
+- `payouts.ts` (new): `TokenPayouts` (`hasTokenPayouts`, `tokenPayoutsProblem`, `PAYOUT_SOL`, `HOLDER_ROUND_SECS`), `REWARD_KIND`,
+  `rewardKindOf`/`rewardKindForLaunch`, `solSwitchOn`; leg trades with holder rewards: `legSwapFor` (the kit's vault of the leg after
+  the leg's extras), `legSliceFor`, `tokenRewardsHookSlice` (kind 1's slice); the kit's `kitPayouts.claimToken`, `claimTokenFor`,
+  `shareToken`, `startRound`, `payRound`, `swapRewardsToSol`, `claimSolLegs`, `claimSolForLegs`; `kitRoundsAddress`,
+  `decodeKitRounds`, `roundDataOf`, `roundLeast`, `currentRound`; `decodePayeesLegs`; the launchpad's `quoteReference.register` and
+  `.pause`, `quoteReferenceAddress`, `decodeQuoteReference`, `swapToSolRest`, `solSwitch.swapToSol` and `.swapCreatorFees`; the venues'
+  accounts (`ammV4Accounts`, `cpmmAccounts`, `clmmAccounts`, `pumpAccounts`, `viaUsdcAccounts`) and readers (`venueReads`, `marketOf`,
+  `pumpScheduleFees`, `clmmTickAccounts`, `swapMinOut`, `swapWindowCap`); `typedPayoutEvent` for the eleven events.
+- `legs.ts`: `CreateTokenLaunchArgs.payouts` (written only when set, after 22 zero bytes of rules when there are none:
+  `tokenLaunchArgsData`); `openLeg` takes the kit's vault as a fourth kit account with holder rewards (`kitVaultAddress`); `kitLegs.initLegs`
+  takes the rewards' kind; `legSwapCutsOf` answers the holder fee too (with the leg's token program).
+- `companion.ts`: `companion.shareLeg`, `swapBucketToSol`, `withdrawLegWithPayees`, `launchTokenWithPayees`, `payeesLegsAddress`;
+  `LegPot.sharedTotal` and `swappedTotal`; `COMPANION_LEGS_LEN` is 1,293.
+- `accounts.ts`: `Launch.payouts` (byte 530), `KitConfig.rewardKind`, `roundSecs`, `rewardProgram`, `rewardDecimals`.
+- IDLs: the kit's six instructions, `LegsRewards`, four events, errors 6036 to 6043; the launchpad's four instructions,
+  `QuoteReference`, `TokenPayouts`, four events, errors 6086 to 6102; the companion's two instructions, three events, errors 6101 to 6104.
+- `@bordrless/shared`: `TokenPayoutsRequest` (`LaunchPrepareRequest.payouts`), `QuoteTokenSolSwitch`, `TokenRewardKind`,
+  `TokenRewardsSummary` (`LaunchSummary.tokenRewards`, `.solSwitch`), `TokenRewardPosition` (`RewardPosition.token`),
+  `CreatorLegsPrepareResponse.switchLamports`. All optional.
+
+### Companions and Workshop items on coins quoted in tokens (§7.4, 21 Oct 2026)
+
+**What's new.** A coin quoted in tokens may launch with a companion (a preset: Buyback, the launcher's
+part, Split without holders, Snowball, each paid in the legs' tokens; or a Workshop script) and from a
+launch config whose custom hook declares token coins (bordrless-programs `docs/token-quotes.md` §7.4;
+launchpad and companion upgrades not deployed yet). Every existing builder sends what it sent before.
+
+- `legs.ts`: `tokenLaunch.createTokenLaunchWith(creator, mint, treasury, args, quoteMints, config, customHook, { hookTimelocked })`
+  (`createTokenLaunch` delegates to it), `tokenLaunch.openLegCustom`, `tokenLaunch.legSwapWithSlice` (a custom
+  hook's slice, the kit's, or none), `legsRegistryEntry`, `listsLegs`; `typedLegEvent` reads
+  `TokenLaunchConfigured` and the companion's six leg events.
+- `companion.ts`: `companion.launchToken`, `claimFeesLeg`, `withdrawLeg`, `buybackLeg`, `snowballStepLeg`;
+  `companionLegsAddress`; `decodeCompanionLegs` (`CompanionLegs`, `LegPot`) through the IDL coder, its size
+  `COMPANION_LEGS_LEN` from the IDL (the layout grows in the next build; `LegPot.snowballReference` and
+  `snowballLastAt` are null until the IDL carries them).
+- IDLs: the companion's `launch_token`, four leg steps, `CompanionLegs`, six events and errors 6095 to 6100;
+  the launchpad's `TokenLaunchConfigured` and errors 6083 to 6085.
+- `@bordrless/shared`: hook.json `quoteTokens` (`HookFile`, `parseHookFile`, `hookFileOfFiles`,
+  `hookQuoteTokensOfFiles`, `hookFileWords`, `canonicalHookFileJson`); keeper.json `quoteTokens` and `legs`
+  (`KEEPER_MAX_LEGS`, `keeperLegIndices`; `holdings` may be null with them), `KeeperLaunchTerms.quoteTokens`;
+  `WorkshopItem.quoteTokens`; `CompanionSummary.legs` (`CompanionLegSummary`). All optional.
+
+### Claim as SOL for a token-quoted coin's creator (§7.3, 21 Oct 2026)
+
+- `@bordrless/shared`, "Claim as SOL" (docs/token-quotes.md §7.3): `CreatorLegsPrepareRequest.as`
+  (`'token' | 'sol'`) and `.slippageBps`, `CreatorLegSol`, `CreatorLegsPrepareResponse.as` and `.sol`
+  (all optional), `CLAIM_SOL_DEFAULT_SLIPPAGE_BPS` (100) and `CLAIM_SOL_MAX_SLIPPAGE_BPS` (1,000).
+
+## 0.19.1: rules on coins quoted in tokens (phase 1, live 21 Oct 2026; public repo `2c77a82`)
 
 **What's new.** A coin quoted in tokens may carry the burn, max wallet, the creator lock and the
 early-buyer lock (bordrless-programs `docs/token-quotes.md` §6.1; live on mainnet since 21 Oct 2026: the kit in slot

@@ -88,7 +88,12 @@
 //! from the companion address to `TREASURY` with a system transfer (`pay_bill`), at most
 //! `BILL_CAP_BPS` of the pot, and only when the treasury is among the accounts the sender passed
 //! (the keeper passes it last on an agent script's steps); without it the bill is skipped, never the
-//! step.
+//! step. On a coin quoted in tokens (docs/token-quotes.md §7.6.4) the pot is in the legs' tokens, so a
+//! decision may name a leg (`bill_leg`, 1 to 6; 0 is SOL): its bill is then raw units of that leg's
+//! token, paid from the companion address's associated account of it to the treasury's
+//! (`pay_bill_leg`, a `TransferChecked` the companion address signs), at most `BILL_CAP_BPS` of what
+//! that account holds, the leg read from the coin's `Legs`; without them among the accounts the bill
+//! is skipped too.
 //!
 //! This one writes a small header into its state and holds at each step (it reads the decision,
 //! pays its bill, knows only `hold`, and spends it): it is the place to start. It needs a state of at
@@ -98,6 +103,8 @@
 #![allow(unexpected_cfgs)]
 
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+use anchor_lang::solana_program::program::invoke;
 use anchor_lang::system_program;
 
 declare_id!("11111111111111111111111111111111");
@@ -117,6 +124,25 @@ pub const TREASURY: Pubkey =
 /// The most of the pot one bill may take, basis points (1%): a wrong bill can't drain the pot. The
 /// keeper caps what it asks the same way; this holds it on chain.
 pub const BILL_CAP_BPS: u64 = 100;
+/// SPL Token, Token-2022 and the associated token account program: a leg's token, and the companion
+/// address's and the treasury's accounts of it (docs/token-quotes.md §7.6.4).
+pub const SPL_TOKEN_PROGRAM: Pubkey =
+    Pubkey::from_str_const("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+pub const TOKEN_2022_PROGRAM: Pubkey =
+    Pubkey::from_str_const("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+pub const ATA_PROGRAM: Pubkey =
+    Pubkey::from_str_const("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+/// The launchpad's `Legs` of a coin quoted in tokens, `PDA(["legs", mint])`: its discriminator, the
+/// legs' count at byte 74, each leg 139 bytes from byte 76 (its token at 0, its program at 32: 0 SPL
+/// Token, 1 Token-2022, its decimals at 33), 974 bytes in all.
+pub const LEGS_SEED: &[u8] = b"legs";
+pub const LEGS_DISCRIMINATOR: [u8; 8] = [0x16, 0xbe, 0x5c, 0xdd, 0xc3, 0x3b, 0xab, 0xbd];
+pub const LEGS_LEN: usize = 974;
+const LEGS_COUNT_AT: usize = 74;
+const LEGS_AT: usize = 76;
+const LEG_LEN: usize = 139;
+/// The most legs a coin quoted in tokens has: `bill_leg` is 1 to this (0: the bill is SOL).
+pub const MAX_LEGS: u8 = 6;
 /// The companion's seed of a launch's companion address: `["creator", mint]`.
 pub const CREATOR_SEED: &[u8] = b"creator";
 /// The companion's seed of a script's state: `["script-state", mint]`.
@@ -170,7 +196,11 @@ pub mod workshop_script {
         if let Some(decision) = read_decision(&state, now) {
             // The inference bill first, before the action spends any of the pot: what the decision
             // says, within the cap, to the treasury (docs/agents.md "Billing").
-            if decision.bill_lamports > 0 {
+            if decision.bill_lamports > 0 && decision.bill_leg > 0 {
+                // A coin quoted in tokens: the bill in the named leg's token (docs/token-quotes.md §7.6.4).
+                let paid = pay_bill_leg(&ctx.accounts.creator.to_account_info(), &mint, ctx.remaining_accounts, decision.bill_leg, decision.bill_lamports)?;
+                msg!("inference bill: {} of {} of leg {}'s token paid to the treasury", paid, decision.bill_lamports, decision.bill_leg);
+            } else if decision.bill_lamports > 0 {
                 let paid = pay_bill(&ctx.accounts.creator.to_account_info(), ctx.remaining_accounts, decision.bill_lamports)?;
                 msg!("inference bill: {} of {} lamports paid to the treasury", paid, decision.bill_lamports);
             }
@@ -201,6 +231,7 @@ pub mod workshop_script {
         // The seq stays once a decision is spent (only the magic is cleared), so a replay of any
         // earlier decision is refused for the life of the state.
         require!(args.seq > le_u32(tail, 24), ScriptError::StaleDecision);
+        require!(args.bill_leg <= MAX_LEGS, ScriptError::BadBillLeg);
         tail[0] = DECISION_MAGIC;
         tail[1] = DECISION_VERSION;
         tail[2] = args.action;
@@ -210,14 +241,16 @@ pub mod workshop_script {
         tail[16..24].copy_from_slice(&now.to_le_bytes());
         tail[24..28].copy_from_slice(&args.seq.to_le_bytes());
         tail[28..30].copy_from_slice(&args.confidence_bps.to_le_bytes());
-        tail[30..32].copy_from_slice(&[0, 0]);
+        tail[30..32].copy_from_slice(&[args.bill_leg, 0]);
         tail[32..64].copy_from_slice(&args.state_hash);
         Ok(())
     }
 }
 
-/// What `decide` writes, Borsh in this order (the keeper builds it the same way).
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug)]
+/// What `decide` writes, Borsh in this order (the keeper builds it the same way). `bill_leg` trails
+/// and is sent only with a bill in a leg's token: the 52 bytes of a SOL decision read as before
+/// (`bill_leg` 0), which the hand-written reading below allows.
+#[derive(AnchorSerialize, Clone, Copy, Debug)]
 pub struct DecideArgs {
     /// The option's `code` (agent.json; 0 is hold).
     pub action: u8,
@@ -231,8 +264,28 @@ pub struct DecideArgs {
     pub confidence_bps: u16,
     /// SHA-256 of the state the model saw.
     pub state_hash: [u8; 32],
-    /// What the step pays the treasury for the inference, lamports (0: nothing billed).
+    /// What the step pays the treasury for the inference, lamports (0: nothing billed), or with
+    /// `bill_leg` raw units of that leg's token.
     pub bill_lamports: u32,
+    /// On a coin quoted in tokens: the leg whose token pays the bill, 1 to `MAX_LEGS`; 0 (or absent)
+    /// is SOL from the companion address.
+    pub bill_leg: u8,
+}
+
+impl AnchorDeserialize for DecideArgs {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let action = u8::deserialize_reader(reader)?;
+        let size = u8::deserialize_reader(reader)?;
+        let until = i64::deserialize_reader(reader)?;
+        let seq = u32::deserialize_reader(reader)?;
+        let confidence_bps = u16::deserialize_reader(reader)?;
+        let state_hash = <[u8; 32]>::deserialize_reader(reader)?;
+        let bill_lamports = u32::deserialize_reader(reader)?;
+        // The trailing `bill_leg`, when sent; a decision without it bills SOL, as every one before it.
+        let mut leg = [0u8; 1];
+        let bill_leg = if reader.read(&mut leg)? == 1 { leg[0] } else { 0 };
+        Ok(Self { action, size, until, seq, confidence_bps, state_hash, bill_lamports, bill_leg })
+    }
 }
 
 /// A decision as it stands in the state's tail: what `companion_step` does this step.
@@ -242,8 +295,11 @@ pub struct Decision {
     pub action: u8,
     /// The `sizes` level (0 when the script has none).
     pub size: u8,
-    /// What the step pays the treasury for the inference, lamports (0: nothing billed).
+    /// What the step pays the treasury for the inference, lamports (0: nothing billed), or with
+    /// `bill_leg` raw units of that leg's token.
     pub bill_lamports: u32,
+    /// The leg whose token pays the bill (1 to `MAX_LEGS`), or 0: SOL (the tail's byte 30).
+    pub bill_leg: u8,
     /// Unix seconds; void after.
     pub until: i64,
     /// When it was signed.
@@ -278,6 +334,7 @@ pub fn read_decision(state: &AccountInfo, now: i64) -> Option<Decision> {
         action: tail[2],
         size: tail[3],
         bill_lamports: le_u32(tail, 4),
+        bill_leg: tail[30],
         until,
         decided_at: le_i64(tail, 16),
         seq: le_u32(tail, 24),
@@ -319,6 +376,70 @@ pub fn pay_bill<'info>(creator: &AccountInfo<'info>, remaining: &[AccountInfo<'i
         CpiContext::new(system_program::ID, system_program::Transfer { from: creator.clone(), to: treasury.clone() }),
         paid,
     )?;
+    Ok(paid)
+}
+
+/// Pays a decision's inference bill in a leg's token on a coin quoted in tokens (docs/token-quotes.md
+/// §7.6.4): `bill` raw units of leg `leg`'s token (1-based, as the decision names it) from the
+/// companion address's associated account of it to the treasury's, with `TransferChecked` (the
+/// companion address signs this call, so `invoke` passes its signature on). The leg is read from the
+/// coin's `Legs` (the launchpad's, of this mint); the accounts are found among the step's `remaining`
+/// by key: the `Legs`, the leg's token and its program, the two accounts. Capped at `BILL_CAP_BPS` of
+/// what the companion address's account holds. Without any of them the bill is skipped (said in the
+/// log, nothing paid), never the step. The units paid.
+pub fn pay_bill_leg<'info>(creator: &AccountInfo<'info>, mint: &Pubkey, remaining: &[AccountInfo<'info>], leg: u8, bill: u32) -> Result<u64> {
+    let launchpad = bordrless_launch::ID;
+    let legs_key = Pubkey::find_program_address(&[LEGS_SEED, mint.as_ref()], &launchpad).0;
+    let Some(legs) = remaining.iter().find(|a| a.key() == legs_key && *a.owner == launchpad) else {
+        msg!("inference bill of leg {} skipped: {}", leg, ScriptError::LegBillAccountsMissing);
+        return Ok(0);
+    };
+    let found = {
+        let data = legs.try_borrow_data()?;
+        let i = usize::from(leg.saturating_sub(1));
+        if leg == 0 || data.len() < LEGS_LEN || data[..8] != LEGS_DISCRIMINATOR || data[10..42] != mint.to_bytes() || i >= usize::from(data[LEGS_COUNT_AT]) {
+            None
+        } else {
+            let at = LEGS_AT + LEG_LEN * i;
+            let mut quote = [0u8; 32];
+            quote.copy_from_slice(&data[at..at + 32]);
+            let program = if data[at + 32] == 1 { TOKEN_2022_PROGRAM } else { SPL_TOKEN_PROGRAM };
+            Some((Pubkey::new_from_array(quote), program, data[at + 33]))
+        }
+    };
+    let Some((quote, program, decimals)) = found else {
+        msg!("inference bill of leg {} skipped: no such leg of the coin", leg);
+        return Ok(0);
+    };
+    let account_of = |owner: &Pubkey| Pubkey::find_program_address(&[owner.as_ref(), program.as_ref(), quote.as_ref()], &ATA_PROGRAM).0;
+    let find = |key: Pubkey| remaining.iter().find(|a| a.key() == key);
+    let (Some(source), Some(to), Some(quote_mint), Some(token_program)) = (find(account_of(creator.key)), find(account_of(&TREASURY)), find(quote), find(program)) else {
+        msg!("inference bill of leg {} skipped: {}", leg, ScriptError::LegBillAccountsMissing);
+        return Ok(0);
+    };
+    let held = {
+        let data = source.try_borrow_data()?;
+        if *source.owner != program || data.len() < 72 {
+            0
+        } else {
+            u64::from_le_bytes(data[64..72].try_into().expect("8 bytes"))
+        }
+    };
+    let cap = u64::try_from(u128::from(held) * u128::from(BILL_CAP_BPS) / 10_000).unwrap_or(u64::MAX);
+    let paid = u64::from(bill).min(cap);
+    if paid == 0 {
+        return Ok(0);
+    }
+    let mut data = Vec::with_capacity(10);
+    data.push(12); // TransferChecked
+    data.extend_from_slice(&paid.to_le_bytes());
+    data.push(decimals);
+    let ix = Instruction {
+        program_id: program,
+        accounts: vec![AccountMeta::new(source.key(), false), AccountMeta::new_readonly(quote, false), AccountMeta::new(to.key(), false), AccountMeta::new_readonly(creator.key(), true)],
+        data,
+    };
+    invoke(&ix, &[source.clone(), quote_mint.clone(), to.clone(), creator.clone(), token_program.clone()])?;
     Ok(paid)
 }
 
@@ -420,4 +541,8 @@ pub enum ScriptError {
     StateTooSmall,
     #[msg("the treasury is not among the step's accounts: the inference bill is skipped")]
     TreasuryMissing,
+    #[msg("a bill in a leg's token: the coin's Legs, the leg's token and its program, or the companion address's or the treasury's account of it are not among the step's accounts; the bill is skipped")]
+    LegBillAccountsMissing,
+    #[msg("bill_leg is 0 (SOL) or a leg, 1 to 6")]
+    BadBillLeg,
 }

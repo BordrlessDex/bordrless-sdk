@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { PublicKey } from '@solana/web3.js';
 import { AGENT_DECISION_LEN, AGENT_KEY, agentDecisionSeqOf, decodeAgentDecision } from '@bordrless/shared';
 import { scriptStateAddress } from './addresses.ts';
-import { AGENT_SIGNER, DECIDE_ARGS_LEN, DECIDE_DISCRIMINATOR, decideInstruction, decisionBytesOfArgs, decisionOfArgs, encodeDecideArgs, type DecideArgs } from './agent.ts';
+import { AGENT_SIGNER, DECIDE_ARGS_LEN, DECIDE_ARGS_LEN_WITH_LEG, DECIDE_DISCRIMINATOR, decideInstruction, decisionBytesOfArgs, decisionOfArgs, encodeDecideArgs, type DecideArgs } from './agent.ts';
 
 const key = (n: number): PublicKey => new PublicKey(new Uint8Array(32).fill(n));
 const mint = key(7);
@@ -63,5 +63,22 @@ describe('decide', () => {
     expect(decodeAgentDecision(state)).toEqual(decisionOfArgs(args, decidedAt));
     expect(decodeAgentDecision(state)).toEqual({ action: 2, size: 3, billLamports: 0, until: 1_760_745_600, decidedAt, seq: 42, confidenceBps: 9_150, stateHash });
     expect(agentDecisionSeqOf(state)).toBe(42);
+  });
+
+  it('bills a leg’s token on a coin quoted in tokens (§7.6.4): the trailing bill_leg byte only when set, the tail’s byte 30', () => {
+    // A SOL decision: the 52 bytes it always was, and its tail decodes with no leg.
+    expect(encodeDecideArgs({ ...args, billLeg: 0 }).equals(encodeDecideArgs(args))).toBe(true);
+    const withLeg = encodeDecideArgs({ ...args, billLamports: 2_000_000, billLeg: 2 });
+    expect(withLeg.length).toBe(DECIDE_ARGS_LEN_WITH_LEG);
+    expect(withLeg.subarray(0, DECIDE_ARGS_LEN).equals(encodeDecideArgs({ ...args, billLamports: 2_000_000 }))).toBe(true);
+    expect(withLeg[52]).toBe(2);
+    expect(() => encodeDecideArgs({ ...args, billLeg: 7 })).toThrow('billLeg is 0 to 6');
+    const tail = decisionBytesOfArgs({ ...args, billLamports: 2_000_000, billLeg: 2 }, 1_760_745_540);
+    expect([tail[30], tail[31]]).toEqual([2, 0]);
+    const state = new Uint8Array(200);
+    state.set(tail, 200 - AGENT_DECISION_LEN);
+    expect(decodeAgentDecision(state)).toMatchObject({ billLamports: 2_000_000, billLeg: 2 });
+    expect(decisionBytesOfArgs(args, 1_760_745_540)[30]).toBe(0);
+    expect('billLeg' in decodeAgentDecision(Uint8Array.from([...new Uint8Array(136), ...decisionBytesOfArgs(args, 1)]))!).toBe(false);
   });
 });

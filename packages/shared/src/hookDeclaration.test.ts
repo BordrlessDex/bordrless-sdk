@@ -5,7 +5,7 @@
  * pays once Bordrless's share is on top.
  */
 import { describe, expect, it } from 'vitest';
-import { HOOK_DECLARATION_LIMITS, HOOK_FILE, canonicalHookJson, hookDeclarationOf, hookDeclarationOfFiles, hookDeclarationWords, parseHookDeclaration, quoteCutDetails, quoteCutPaidBps, quoteCutWords } from './hookDeclaration.ts';
+import { HOOK_DECLARATION_LIMITS, HOOK_FILE, canonicalHookJson, hookDeclarationOf, hookDeclarationOfFiles, hookDeclarationWords, hookFileOfFiles, hookFileWords, hookQuoteTokensOfFiles, parseHookDeclaration, parseHookFile, quoteCutDetails, quoteCutPaidBps, quoteCutWords } from './hookDeclaration.ts';
 
 /** A hook that takes up to 8% of a buy's SOL by tiers of the buy, and nothing on sells. */
 const TIERED_HOOK_JSON = '{"version":1,"quoteCut":{"maxBuyBps":800,"maxSellBps":0}}\n';
@@ -29,7 +29,7 @@ describe('parseHookDeclaration', () => {
     const cut = (q: string): string => problem(`{"version":1,"quoteCut":${q}}`);
     expect(problem('{"version":2,"quoteCut":{"maxBuyBps":800,"maxSellBps":0}}')).toBe('hook.json: version is 1, the only one there is.');
     expect(problem('{"version":1}')).toMatch(/^hook\.json: quoteCut is required/);
-    expect(problem('{"version":1,"quoteCut":{"maxBuyBps":800,"maxSellBps":0},"fee":1}')).toBe('hook.json: the file has no field "fee" (it takes version, quoteCut).');
+    expect(problem('{"version":1,"quoteCut":{"maxBuyBps":800,"maxSellBps":0},"fee":1}')).toBe('hook.json: the file has no field "fee" (it takes version, quoteCut, quoteTokens).');
     expect(problem('[1]')).toBe('hook.json: the file is one object.');
     expect(cut('{"maxBuyBps":800}')).toMatch(/maxSellBps is required/);
     expect(cut('{"maxSellBps":0}')).toMatch(/maxBuyBps is required/);
@@ -68,5 +68,23 @@ describe('the SOL cut in plain words', () => {
     expect(quoteCutDetails({ maxBuyBps: 800, maxSellBps: 0 })[0]).toBe('Bordrless’s 25% is charged on it as on the creator fee, so a trader pays up to 10% of a buy.');
     expect(quoteCutDetails({ maxBuyBps: 1_000, maxSellBps: 1_000 })[0]).toMatch(/up to 12\.5% of a buy and 12\.5% of a sell\.$/);
     expect([quoteCutPaidBps(800), quoteCutPaidBps(1_000), quoteCutPaidBps(1)]).toEqual([1_000, 1_250, 2]);
+  });
+});
+
+describe('quoteTokens (a hook that runs on coins quoted in tokens, docs/token-quotes.md §7.4)', () => {
+  const TOKEN_HOOK_JSON = '{"version":1,"quoteTokens":true}';
+
+  it('reads quoteTokens alone (no SOL cut), never beside quoteCut; the cut’s declaration and hash are unchanged', () => {
+    expect(parseHookFile(TOKEN_HOOK_JSON)).toEqual({ ok: true, file: { version: 1, quoteCut: null, quoteTokens: true } });
+    expect(parseHookFile(TIERED_HOOK_JSON)).toEqual({ ok: true, file: { version: 1, quoteCut: { maxBuyBps: 800, maxSellBps: 0 }, quoteTokens: false } });
+    const both = parseHookFile('{"version":1,"quoteTokens":true,"quoteCut":{"maxBuyBps":800,"maxSellBps":0}}');
+    expect(both.ok ? '' : both.problem).toMatch(/^hook\.json: quoteTokens and quoteCut never go together/);
+    const neither = parseHookFile('{"version":1}');
+    expect(neither.ok ? '' : neither.problem).toMatch(/quoteCut is required.*quoteTokens/);
+    // The cut's reading: a token hook has no cut declaration.
+    const files = [{ path: HOOK_FILE, content: TOKEN_HOOK_JSON }];
+    expect([hookDeclarationOfFiles(files), hookQuoteTokensOfFiles(files), hookQuoteTokensOfFiles([{ path: HOOK_FILE, content: TIERED_HOOK_JSON }]), hookQuoteTokensOfFiles(null)]).toEqual([null, true, false, false]);
+    expect(parseHookDeclaration(TOKEN_HOOK_JSON)).toMatchObject({ ok: false });
+    expect(hookFileWords(hookFileOfFiles(files)!)).toMatch(/coins quoted in tokens/);
   });
 });

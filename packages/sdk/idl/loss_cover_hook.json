@@ -94,8 +94,9 @@
         "`before_transfer`: the reference moved when due; the sender's record cut to what it keeps",
         "(the cover paid pro rata with it), the receiver's basis blended at the trade's price (a buy",
         "out of the pool: what it paid, uncapped) or the spot (any other transfer); each answered as",
-        "the holding's hook data when its owner may hold a record. Never refuses a transfer, never",
-        "takes a cut."
+        "the holding's hook data when its owner may hold a record. Never takes a cut, never refuses a",
+        "SOL coin's transfer. On a coin quoted in tokens each price is the record leg's, and a",
+        "transfer without the accounts it needs is refused (the module)."
       ],
       "discriminator": [
         23,
@@ -251,11 +252,93 @@
       "args": []
     },
     {
+      "name": "prepare_legs",
+      "docs": [
+        "`prepare` for a coin quoted in tokens (`docs/token-quotes.md` §7.6): the same state and",
+        "accounts, then the coin's legs' pools, in leg order, as remaining accounts (1 to 6; their",
+        "keys are written, not read: the pools need not exist yet). The state's `pool` is leg 0's,",
+        "`reserved[0]` the number of legs; the registry lists the state, the launch, leg 0's pool, the",
+        "coin's `Legs` and the other legs' pools."
+      ],
+      "discriminator": [
+        148,
+        118,
+        22,
+        93,
+        28,
+        83,
+        212,
+        25
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "docs": [
+            "Pays the rent."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "mint",
+          "docs": [
+            "The mint the hook is prepared for (not created yet); its keypair signs."
+          ],
+          "signer": true
+        },
+        {
+          "name": "state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "registry",
+          "writable": true
+        },
+        {
+          "name": "launch_config",
+          "docs": [
+            "The launchpad's config (address-checked): its LP fee is a seed of the launch's pool."
+          ],
+          "address": "5n25iAaXFsjs4UgGQM6fCiRhaQcCVQ1L5BgyRZ7UrmaE"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "record_payout",
       "docs": [
         "The companion's payout authority alone: records `lamports` of cover paid to `holding` (0: a",
-        "touch) in round `tag`. The holding is of this mint, its owner may hold a record and the",
-        "record exists; the record is written through the token program."
+        "touch) in round `tag` (on a coin quoted in tokens, raw units of the record leg's token). The",
+        "holding is of this mint, its owner may hold a record and the record exists; the record is",
+        "written through the token program."
       ],
       "discriminator": [
         227,
@@ -336,11 +419,12 @@
       "name": "set_entry",
       "docs": [
         "This program's upgrade authority alone (read from its ProgramData): sets `holding`'s",
-        "recorded entry to `entry` (lamports per base unit times `PRICE_SCALE`), the repair of a",
-        "record an earlier rule wrote wrong. The balance, the cover paid, the round, the basis time",
-        "and the flags stay; the slot is stamped. The holding is of this mint, its owner may hold a",
-        "record, the record exists and `entry` is not 0. Written through the token program, signed",
-        "by this program's `[\"hook-authority\"]`, as `record_payout` writes."
+        "recorded entry to `entry` (lamports per base unit times `PRICE_SCALE`; on a coin quoted in",
+        "tokens raw units of the record leg's token), the repair of a record an earlier rule wrote",
+        "wrong. The balance, the cover paid, the round, the basis time, the leg and the flags stay;",
+        "the slot is stamped. The holding is of this mint, its owner may hold a record, the record",
+        "exists and `entry` is not 0. Written through the token program, signed by this program's",
+        "`[\"hook-authority\"]`, as `record_payout` writes."
       ],
       "discriminator": [
         240,

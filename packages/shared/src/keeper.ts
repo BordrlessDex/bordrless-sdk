@@ -29,6 +29,15 @@
  *   names each by its key, which must be among the step's accounts): fixed addresses, or public keys
  *   in the script's state. A declaration with wallets may bring no holdings (`holdings` null).
  *
+ * Coins quoted in tokens (docs/token-quotes.md §7, §7.4): `"quoteTokens": true` says the script runs on
+ * them, its pot the whole creator fee in each leg's token (the companion address's associated token
+ * accounts, which the keeper's claims fill); `"legs"` (required with it, never without) says which legs
+ * each step brings: `true` every leg, or a list of leg indices. Per leg the step brings the leg's
+ * `swap_spl` accounts for the companion address (the coin's token-hook slice with them), the coin's
+ * `Legs`, and the companion address's associated token account of the leg's token, whether it exists
+ * yet or not (`keeper/scriptExtras.ts`). The launch pool's swap accounts are a SOL coin's: on a token
+ * coin a step brings the legs' instead.
+ *
  * `parseKeeperDeclaration` holds a file to the schema and its bounds and answers the normal form (the
  * same schema, every default written out, amounts as strings of digits) or one sentence saying what
  * is wrong; `keeperWords` says a declaration in plain words. No Solana dependencies: the keeper's own
@@ -298,6 +307,24 @@ export interface KeeperDeclaration {
    * normal form when absent.
    */
   payoutTerms?: PayoutTermsRequest;
+  /**
+   * The script runs on coins quoted in tokens (docs/token-quotes.md §7.4): its pot is in the legs' tokens, which it trades on the legs
+   * and pays out as tokens (or swaps to SOL on Raydium). Left out of the normal form unless true, so a declaration approved before hashes
+   * as it did.
+   */
+  quoteTokens?: true;
+  /** With `quoteTokens`: the legs each step brings, `true` for every leg of the coin or the leg indices (0 to 5, each once). Left out unless `quoteTokens`. */
+  legs?: true | number[];
+}
+
+/** The most legs a coin quoted in tokens has (`MAX_QUOTE_TOKENS`): what `legs`' indices are held under. */
+export const KEEPER_MAX_LEGS = 6;
+
+/** The legs a declaration's step brings on a coin of `count` legs, in order: every leg for `legs: true`, the named ones the coin has otherwise; none without `legs`. */
+export function keeperLegIndices(d: Pick<KeeperDeclaration, 'legs'>, count: number): number[] {
+  if (d.legs === undefined) return [];
+  const all = Array.from({ length: Math.min(count, KEEPER_MAX_LEGS) }, (_, i) => i);
+  return d.legs === true ? all : d.legs.filter((i) => i < count).sort((x, y) => x - y);
 }
 
 /** The most of the fee a declaration (or the config page) may fix for the launcher: the pot gets at least a twentieth, a quarter of a percent of the largest fee (the companion program wants a part). */
@@ -540,12 +567,12 @@ function holdingsOf(v: unknown, swapAccounts: boolean, payouts: boolean): Keeper
 /** The declaration in a parsed JSON value, held to the schema and its bounds: its normal form, or why not, in one sentence. */
 export function keeperDeclarationOf(value: unknown): KeeperParse {
   try {
-    const root = fieldsOf(value, 'the file', ['version', 'holdings', 'swapAccounts', 'hookAccounts', 'mintWritable', 'payouts', 'roundSecs', 'wallets', 'stepSecs', 'stateLen', 'initData', 'launcherShareBps', 'payoutTerms', 'view', 'pools'], 'one object');
+    const root = fieldsOf(value, 'the file', ['version', 'holdings', 'swapAccounts', 'hookAccounts', 'mintWritable', 'payouts', 'roundSecs', 'wallets', 'stepSecs', 'stateLen', 'initData', 'launcherShareBps', 'payoutTerms', 'view', 'pools', 'quoteTokens', 'legs'], 'one object');
     if (root.version !== KEEPER_VERSION) fail(`version is ${KEEPER_VERSION}, the only one there is.`);
     const wallets = walletsOf(root.wallets, 'wallets');
-    // A script that pays wallets alone brings no holdings.
-    const noHoldings = root.holdings === undefined || (root.holdings === null && wallets.length > 0);
-    if (noHoldings && wallets.length === 0) fail('holdings is required: which holdings each step brings.');
+    // A script that pays wallets alone brings no holdings; nor need one that trades the legs of a coin quoted in tokens (§7.4: its legs are its step's accounts).
+    const noHoldings = root.holdings === undefined || (root.holdings === null && (wallets.length > 0 || root.quoteTokens === true));
+    if (noHoldings && wallets.length === 0 && !(root.holdings === null && root.quoteTokens === true)) fail('holdings is required: which holdings each step brings (null with wallets, or with quoteTokens and its legs).');
     const swapAccounts = flagOf(root.swapAccounts, 'swapAccounts', null);
     const hookAccounts = flagOf(root.hookAccounts, 'hookAccounts', false);
     const mintWritable = flagOf(root.mintWritable, 'mintWritable', false);
@@ -559,11 +586,33 @@ export function keeperDeclarationOf(value: unknown): KeeperParse {
     const payoutTerms = root.payoutTerms === undefined || root.payoutTerms === null ? null : payoutTermsOf(root.payoutTerms);
     const view = root.view === undefined || root.view === null ? [] : viewOf(root.view);
     const pools = root.pools === undefined || root.pools === null ? [] : poolsOf(root.pools);
-    return { ok: true, declaration: { version: 1, holdings, swapAccounts, hookAccounts, ...(mintWritable ? { mintWritable } : {}), payouts, roundSecs, ...(wallets.length > 0 ? { wallets } : {}), ...(stepSecs !== null ? { stepSecs } : {}), ...(launcherShareBps !== null ? { launcherShareBps } : {}), ...(payoutTerms !== null ? { payoutTerms } : {}), ...(stateLen !== null ? { stateLen } : {}), ...(initData !== null ? { initData } : {}), ...(view.length > 0 ? { view } : {}), ...(pools.length > 0 ? { pools } : {}) } };
+    const quoteTokens = flagOf(root.quoteTokens, 'quoteTokens', false);
+    const legs = legsOf(root.legs, quoteTokens);
+    return { ok: true, declaration: { version: 1, holdings, swapAccounts, hookAccounts, ...(mintWritable ? { mintWritable } : {}), payouts, roundSecs, ...(wallets.length > 0 ? { wallets } : {}), ...(stepSecs !== null ? { stepSecs } : {}), ...(launcherShareBps !== null ? { launcherShareBps } : {}), ...(payoutTerms !== null ? { payoutTerms } : {}), ...(stateLen !== null ? { stateLen } : {}), ...(initData !== null ? { initData } : {}), ...(view.length > 0 ? { view } : {}), ...(pools.length > 0 ? { pools } : {}), ...(quoteTokens ? { quoteTokens: true as const } : {}), ...(legs !== null ? { legs } : {}) } };
   } catch (error) {
     if (error instanceof KeeperProblem) return { ok: false, problem: error.message };
     throw error;
   }
+}
+
+/**
+ * `legs`: with `quoteTokens` only, and required with it (a script on a token coin has its pot in the legs' tokens and nothing to
+ * spend them with but the legs): `true` (every leg) or the leg indices, 0 to 5, each once.
+ */
+function legsOf(v: unknown, quoteTokens: boolean): true | number[] | null {
+  const absent = v === undefined || v === null;
+  if (absent && quoteTokens) return fail('legs is required with quoteTokens: true for every leg of the coin, or [0, 2] for the legs a step brings (a script on a coin quoted in tokens has its pot in the legs’ tokens, and the legs’ accounts are what it trades and pays with).');
+  if (absent) return null;
+  if (!quoteTokens) return fail('legs goes only with quoteTokens: true (the legs are a coin quoted in tokens’).');
+  if (v === true) return true;
+  if (!Array.isArray(v) || v.length === 0 || v.length > KEEPER_MAX_LEGS) return fail(`legs is true (every leg) or a list of 1 to ${KEEPER_MAX_LEGS} leg indices, 0 to ${KEEPER_MAX_LEGS - 1}.`);
+  const seen = new Set<number>();
+  for (const [i, x] of v.entries()) {
+    if (typeof x !== 'number' || !Number.isInteger(x) || x < 0 || x >= KEEPER_MAX_LEGS) fail(`legs[${i}] is a leg index, 0 to ${KEEPER_MAX_LEGS - 1}.`);
+    if (seen.has(x as number)) fail(`legs[${i}] is named twice.`);
+    seen.add(x as number);
+  }
+  return [...seen].sort((x, y) => x - y);
 }
 
 /** `view`: at most `KEEPER_LIMITS.view` figures, each a label, an account, the bytes and how they read. */
@@ -664,6 +713,8 @@ export interface KeeperLaunchTerms {
   launcherShareBps?: number | null;
   /** The payout terms the launch makes the script with (`payoutTerms`); null: the script launches with open terms (`SCRIPT_PAYOUT_OPEN` in the site). Absent from older servers. */
   payoutTerms?: PayoutTermsRequest | null;
+  /** It runs on coins quoted in tokens (`quoteTokens`, docs/token-quotes.md §7.4): the launch form offers it once tokens are picked. Absent from older servers (read as false). */
+  quoteTokens?: boolean;
 }
 
 /** The state a site launch asks for when keeper.json says nothing: room for most scripts' state (rent about 0.008 SOL, the launcher's), harmless to one that keeps none. */
@@ -684,7 +735,7 @@ export const withLauncherShare = (terms: KeeperLaunchTerms, share: number | null
 export const PAIR_DEFAULT_LAUNCHER_SHARE_BPS = 5_000;
 
 /** A declaration's launch terms; a script with none steps every `DEFAULT_STEP_SECS`, pays no wallet, gets `KEEPER_DEFAULT_STATE_LEN` bytes of state and no init data. */
-export const keeperLaunchTerms = (d: KeeperDeclaration | null | undefined): KeeperLaunchTerms => ({ stepSecs: keeperStepSecs(d), wallets: (d?.wallets?.length ?? 0) > 0, stateLen: d?.stateLen ?? KEEPER_DEFAULT_STATE_LEN, initData: d?.initData ?? '', payouts: d?.payouts === true, launcherShareBps: d?.launcherShareBps ?? null, payoutTerms: d?.payoutTerms ?? null });
+export const keeperLaunchTerms = (d: KeeperDeclaration | null | undefined): KeeperLaunchTerms => ({ stepSecs: keeperStepSecs(d), wallets: (d?.wallets?.length ?? 0) > 0, stateLen: d?.stateLen ?? KEEPER_DEFAULT_STATE_LEN, initData: d?.initData ?? '', payouts: d?.payouts === true, launcherShareBps: d?.launcherShareBps ?? null, payoutTerms: d?.payoutTerms ?? null, ...(d?.quoteTokens ? { quoteTokens: true } : {}) });
 
 /** Bytes of a text in UTF-8 (a lone surrogate counts as its replacement character, 3). */
 export function utf8Length(text: string): number {
@@ -856,6 +907,7 @@ export function keeperDetails(d: KeeperDeclaration): string[] {
   if (d.stepSecs !== undefined) out.push(`A step runs every ${d.stepSecs} seconds.`);
   if (d.payoutTerms) out.push(`Its payout terms: a step pays at most ${pctWord(d.payoutTerms.stepBps)} of the pot, one holding or wallet at most ${pctWord(d.payoutTerms.holdingBps)} of a step, and a window of ${group(d.payoutTerms.windowSecs)} seconds at most ${pctWord(d.payoutTerms.windowBps)} of the pot.`);
   if (d.launcherShareBps !== undefined) out.push(`Every launch keeps ${(d.launcherShareBps / 100).toLocaleString('en-US', { maximumFractionDigits: 2 })}% of each trade’s fee for the launcher, fixed; the pot gets the rest.`);
+  if (d.quoteTokens) out.push(`It runs on coins quoted in tokens: each step there brings ${d.legs === true ? 'every leg' : `legs ${(d.legs ?? []).map((i) => i + 1).join(', ')}`} (the leg’s swap accounts for the companion address, the coin’s Legs and the companion address’s token account of the leg’s token) in place of the launch pool’s swap accounts.`);
   if (d.roundSecs !== null) out.push(`A round of the keeper’s (what it says once a round: a wait, nobody to bring) is ${typeof d.roundSecs === 'number' ? `${d.roundSecs} seconds` : `${field(d.roundSecs.state)} in seconds`}.`);
   return out;
 }

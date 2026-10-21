@@ -502,6 +502,13 @@ export interface LaunchSummary {
    * without max wallet; the detail says it as `ruleStats.maxWalletLifted` too.
    */
   maxWalletLifted?: boolean;
+  /**
+   * A coin quoted in tokens with holder rewards (§7.5): how they pay (each leg's token, rounds, or SOL with the switch) and each leg's
+   * holder fees and payouts. Absent for a SOL coin and for a token coin without holder rewards (its `rewards*` fields are null).
+   */
+  tokenRewards?: import('./quotes.ts').TokenRewardsSummary | null;
+  /** A coin quoted in tokens' SOL switch (§7.5): its paid parts are sold to SOL. Absent for a SOL coin and when off. */
+  solSwitch?: boolean;
 }
 
 export interface LaunchDetail extends LaunchSummary {
@@ -806,6 +813,12 @@ export interface LaunchPrepareRequest {
   quotes?: Address[];
   /** With `quotes`: raw units of the first quote token the creator buys with once every leg is open; 0 or absent for none (`devBuyLamports` is refused beside it). */
   devBuyQuote?: Amount;
+  /**
+   * With `quotes` (§7.5, behind `QUOTE_PAYOUTS_OPEN`): the SOL switch and a rounds coin's round length (`TokenPayoutsRequest`). Refused
+   * (`quote_tokens_rules`) while the API doesn't take them; `sol_switch_unavailable` (with `{ mint, reason }`) for a token with no
+   * qualifying reference pool.
+   */
+  payouts?: import('./quotes.ts').TokenPayoutsRequest;
 }
 
 /**
@@ -921,6 +934,28 @@ export interface LossCoverSummary {
   /** Whether the pot holds the least a round starts with. */
   minPotMet: boolean;
   terms: LossCoverTerms;
+  /**
+   * On a coin quoted in tokens (docs/token-quotes.md §7.6.9): each leg's pot and round in its token (the script's token mode: a leg's pot
+   * covers only the holders whose basis is on it). `pot`, `roundBudget` and the round's figures above are then 0; null or absent on a SOL coin.
+   */
+  legs?: LossCoverLegSummary[] | null;
+}
+
+/** One leg of a Lossback coin quoted in tokens (`LossCoverSummary.legs`), raw units of the leg's token. */
+export interface LossCoverLegSummary {
+  index: number;
+  quoteMint: Address;
+  decimals: number;
+  /** The leg's pot now. */
+  pot: Amount;
+  /** The round's budget on the leg (its pot at the round's first step), what the round paid of it, the loss measured the round before and so far. */
+  roundBudget: Amount;
+  roundPaid: Amount;
+  lossPrev: Amount;
+  lossCur: Amount;
+  measured: number;
+  /** Paid to holders from the leg, all time (the indexer's `LegScriptPayout`). */
+  paidTotal: Amount;
 }
 
 /**
@@ -1164,6 +1199,8 @@ export interface JackpotRequest {
   potBps: number;
   /** A round is paid only while the pot holds at least this, lamports: 0.1 to 1,000 SOL (a round settled below it pays nothing). */
   minPotLamports: Amount;
+  /** On a coin quoted in tokens without the SOL switch (docs/token-quotes.md §7.6.9): the least pot in basis points of the coin’s opening value, summed over the legs (1 to 10,000; 100 when absent: 1%, about $50). `minPotLamports` stays a SOL coin’s and a switched pot’s. */
+  minPotBps?: number;
   /** The part of the pot a settle pays the last buyer, basis points: 10% to 100%. */
   prizeBps: number;
 }
@@ -1174,6 +1211,8 @@ export interface StreakRequest {
   potBps: number;
   /** An epoch is closed only while the pot holds at least this, lamports: 0.1 to 1,000 SOL. */
   minPotLamports: Amount;
+  /** On a coin quoted in tokens without the SOL switch (docs/token-quotes.md §7.6.9): the least pot in basis points of the coin’s opening value, summed over the legs (1 to 10,000; 100 when absent: 1%, about $50). `minPotLamports` stays a SOL coin’s and a switched pot’s. */
+  minPotBps?: number;
   /** The part of the pot an epoch shares among its holders, basis points: 10% to 100%. */
   prizeBps: number;
   /** The least a close leaves for claims, seconds: 5 minutes to a day, at most half an epoch. */
@@ -1192,6 +1231,8 @@ export interface LotteryRequest {
   potBps: number;
   /** No draw while the pot holds less, lamports: 0.1 to 1,000 SOL. */
   minPotLamports: Amount;
+  /** On a coin quoted in tokens without the SOL switch (docs/token-quotes.md §7.6.9): the least pot in basis points of the coin’s opening value, summed over the legs (1 to 10,000; 100 when absent: 1%, about $50). `minPotLamports` stays a SOL coin’s and a switched pot’s. */
+  minPotBps?: number;
   /** The part of the pot one draw pays, basis points: 10% to 100%. */
   prizeBps: number;
   /** How long each claim attempt stays open, seconds: 5 minutes to a day. */
@@ -1230,6 +1271,37 @@ export interface GameSummary {
   /** Prizes paid so far, lamports, and how many. */
   prizesTotal: Amount;
   prizesPaid: number;
+  /**
+   * A game on a coin quoted in tokens whose pot is kept per leg in the legs' tokens (docs/token-quotes.md §7.6.9): its pot and prizes per
+   * leg. `minPot`, `potCap` and `prizesTotal` are then lamports a SOL coin's game would read (the float aside); null or absent otherwise
+   * (a switched game's pot is SOL, as a SOL coin's).
+   */
+  tokens?: GameTokenPot | null;
+}
+
+/** A game's pot kept per leg in the legs' tokens (`GameSummary.tokens`). */
+export interface GameTokenPot {
+  /** The least pot a draw (or a streak's close) needs, and the pot now, in basis points of the coin's opening value summed over the legs. */
+  minPotBps: number;
+  potBps: number;
+  /** An unaudited hook's cap in the same terms; null for an audited hook. */
+  capBps: number | null;
+  /** A lottery's oracle float (lamports): its draws' fees. 0 for the other kinds. */
+  floatLamports: Amount;
+  legs: GameTokenPotLeg[];
+}
+
+/** One leg of a game's pot in tokens, raw units of its token. */
+export interface GameTokenPotLeg {
+  index: number;
+  quoteMint: Address;
+  decimals: number;
+  pot: Amount;
+  /** The current draw's or epoch's prize on the leg, and what of it was paid. */
+  prize: Amount;
+  prizePaid: Amount;
+  /** Prizes paid from the leg, all time (the indexer's `LegPrizePaid`, bounties aside). */
+  paidTotal: Amount;
 }
 
 /** Why a round paid no prize (the companion's `RolloverReason`). */
@@ -1476,6 +1548,36 @@ export interface CompanionSummary {
   lossCover?: LossCoverSummary | null;
   /** The wallets that share the launcher's part (`set_payees`, 2026-10-13); null for a companion without payees (or whose payees can't be read); absent from older servers. */
   payees?: PayeeSummary[] | null;
+  /**
+   * A preset companion's pots per leg on a coin quoted in tokens (`CompanionLegs`, docs/token-quotes.md §7.4): there every part is
+   * claimed, set aside and spent in each leg's token, and the SOL figures above stay zero. Absent for any other companion (a script's pot
+   * is the companion address's token accounts) and from older servers.
+   */
+  legs?: CompanionLegSummary[] | null;
+}
+
+/** One leg's pots of a preset companion on a coin quoted in tokens (§7.4), raw units of the leg's token (`burned` in coins). */
+export interface CompanionLegSummary {
+  index: number;
+  /** The leg's token and its decimals. */
+  quoteMint: Address;
+  decimals: number;
+  /** Claimed from the leg's creator fee, all time. */
+  claimed: Amount;
+  /** Spent buying the coin back on the leg, and the coins those buybacks burned. */
+  boughtBack: Amount;
+  burned: Amount;
+  /** Paid to the launcher in the leg's token. */
+  paidToLauncher: Amount;
+  /** Claimed and waiting: the leg's next buyback, the launcher's next payout, a Snowball's pot on the leg. */
+  pending: { buyback: Amount; launcher: Amount; pot: Amount };
+  /** A Snowball's coins bought with this leg's pot (what its sells on the leg sell). */
+  tokensHeld: Amount;
+  /** When the leg's next buyback may run while tokens wait for one (it also waits while the leg's price runs above its reference); null otherwise. */
+  nextBuybackAt: number | null;
+  /** §7.6.9: a game's prize on the leg and what of it was paid (a script with payout terms: its window's pot and what it paid); absent before. */
+  prize?: Amount;
+  prizePaid?: Amount;
 }
 
 /**
@@ -1556,6 +1658,11 @@ export interface RewardPosition {
    * the wallet below rent; the holder can still claim at any time. Optional only for older servers (read as false).
    */
   autoPaid?: boolean;
+  /**
+   * A coin quoted in tokens (§7.5): `claimable` is then lamports only with the switch (kind `sol`); in its token or by rounds it is "0"
+   * and `token` says what a claim pays per leg, raw units of each leg's token. Absent for a SOL coin.
+   */
+  token?: import('./quotes.ts').TokenRewardPosition | null;
 }
 
 export interface RewardsList {
@@ -1610,7 +1717,9 @@ export interface CreatorPrepareRequest {
  * A coin quoted in tokens (docs/token-quotes.md): its creator's fees, each leg's in its own token,
  * claimed with `claim_creator_fees_token` into the creator's associated token account of that token
  * (made if missing). The creator signs and pays; every open leg with fees waiting (or the `legs`
- * named) is claimed, as many to a transaction as fit.
+ * named) is claimed, as many to a transaction as fit. With `as: 'sol'` (§7.3) each leg's claim is
+ * followed by a Jupiter swap of exactly that amount to SOL, one transaction per leg (two, the swap
+ * at stage 1, when both do not fit one), the creator ending with native SOL.
  */
 export interface CreatorLegsPrepareRequest {
   /** The coin's creator (`launch.creator`): signs and pays. */
@@ -1618,12 +1727,41 @@ export interface CreatorLegsPrepareRequest {
   mint: Address;
   /** Leg indices to claim; absent: every leg with fees waiting. */
   legs?: number[];
+  /** 'token' (the default): each leg's fee in its own token. 'sol': swapped to SOL through Jupiter. */
+  as?: 'token' | 'sol';
+  /** With `as: 'sol'`: the swap's slippage, whole basis points, 1 to `CLAIM_SOL_MAX_SLIPPAGE_BPS`; `CLAIM_SOL_DEFAULT_SLIPPAGE_BPS` when absent. */
+  slippageBps?: number;
+}
+
+/** One leg's swap to SOL (`as: 'sol'`), as Jupiter quoted it when the transaction was built. */
+export interface CreatorLegSol {
+  /** Lamports the swap is expected to deliver (Jupiter's `outAmount`). */
+  expectedLamports: Amount;
+  /** The least it delivers, or the transaction fails (`otherAmountThreshold`, after the slippage). */
+  minLamports: Amount;
+  /** The price impact, basis points (Jupiter's `priceImpactPct` fraction × 10,000, rounded). */
+  priceImpactBps: number;
+  /** The venues of the route, in order (Jupiter's labels). */
+  route: string[];
+  /** The claim and the swap did not fit one transaction: the swap is its own, at stage 1, sent after the claim lands. */
+  split: boolean;
+  /** Indices into `transactions` of this leg's transaction(s), in order. */
+  transactions: number[];
 }
 
 export interface CreatorLegsPrepareResponse {
   transactions: PreparedTx[];
-  /** What each claim pays, raw units of the leg's token (its fee account's whole balance now). */
-  legs: { index: number; quoteMint: Address; amount: Amount }[];
+  /** What each claim pays, raw units of the leg's token (its fee account's whole balance now); with `as: 'sol'`, its swap too. */
+  legs: { index: number; quoteMint: Address; amount: Amount; sol?: CreatorLegSol }[];
+  /** How the fees are taken (absent from an older backend: 'token'). */
+  as?: 'token' | 'sol';
+  /** With `as: 'sol'`: the slippage used and the legs' sums, lamports. */
+  sol?: { slippageBps: number; expectedLamports: Amount; minLamports: Amount };
+  /**
+   * A coin with the SOL switch (§7.5): the lamports the keeper's sales of the legs' fees brought onto the launch and not claimed yet,
+   * claimed by the first transaction (`claim_creator_fees_sol`); absent without the switch or with nothing waiting.
+   */
+  switchLamports?: Amount;
 }
 
 /** Share with holders: send SOL that every holder of the token receives pro rata. */

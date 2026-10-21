@@ -4,7 +4,7 @@
  * sentence; the canonical text the approval hashes; the declaration in plain words.
  */
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_STEP_SECS, KEEPER_FILE, KEEPER_LIMITS, canonicalKeeperJson, isBase58Key, isRaydiumPool, keeperDeclarationOf, keeperDetails, keeperLaunchTerms, keeperPerStep, keeperStepSecs, keeperWords, parseKeeperDeclaration, type KeeperDeclaration } from './keeper.ts';
+import { DEFAULT_STEP_SECS, KEEPER_FILE, KEEPER_LIMITS, canonicalKeeperJson, isBase58Key, isRaydiumPool, keeperDeclarationOf, keeperDetails, keeperLaunchTerms, keeperLegIndices, keeperPerStep, keeperStepSecs, keeperWords, parseKeeperDeclaration, type KeeperDeclaration } from './keeper.ts';
 
 /**
  * Whale Bait (F:\whale-bait, REPORT.md): every holder at 1 base unit and under 20,000,000 tokens
@@ -128,8 +128,8 @@ describe('keeper.json', () => {
     expect(problemOf(`{"version":1,"x":"${'a'.repeat(KEEPER_LIMITS.bytes)}"}`)).toBe('keeper.json is at most 4,096 bytes; this one is 4,116.');
     expect(problemOf([])).toBe('keeper.json: the file is one object.');
     expect(problemOf({ ...whale(), version: 2 })).toBe('keeper.json: version is 1, the only one there is.');
-    expect(problemOf({ ...whale(), extra: true })).toBe('keeper.json: the file has no field "extra" (it takes version, holdings, swapAccounts, hookAccounts, mintWritable, payouts, roundSecs, wallets, stepSecs, stateLen, initData, launcherShareBps, payoutTerms, view, pools).');
-    expect(problemOf({ ...whale(), holdings: undefined })).toBe('keeper.json: holdings is required: which holdings each step brings.');
+    expect(problemOf({ ...whale(), extra: true })).toBe('keeper.json: the file has no field "extra" (it takes version, holdings, swapAccounts, hookAccounts, mintWritable, payouts, roundSecs, wallets, stepSecs, stateLen, initData, launcherShareBps, payoutTerms, view, pools, quoteTokens, legs).');
+    expect(problemOf({ ...whale(), holdings: undefined })).toBe('keeper.json: holdings is required: which holdings each step brings (null with wallets, or with quoteTokens and its legs).');
     expect(problemOf({ ...whale(), swapAccounts: 'yes' })).toBe('keeper.json: swapAccounts is true or false.');
     expect(problemOf({ ...whale(), hookAccounts: 1 })).toBe('keeper.json: hookAccounts is true or false.');
     expect(problemOf({ ...whale(), mintWritable: 'yes' })).toBe('keeper.json: mintWritable is true or false.');
@@ -169,7 +169,7 @@ describe('keeper.json', () => {
     expect(canonicalKeeperJson(both)).not.toBe(canonicalKeeperJson(declarationOf(JSON.stringify(holdings({ hookData: null, maxBalance: null })))));
     // Refused: no holdings and no wallets, too many, not a key, the default key or a program, twice, out of the state.
     expect(problemOf({ version: 1, swapAccounts: false, holdings: null })).toMatch(/^keeper\.json: holdings is \{/);
-    expect(problemOf({ version: 1, swapAccounts: false, wallets: [] })).toBe('keeper.json: holdings is required: which holdings each step brings.');
+    expect(problemOf({ version: 1, swapAccounts: false, wallets: [] })).toBe('keeper.json: holdings is required: which holdings each step brings (null with wallets, or with quoteTokens and its legs).');
     expect(problemOf({ version: 1, swapAccounts: false, wallets: Array.from({ length: KEEPER_LIMITS.wallets + 1 }, (_, i) => ({ state: { offset: 32 * i } })) })).toBe('keeper.json: wallets is a list of at most 12 wallets, each an address ("<base58>") or { "state": { "offset" } }: a public key in the script’s state.');
     expect(problemOf({ version: 1, swapAccounts: false, wallets: TEAM })).toMatch(/^keeper\.json: wallets is a list of at most 12/);
     expect(problemOf({ version: 1, swapAccounts: false, wallets: [TEAM.slice(0, -1) + '0'] })).toBe('keeper.json: wallets[0] is an address in base58 (32 bytes).');
@@ -429,5 +429,46 @@ describe('pools: another coin’s launch pool (18 Oct 2026)', () => {
     expect(problem([{ launch: BCAT }, { launch: BCAT, to: 'launcher' }])).toContain('named twice');
     expect(problem([{ launch: BCAT, to: 'holders' }])).toContain('"launcher"');
     expect(problem([{ launch: BCAT, liquidity: true }])).toContain('no field "liquidity"');
+  });
+});
+
+describe('quoteTokens and legs (coins quoted in tokens, docs/token-quotes.md §7.4)', () => {
+  const base = { version: 1, holdings: null, wallets: ['9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin'], swapAccounts: false };
+
+  it('reads quoteTokens with legs (every leg, or the indices sorted), says it, carries it to the launch terms, and leaves both out otherwise', () => {
+    const every = keeperDeclarationOf({ ...base, quoteTokens: true, legs: true });
+    expect(every).toMatchObject({ ok: true, declaration: { quoteTokens: true, legs: true } });
+    const some = keeperDeclarationOf({ ...base, quoteTokens: true, legs: [2, 0] });
+    expect(some).toMatchObject({ ok: true, declaration: { legs: [0, 2] } });
+    if (!some.ok || !every.ok) throw new Error('expected a declaration');
+    expect(keeperLegIndices(every.declaration, 3)).toEqual([0, 1, 2]);
+    expect(keeperLegIndices(some.declaration, 1)).toEqual([0]);
+    expect(keeperDetails(some.declaration).join(' ')).toContain('legs 1, 3');
+    expect(keeperLaunchTerms(every.declaration).quoteTokens).toBe(true);
+    // Without them nothing changes: not in the normal form, nor the launch terms, nor the hash.
+    const plain = keeperDeclarationOf(base);
+    if (!plain.ok) throw new Error('expected a declaration');
+    expect('quoteTokens' in plain.declaration || 'legs' in plain.declaration || 'quoteTokens' in keeperLaunchTerms(plain.declaration)).toBe(false);
+    expect(keeperDeclarationOf({ ...base, quoteTokens: false })).toEqual(plain);
+    expect(keeperLegIndices(plain.declaration, 6)).toEqual([]);
+  });
+
+  it('takes a script that trades its legs alone: holdings null with quoteTokens, no wallets; without quoteTokens holdings stay required', () => {
+    const legsOnly = keeperDeclarationOf({ version: 1, holdings: null, swapAccounts: false, quoteTokens: true, legs: true });
+    expect(legsOnly).toMatchObject({ ok: true, declaration: { holdings: null, quoteTokens: true, legs: true } });
+    expect('wallets' in (legsOnly.ok ? legsOnly.declaration : {})).toBe(false);
+    expect(keeperDeclarationOf({ version: 1, holdings: null, swapAccounts: false })).toMatchObject({ ok: false, problem: expect.stringMatching(/^keeper.json: holdings is /) });
+    expect(keeperDeclarationOf({ version: 1, swapAccounts: false, quoteTokens: true, legs: true })).toMatchObject({ ok: false, problem: expect.stringMatching(/holdings is required/) });
+  });
+
+  it('refuses quoteTokens without legs, legs without quoteTokens, and a bad list, each in one sentence', () => {
+    const problem = (v: Record<string, unknown>): string => {
+      const r = keeperDeclarationOf({ ...base, ...v });
+      return r.ok ? '' : r.problem;
+    };
+    expect(problem({ quoteTokens: true })).toMatch(/^keeper\.json: legs is required with quoteTokens/);
+    expect(problem({ legs: true })).toMatch(/^keeper\.json: legs goes only with quoteTokens: true/);
+    expect(problem({ quoteTokens: 'yes', legs: true })).toMatch(/quoteTokens is true or false/);
+    for (const legs of [[], [6], [1, 1], [0.5], 'all', [0, 1, 2, 3, 4, 5, 0]]) expect(problem({ quoteTokens: true, legs }), JSON.stringify(legs)).toMatch(/^keeper\.json: legs/);
   });
 });

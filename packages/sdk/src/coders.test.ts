@@ -244,7 +244,11 @@ describe('errors are explained by the program that failed (codes overlap)', () =
     expect(explainProgramError('launch', 2006)).toMatchObject({ name: 'ConstraintSeeds' });
     expect(explainProgramError('kit', 6999).name).toBeNull();
     expect(explainProgramError('swap', 6037)).toMatchObject({ name: 'NotBridgedSol', message: "the pool's quote is not bridged SOL" });
-    expect([PROGRAM_ERRORS.kit.size, PROGRAM_ERRORS.launch.size, PROGRAM_ERRORS.swap.size, PROGRAM_ERRORS.token.size, PROGRAM_ERRORS.bridge.size, PROGRAM_ERRORS.taxHook.size]).toEqual([36, 83, 68, 27, 14, 6]);
+    expect([PROGRAM_ERRORS.kit.size, PROGRAM_ERRORS.launch.size, PROGRAM_ERRORS.swap.size, PROGRAM_ERRORS.token.size, PROGRAM_ERRORS.bridge.size, PROGRAM_ERRORS.taxHook.size]).toEqual([44, 103, 68, 27, 14, 6]);
+    // §7.5: the launchpad's 6086 to 6102, the kit's 6036 to 6043.
+    expect([6086, 6097, 6102].map((c) => explainProgramError('launch', c).name)).toEqual(['PayoutsInvalid', 'NotACustodian', 'WrongVenueAccounts']);
+    expect([6036, 6041, 6043].map((c) => explainProgramError('kit', c).name)).toEqual(['WrongRewardKind', 'AlreadyPaidThisRound', 'WrongSwap']);
+    expect([6083, 6084, 6085].map((c) => explainProgramError('launch', c).name)).toEqual(['QuoteCutOnTokenLaunch', 'ConfigSharesOnTokenLaunch', 'HookMissingLegs']);
     // Rules on coins quoted in tokens (§6.1.1): the kit's 6033 to 6035 and the launchpad's 6082, appended.
     expect([explainProgramError('kit', 6033).name, explainProgramError('kit', 6034).name, explainProgramError('kit', 6035).name, explainProgramError('launch', 6082).name]).toEqual(['LegsMissing', 'WrongLegs', 'RewardsOnTokenQuote', 'HolderFeeOnTokenLaunch']);
     // Quote tokens (docs/token-quotes.md §2.4): the launchpad's 6062 to 6081 and the DEX's 6052 to 6067, appended.
@@ -259,7 +263,14 @@ describe('errors are explained by the program that failed (codes overlap)', () =
     // v1's codes keep their numbers: v2 only appends.
     expect(explainProgramError('companion', 6011).name).toBe('CustomHookUnsupported');
     // Phase 2 appends three more (the jackpot's and the streak's steps); phase 3a and Snowball more; approvals and script companions (2026-10-12) ten more, 6070 to 6079.
-    expect([PROGRAM_ERRORS.companion.size, PROGRAM_ERRORS.lotteryHook.size]).toEqual([95, 6]);
+    expect([PROGRAM_ERRORS.companion.size, PROGRAM_ERRORS.lotteryHook.size]).toEqual([110, 6]);
+    expect([6101, 6102, 6103, 6104].map((c) => explainProgramError('companion', c).name)).toEqual(['SolSwitchOff', 'SolSwitchOn', 'NotSwitchedPart', 'PayeesLegsMissing']);
+    // Games, Lossback and scripts with a launcher's part on coins quoted in tokens (§7.6.9): 6105 to 6109.
+    expect([6105, 6106, 6107, 6108, 6109].map((c) => explainProgramError('companion', c).name)).toEqual(['TokenGameTerms', 'LegAccountsMissing', 'PayoutLegInvalid', 'StrategyOnTokenCoin', 'BadTokenTerms']);
+    expect([PROGRAM_ERRORS.lossCoverScript.size, PROGRAM_ERRORS.lossCoverHook.size]).toEqual([8, 9]);
+    expect(explainProgramError('lossCoverScript', 6007).name).toBe('NoLegs');
+    // Coins quoted in tokens (docs/token-quotes.md §7.4): 6095 to 6100, one contiguous block.
+    expect([6095, 6096, 6097, 6098, 6099, 6100].map((c) => explainProgramError('companion', c).name)).toEqual(['TokenLaunchKind', 'TokenCompanionSplit', 'NotOnTokenCoin', 'TokenCoinPayees', 'NotALegStep', 'NoSuchLeg']);
     expect([6067, 6069, 6070, 6073, 6078, 6079].map((code) => explainProgramError('companion', code).name)).toEqual(['BadSnowball', 'SnowballNotDue', 'NotApproved', 'ScriptOverspent', 'ScriptBrokeCustody', 'ProgramNotBounded']);
     expect(explainProgramError('companion', 6049).name).toBe('WrongGameKind');
     expect(explainProgramError('companion', 6050)).toMatchObject({ name: 'NoShare', explanation: expect.stringMatching(/forfeits the share/) });

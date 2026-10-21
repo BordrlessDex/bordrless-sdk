@@ -304,4 +304,15 @@ export const studioGameHook = {
   accounts(hook: PublicKey, mint: PublicKey): CustomHookAccounts {
     return { program: hook, extras: [rw(a.gameStateAddress(hook, mint)), ro(a.launchAddress(mint))] };
   },
+  /**
+   * The starters' `prepare_legs` (docs/token-quotes.md §7.6.9; the same Anchor name in every starter): `prepare`'s accounts, its registry
+   * `extra_accounts_legs` (the state, the launch, the coin's `Legs`). A hook Studio built before the starters learned it has none.
+   */
+  prepareLegs(hook: PublicKey, payer: PublicKey, mint: PublicKey): TransactionInstruction {
+    return new TransactionInstruction({ programId: hook, keys: [rw(payer, true), ro(mint), rw(a.gameStateAddress(hook, mint)), rw(a.registryAddress(hook, mint)), ro(a.SYSTEM_PROGRAM)], data: discriminator('prepare_legs') });
+  },
+  /** The hook's accounts for a coin prepared with `prepareLegs`: the state (w), the launch, the coin's `Legs` (the jackpot reads them as its third extra). */
+  accountsLegs(hook: PublicKey, mint: PublicKey): CustomHookAccounts {
+    return { program: hook, extras: [rw(a.gameStateAddress(hook, mint)), ro(a.launchAddress(mint)), ro(PublicKey.findProgramAddressSync([Buffer.from('legs'), mint.toBuffer()], a.LAUNCH_PROGRAM)[0])] };
+  },
 };
